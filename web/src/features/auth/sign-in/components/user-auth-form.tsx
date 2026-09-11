@@ -41,9 +41,11 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { login, wechatLoginByCode } from '@/features/auth/api'
 import { LegalConsent } from '@/features/auth/components/legal-consent'
+import { MomentsAuthEntry } from '@/features/auth/components/moments-auth-entry'
 import { OAuthProviders } from '@/features/auth/components/oauth-providers'
 import { loginFormSchema } from '@/features/auth/constants'
 import { useAuthRedirect } from '@/features/auth/hooks/use-auth-redirect'
+import { useOAuthLogin } from '@/features/auth/hooks/use-oauth-login'
 import { useTurnstile } from '@/features/auth/hooks/use-turnstile'
 import { beginPasskeyLogin, finishPasskeyLogin } from '@/features/auth/passkey'
 import type { AuthFormProps } from '@/features/auth/types'
@@ -95,6 +97,10 @@ export function UserAuthForm({
     validateTurnstile,
   } = useTurnstile()
   const { handleLoginResult } = useAuthRedirect()
+  const { isLoading: isOIDCLoading, handleOIDCLogin } = useOAuthLogin(
+    status,
+    redirectTo
+  )
 
   const hasUserAgreement = Boolean(status?.user_agreement_enabled)
   const hasPrivacyPolicy = Boolean(status?.privacy_policy_enabled)
@@ -104,16 +110,16 @@ export function UserAuthForm({
     !passkeySupported ||
     (requiresLegalConsent && !agreedToLegal)
   const hasWeChatLogin = Boolean(status?.wechat_login)
-  const hasOAuthLogin = Boolean(
+  const hasOIDCLogin = Boolean(status?.oidc_enabled)
+  const hasOtherOAuthLogin = Boolean(
     status?.github_oauth ||
     status?.discord_oauth ||
-    status?.oidc_enabled ||
     status?.linuxdo_oauth ||
     status?.telegram_oauth ||
     (status?.custom_oauth_providers?.length ?? 0) > 0
   )
-  const hasAlternativeLogin =
-    passkeyLoginEnabled || hasWeChatLogin || hasOAuthLogin
+  const hasSecondaryLogin =
+    passkeyLoginEnabled || hasWeChatLogin || hasOtherOAuthLogin
 
   useEffect(() => {
     if (requiresLegalConsent) {
@@ -330,6 +336,7 @@ export function UserAuthForm({
       <OAuthProviders
         status={status}
         redirectTo={redirectTo}
+        excludedProviders={['oidc']}
         disabled={isLoading || (requiresLegalConsent && !agreedToLegal)}
         onWeChatLogin={hasWeChatLogin ? handleOpenWeChatDialog : undefined}
         isWeChatLoading={isWeChatSubmitting}
@@ -344,10 +351,29 @@ export function UserAuthForm({
         className={cn('grid gap-4', className)}
         {...props}
       >
-        {hasAlternativeLogin && alternativeLoginMethods}
+        {hasOIDCLogin && (
+          <MomentsAuthEntry
+            variant='sign-in'
+            displayName={status?.oidc_display_name}
+            onContinue={handleOIDCLogin}
+            loading={isOIDCLoading}
+            disabled={isLoading || (requiresLegalConsent && !agreedToLegal)}
+          />
+        )}
+
+        {hasSecondaryLogin && alternativeLoginMethods}
 
         {passwordLoginEnabled && (
-          <>
+          <div className='space-y-4'>
+            <div className='space-y-1 border-t pt-4'>
+              <p className='font-medium'>{t('On-site account sign-in')}</p>
+              <p className='text-muted-foreground text-sm'>
+                {t(
+                  'Only use this option if you have already set a username and password for this site.'
+                )}
+              </p>
+            </div>
+
             {/* Username Field */}
             <FormField
               control={form.control}
@@ -411,7 +437,7 @@ export function UserAuthForm({
                 />
               </div>
             )}
-          </>
+          </div>
         )}
 
         <LegalConsent
@@ -420,8 +446,6 @@ export function UserAuthForm({
           onCheckedChange={setAgreedToLegal}
           className='mt-1'
         />
-
-        {!hasAlternativeLogin && alternativeLoginMethods}
       </form>
 
       {hasWeChatLogin && (

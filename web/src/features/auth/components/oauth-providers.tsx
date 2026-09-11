@@ -39,6 +39,7 @@ type OAuthProvidersProps = {
   onWeChatLogin?: () => void
   isWeChatLoading?: boolean
   redirectTo?: string
+  excludedProviders?: string[]
 }
 
 type ProviderButton = {
@@ -56,6 +57,7 @@ export function OAuthProviders({
   onWeChatLogin,
   isWeChatLoading = false,
   redirectTo,
+  excludedProviders = [],
 }: OAuthProvidersProps) {
   const { t } = useTranslation()
   const {
@@ -71,8 +73,9 @@ export function OAuthProviders({
   } = useOAuthLogin(status, redirectTo)
 
   const providerButtons: ProviderButton[] = []
+  const isExcluded = (provider: string) => excludedProviders.includes(provider)
 
-  if (status?.wechat_login && onWeChatLogin) {
+  if (status?.wechat_login && onWeChatLogin && !isExcluded('wechat')) {
     providerButtons.push({
       key: 'wechat',
       label: t('Continue with WeChat'),
@@ -82,7 +85,7 @@ export function OAuthProviders({
     })
   }
 
-  if (status?.github_oauth) {
+  if (status?.github_oauth && !isExcluded('github')) {
     providerButtons.push({
       key: 'github',
       label: githubButtonText || t('Continue with GitHub'),
@@ -92,7 +95,7 @@ export function OAuthProviders({
     })
   }
 
-  if (status?.discord_oauth) {
+  if (status?.discord_oauth && !isExcluded('discord')) {
     providerButtons.push({
       key: 'discord',
       label: t('Continue with Discord'),
@@ -101,7 +104,7 @@ export function OAuthProviders({
     })
   }
 
-  if (status?.oidc_enabled) {
+  if (status?.oidc_enabled && !isExcluded('oidc')) {
     const oidcDisplayName = status.oidc_display_name?.trim() || 'OIDC'
     providerButtons.push({
       key: 'oidc',
@@ -112,7 +115,7 @@ export function OAuthProviders({
     })
   }
 
-  if (status?.linuxdo_oauth) {
+  if (status?.linuxdo_oauth && !isExcluded('linuxdo')) {
     providerButtons.push({
       key: 'linuxdo',
       label: t('Continue with LinuxDO'),
@@ -121,7 +124,7 @@ export function OAuthProviders({
     })
   }
 
-  if (status?.telegram_oauth) {
+  if (status?.telegram_oauth && !isExcluded('telegram')) {
     providerButtons.push({
       key: 'telegram',
       label: t('Continue with Telegram'),
@@ -134,6 +137,7 @@ export function OAuthProviders({
   const customProviders = status?.custom_oauth_providers
   if (customProviders && customProviders.length > 0) {
     for (const provider of customProviders) {
+      if (isExcluded(provider.slug)) continue
       providerButtons.push({
         key: `custom-${provider.slug}`,
         label: t('Continue with {{name}}', { name: provider.name }),
