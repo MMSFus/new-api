@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { BrandMark } from '@/components/brand-mark'
+import { DEFAULT_LOGO } from '@/lib/constants'
 import { cn } from '@/lib/utils'
 
 interface HeaderLogoProps {
@@ -28,7 +30,8 @@ interface HeaderLogoProps {
 
 /**
  * Logo component for header with loading state
- * Shows image only when fully loaded for smooth UX
+ * Shows image only when fully loaded for smooth UX. Without a configured
+ * logo it renders the built-in brand mark, which follows the color theme.
  */
 export function HeaderLogo({
   src,
@@ -37,6 +40,9 @@ export function HeaderLogo({
   logoLoaded,
   className,
 }: HeaderLogoProps) {
+  if (src === DEFAULT_LOGO) {
+    return <BrandMark variant='tile' className={cn('size-6', className)} />
+  }
   return (
     <img
       src={src}
