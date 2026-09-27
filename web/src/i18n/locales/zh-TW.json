@@ -6797,6 +6797,10 @@
     "Zhipu": "智譜",
     "Zhipu GLM": "智譜GLM",
     "Zhipu V4": "智譜 V4",
-    "Zoom": "縮放"
+    "Zoom": "縮放",
+    "Default theme": "預設主題",
+    "Color theme for visitors who have not picked one. Their own choice always takes priority.": "訪客未選擇配色時使用的主題，訪客自己的選擇始終優先。",
+    "When the system is light": "系統為亮色時",
+    "When the system is dark": "系統為暗色時"
   }
 }

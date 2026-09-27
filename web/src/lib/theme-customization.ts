@@ -115,6 +115,11 @@ export type ThemePreset = (typeof THEME_PRESETS)[number]['value']
  * themes to keep the choice short.
  */
 export const PICKER_THEME_PRESETS = THEME_PRESETS.slice(0, 6)
+
+/** i18n key of a preset's display name (`preset.graphite`, `preset.teal`…). */
+export function presetLabelKey(preset: ThemePreset): string {
+  return `preset.${preset === 'default' ? 'graphite' : preset}`
+}
 export type ThemeRadius = 'default' | 'none' | 'sm' | 'md' | 'lg' | 'xl'
 export type ThemeScale = 'default' | 'sm' | 'lg' | 'xl'
 export type ContentLayout = 'full' | 'centered'

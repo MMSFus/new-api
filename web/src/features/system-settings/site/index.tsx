@@ -38,6 +38,8 @@ const defaultSiteSettings: SiteSettings = {
   'legal.privacy_policy': '',
   HeaderNavModules: '',
   SidebarModulesAdmin: '',
+  'theme_default.light': '',
+  'theme_default.dark': '',
 }
 
 export function SiteSettings() {

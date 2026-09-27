@@ -45,6 +45,9 @@ import {
   THEME_STORAGE_KEYS,
   writeThemePreference,
 } from '@/lib/theme-storage'
+import { useSystemConfigStore } from '@/stores/system-config-store'
+
+import { useTheme } from './theme-provider'
 
 function applyAttribute(name: string, value: string | null) {
   if (typeof document === 'undefined') return
@@ -61,6 +64,8 @@ type ThemeCustomizationContextType = {
   defaults: ThemeCustomization
   customization: ThemeCustomization
   setPreset: (preset: ThemePreset) => void
+  /** Drop the visitor's own preset so the site default applies again. */
+  resetPreset: () => void
   setFont: (font: ThemeFont) => void
   setRadius: (radius: ThemeRadius) => void
   setScale: (scale: ThemeScale) => void
@@ -76,6 +81,7 @@ const FALLBACK_CONTEXT: ThemeCustomizationContextType = {
   defaults: DEFAULT_THEME_CUSTOMIZATION,
   customization: DEFAULT_THEME_CUSTOMIZATION,
   setPreset: () => {},
+  resetPreset: () => {},
   setFont: () => {},
   setRadius: () => {},
   setScale: () => {},
@@ -89,13 +95,27 @@ const ThemeCustomizationContext =
 export function ThemeCustomizationProvider(props: {
   children: React.ReactNode
 }) {
-  const [preset, _setPreset] = useState<ThemePreset>(() =>
+  // null means the visitor never picked a preset; the site default for the
+  // resolved light/dark scheme applies instead.
+  const [userPreset, _setUserPreset] = useState<ThemePreset | null>(() =>
     readThemePreference<ThemePreset>(
       THEME_STORAGE_KEYS.preset,
       THEME_PRESET_VALUES,
-      DEFAULT_THEME_CUSTOMIZATION.preset
+      null
     )
   )
+  const { resolvedTheme } = useTheme()
+  const configuredSitePreset = useSystemConfigStore((state) =>
+    resolvedTheme === 'dark'
+      ? state.config.themeDefaultDark
+      : state.config.themeDefaultLight
+  )
+  const sitePreset =
+    configuredSitePreset &&
+    THEME_PRESET_VALUES.has(configuredSitePreset as ThemePreset)
+      ? (configuredSitePreset as ThemePreset)
+      : DEFAULT_THEME_CUSTOMIZATION.preset
+  const preset = userPreset ?? sitePreset
   const [font, _setFont] = useState<ThemeFont>(() =>
     readThemePreference<ThemeFont>(
       THEME_STORAGE_KEYS.font,
@@ -162,12 +182,16 @@ export function ThemeCustomizationProvider(props: {
     applyAttribute('data-theme-content-layout', contentLayout)
   }, [contentLayout])
 
+  // An explicit choice is stored even when it equals the built-in default,
+  // so it keeps overriding the site default.
   const setPreset = useCallback((value: ThemePreset) => {
-    _setPreset(value)
-    writeThemePreference(
-      THEME_STORAGE_KEYS.preset,
-      value === DEFAULT_THEME_CUSTOMIZATION.preset ? null : value
-    )
+    _setUserPreset(value)
+    writeThemePreference(THEME_STORAGE_KEYS.preset, value)
+  }, [])
+
+  const resetPreset = useCallback(() => {
+    _setUserPreset(null)
+    writeThemePreference(THEME_STORAGE_KEYS.preset, null)
   }, [])
 
   const setFont = useCallback((value: ThemeFont) => {
@@ -203,18 +227,19 @@ export function ThemeCustomizationProvider(props: {
   }, [])
 
   const resetCustomization = useCallback(() => {
-    setPreset(DEFAULT_THEME_CUSTOMIZATION.preset)
+    resetPreset()
     setFont(DEFAULT_THEME_CUSTOMIZATION.font)
     setRadius(DEFAULT_THEME_CUSTOMIZATION.radius)
     setScale(DEFAULT_THEME_CUSTOMIZATION.scale)
     setContentLayout(DEFAULT_THEME_CUSTOMIZATION.contentLayout)
-  }, [setPreset, setFont, setRadius, setScale, setContentLayout])
+  }, [resetPreset, setFont, setRadius, setScale, setContentLayout])
 
   const value = useMemo<ThemeCustomizationContextType>(
     () => ({
-      defaults: DEFAULT_THEME_CUSTOMIZATION,
+      defaults: { ...DEFAULT_THEME_CUSTOMIZATION, preset: sitePreset },
       customization: { preset, font, radius, scale, contentLayout },
       setPreset,
+      resetPreset,
       setFont,
       setRadius,
       setScale,
@@ -222,12 +247,14 @@ export function ThemeCustomizationProvider(props: {
       resetCustomization,
     }),
     [
+      sitePreset,
       preset,
       font,
       radius,
       scale,
       contentLayout,
       setPreset,
+      resetPreset,
       setFont,
       setRadius,
       setScale,

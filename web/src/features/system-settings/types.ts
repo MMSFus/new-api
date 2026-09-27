@@ -154,6 +154,8 @@ export type SiteSettings = {
   'legal.privacy_policy': string
   HeaderNavModules: string
   SidebarModulesAdmin: string
+  'theme_default.light': string
+  'theme_default.dark': string
 }
 
 export type AuthSettings = {

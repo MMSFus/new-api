@@ -60,6 +60,7 @@ import { useTheme } from '@/context/theme-provider'
 import {
   type ContentLayout,
   PICKER_THEME_PRESETS,
+  presetLabelKey,
   type ThemeFont,
   type ThemePreset,
   type ThemeRadius,
@@ -257,13 +258,14 @@ function ThemeConfig() {
 
 function PresetConfig() {
   const { t } = useTranslation()
-  const { defaults, customization, setPreset } = useThemeCustomization()
+  const { defaults, customization, setPreset, resetPreset } =
+    useThemeCustomization()
   return (
     <div>
       <SectionTitle
         title={t('Color preset')}
         showReset={customization.preset !== defaults.preset}
-        onReset={() => setPreset(defaults.preset)}
+        onReset={resetPreset}
       />
       <Radio
         value={customization.preset}
@@ -312,10 +314,6 @@ function PresetConfig() {
 }
 
 // The default preset is the graphite palette on :root.
-function presetLabelKey(preset: ThemePreset): string {
-  return `preset.${preset === 'default' ? 'graphite' : preset}`
-}
-
 /**
  * Everything beyond mode and color theme. Folded by default so the drawer
  * opens on the two choices most people make.
