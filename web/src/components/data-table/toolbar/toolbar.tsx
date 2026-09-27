@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { Table } from '@tanstack/react-table'
-import { ChevronDown, Loader2, X as Cross2Icon } from 'lucide-react'
+import { ChevronDown, ListFilter, Loader2, X as Cross2Icon } from 'lucide-react'
 import * as React from 'react'
 import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -42,6 +42,11 @@ type FilterDef = {
     count?: number
   }[]
   singleSelect?: boolean
+  /**
+   * Low-frequency filter shown behind the "More filters" toggle. Collapsible
+   * mobile panels render it inline because the panel itself already hides.
+   */
+  secondary?: boolean
 }
 
 type SearchDraft = {
@@ -104,6 +109,16 @@ export type DataTableToolbarProps<TData> = {
    */
   hasExpandedActiveFilters?: boolean
   /**
+   * Extra inputs shown together with `secondary` filters behind the
+   * "More filters" toggle.
+   */
+  secondarySearch?: ReactNode
+  /**
+   * Whether `secondarySearch` inputs currently hold a value. Column filters
+   * marked `secondary` are detected from table state automatically.
+   */
+  hasSecondaryActiveFilters?: boolean
+  /**
    * Custom action buttons rendered BEFORE the built-in
    * Reset / Search / View buttons.
    */
@@ -159,6 +174,7 @@ export type DataTableToolbarProps<TData> = {
 export function DataTableToolbar<TData>(props: DataTableToolbarProps<TData>) {
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
+  const [moreFiltersOpen, setMoreFiltersOpen] = useState(false)
   const [isSearchComposing, setIsSearchComposing] = useState(false)
   const isMobile = useMediaQuery('(max-width: 640px)')
 
@@ -260,9 +276,10 @@ export function DataTableToolbar<TData>(props: DataTableToolbarProps<TData>) {
     />
   )
 
-  const filterChips = React.useMemo(
-    () =>
-      filters.map((filter) => {
+  const renderFilterChips = (secondary: boolean) =>
+    filters
+      .filter((filter) => !!filter.secondary === secondary)
+      .map((filter) => {
         const column = props.table.getColumn(filter.columnId)
         if (!column) return null
         return (
@@ -274,10 +291,27 @@ export function DataTableToolbar<TData>(props: DataTableToolbarProps<TData>) {
             singleSelect={filter.singleSelect}
           />
         )
-      }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [props.filters, props.table]
-  )
+      })
+  const filterChips = renderFilterChips(false)
+  const secondaryChips = renderFilterChips(true)
+  const hasSecondary =
+    secondaryChips.some((chip) => chip != null) || props.secondarySearch != null
+  const secondaryActive =
+    !!props.hasSecondaryActiveFilters ||
+    filters.some((filter) => {
+      if (!filter.secondary) return false
+      const value = props.table.getColumn(filter.columnId)?.getFilterValue()
+      if (Array.isArray(value)) {
+        return value.length > 0 && !value.includes('all')
+      }
+      return value != null && value !== ''
+    })
+  const secondaryFilters = hasSecondary ? (
+    <>
+      {props.secondarySearch}
+      {secondaryChips}
+    </>
+  ) : null
 
   const handleReset = () => {
     setIsSearchComposing(false)
@@ -345,6 +379,22 @@ export function DataTableToolbar<TData>(props: DataTableToolbarProps<TData>) {
     </Button>
   ) : null
 
+  const moreFiltersToggle = hasSecondary ? (
+    <Button
+      variant='ghost'
+      onClick={() => setMoreFiltersOpen((p) => !p)}
+      aria-expanded={moreFiltersOpen}
+      className={cn(
+        'text-muted-foreground hover:text-foreground gap-1 px-2',
+        secondaryActive && !moreFiltersOpen && 'text-primary hover:text-primary'
+      )}
+    >
+      <ListFilter className='size-3.5' />
+      {moreFiltersOpen ? t('Fewer filters') : t('More filters')}
+    </Button>
+  ) : null
+  const visibleSecondaryFilters = moreFiltersOpen ? secondaryFilters : null
+
   const hasLeftActions = props.leftActions != null
 
   if (isMobile && props.collapsibleOnMobile) {
@@ -367,6 +417,7 @@ export function DataTableToolbar<TData>(props: DataTableToolbarProps<TData>) {
           {props.customSearch !== undefined ? props.customSearch : searchInput}
           {props.additionalSearch}
           {filterChips}
+          {secondaryFilters}
           {expanded && hasExpandable && props.expandable}
           {expandToggle}
         </div>
@@ -381,7 +432,9 @@ export function DataTableToolbar<TData>(props: DataTableToolbarProps<TData>) {
           {props.customSearch !== undefined ? props.customSearch : searchInput}
           {props.additionalSearch}
           {filterChips}
+          {visibleSecondaryFilters}
           <div className='ms-auto flex shrink-0 items-center gap-1.5 sm:gap-2'>
+            {moreFiltersToggle}
             {expandToggle}
           </div>
         </div>
@@ -416,9 +469,11 @@ export function DataTableToolbar<TData>(props: DataTableToolbarProps<TData>) {
       {props.customSearch !== undefined ? props.customSearch : searchInput}
       {props.additionalSearch}
       {filterChips}
+      {visibleSecondaryFilters}
       {expanded && hasExpandable && props.expandable}
 
       <div className='ms-auto flex shrink-0 items-center gap-1.5 sm:gap-2'>
+        {moreFiltersToggle}
         {props.preActions}
         {resetButton}
         {searchButton}

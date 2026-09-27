@@ -6801,6 +6801,10 @@
     "Default theme": "預設主題",
     "Color theme for visitors who have not picked one. Their own choice always takes priority.": "訪客未選擇配色時使用的主題，訪客自己的選擇始終優先。",
     "When the system is light": "系統為亮色時",
-    "When the system is dark": "系統為暗色時"
+    "When the system is dark": "系統為暗色時",
+    "Display": "顯示",
+    "Display options": "顯示選項",
+    "More filters": "更多篩選",
+    "Fewer filters": "收起篩選"
   }
 }

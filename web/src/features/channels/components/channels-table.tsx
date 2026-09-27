@@ -435,8 +435,10 @@ export function ChannelsTable() {
         onReset: () => {
           resetModelFilterInput()
         },
-        additionalSearch: (
+        hasSecondaryActiveFilters: modelFilterInput.trim() !== '',
+        secondarySearch: (
           <Input
+            aria-label={t('Filter by model...')}
             placeholder={t('Filter by model...')}
             value={modelFilterInput}
             onChange={onModelFilterInputChange}
@@ -463,6 +465,7 @@ export function ChannelsTable() {
             title: t('Group'),
             options: groupFilterOptions,
             singleSelect: true,
+            secondary: true,
           },
         ],
         preActions: (

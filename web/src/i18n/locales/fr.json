@@ -6801,6 +6801,10 @@
     "Default theme": "Default theme",
     "Color theme for visitors who have not picked one. Their own choice always takes priority.": "Color theme for visitors who have not picked one. Their own choice always takes priority.",
     "When the system is light": "When the system is light",
-    "When the system is dark": "When the system is dark"
+    "When the system is dark": "When the system is dark",
+    "Display": "Display",
+    "Display options": "Display options",
+    "More filters": "More filters",
+    "Fewer filters": "Fewer filters"
   }
 }
