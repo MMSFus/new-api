@@ -37,7 +37,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { motion, useReducedMotion } from 'motion/react'
-import { useId, useMemo, useRef, useState } from 'react'
+import { type ReactNode, useId, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -460,7 +460,7 @@ function CompactQuickAction(props: { action: QuickAction }) {
   )
 }
 
-export function OverviewDashboard() {
+export function OverviewDashboard(props: { sectionTabs?: ReactNode }) {
   const { t } = useTranslation()
   const setupGuideId = useId()
   const setupGuideToggleRef = useRef<HTMLButtonElement>(null)
@@ -647,6 +647,7 @@ export function OverviewDashboard() {
       </SectionPageLayout.Actions>
       <SectionPageLayout.Content>
         <div className='flex flex-col gap-4'>
+          {props.sectionTabs}
           <div id={setupGuideId} hidden={!setupGuideExpanded}>
             {setupGuideExpanded && (
               <CardStaggerContainer className='grid items-stretch gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]'>

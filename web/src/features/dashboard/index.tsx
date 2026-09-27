@@ -16,16 +16,16 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { getRouteApi, useNavigate } from '@tanstack/react-router'
+import { getRouteApi } from '@tanstack/react-router'
 import { Eye, EyeOff } from 'lucide-react'
 import { useState, useCallback, useMemo, lazy, Suspense } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
+import { SectionNavTabs } from '@/components/layout/components/section-nav-tabs'
 import { FadeIn } from '@/components/page-transition'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   Tooltip,
   TooltipContent,
@@ -193,7 +193,6 @@ const SECTION_META: Record<DashboardSectionId, { titleKey: string }> = {
 
 export function Dashboard() {
   const { t } = useTranslation()
-  const navigate = useNavigate()
   const params = route.useParams()
   const userRole = useAuthStore((state) => state.auth.user?.role)
   const activeSection = (params.section ??
@@ -245,24 +244,18 @@ export function Dashboard() {
 
   const meta = SECTION_META[activeSection] ?? SECTION_META.overview
   const isAdmin = Boolean(userRole && userRole >= ROLE.ADMIN)
-  const visibleSections = useMemo(
+  const sectionTabs = useMemo(
     () =>
       DASHBOARD_SECTION_IDS.filter(
-        (section) => section !== 'overview' && (section !== 'users' || isAdmin)
-      ),
-    [isAdmin]
+        (section) => section !== 'users' || isAdmin
+      ).map((section) => ({
+        value: section,
+        label: t(SECTION_META[section].titleKey),
+        url: `/dashboard/${section}`,
+      })),
+    [isAdmin, t]
   )
-  const handleSectionChange = useCallback(
-    (section: string) => {
-      void navigate({
-        to: '/dashboard/$section',
-        params: { section: section as DashboardSectionId },
-      })
-    },
-    [navigate]
-  )
-  const showSectionTabs =
-    activeSection !== 'overview' && visibleSections.length > 1
+  const sectionNav = <SectionNavTabs tabs={sectionTabs} value={activeSection} />
   const modelActions =
     activeSection === 'models' ? (
       <>
@@ -318,7 +311,7 @@ export function Dashboard() {
   const sectionActions = modelActions ?? flowActions
 
   if (activeSection === 'overview') {
-    return <OverviewDashboard />
+    return <OverviewDashboard sectionTabs={sectionNav} />
   }
 
   return (
@@ -327,21 +320,9 @@ export function Dashboard() {
       <SectionPageLayout.Content>
         <div className='space-y-3 sm:space-y-4'>
           <div className='flex flex-wrap items-center justify-between gap-1.5 sm:gap-2'>
-            {showSectionTabs ? (
-              <Tabs value={activeSection} onValueChange={handleSectionChange}>
-                <TabsList className='max-w-full flex-wrap justify-start group-data-horizontal/tabs:h-auto'>
-                  {visibleSections.map((section) => (
-                    <TabsTrigger key={section} value={section}>
-                      {t(SECTION_META[section].titleKey)}
-                    </TabsTrigger>
-                  ))}
-                </TabsList>
-              </Tabs>
-            ) : (
-              <div />
-            )}
+            {sectionNav}
             {sectionActions != null && (
-              <div className='flex shrink-0 flex-wrap items-center gap-1.5 sm:gap-2'>
+              <div className='ml-auto flex shrink-0 flex-wrap items-center gap-1.5 sm:gap-2'>
                 {sectionActions}
               </div>
             )}
