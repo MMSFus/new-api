@@ -6819,6 +6819,10 @@
     "Open API Keys in the console and create a key.": "Open API Keys in the console and create a key.",
     "Replace the base URL": "Replace the base URL",
     "Point your app or SDK at the address below and keep the rest of your code.": "Point your app or SDK at the address below and keep the rest of your code.",
-    "Other sign-up methods": "Other sign-up methods"
+    "Other sign-up methods": "Other sign-up methods",
+    "Display": "Display",
+    "Display options": "Display options",
+    "More filters": "More filters",
+    "Fewer filters": "Fewer filters"
   }
 }

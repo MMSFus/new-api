@@ -6819,6 +6819,10 @@
     "Open API Keys in the console and create a key.": "在控制台開啟「API 金鑰」並建立一個金鑰。",
     "Replace the base URL": "替換 Base URL",
     "Point your app or SDK at the address below and keep the rest of your code.": "把應用或 SDK 的位址改成下面這個，其餘程式碼不用動。",
-    "Other sign-up methods": "其他註冊方式"
+    "Other sign-up methods": "其他註冊方式",
+    "Display": "顯示",
+    "Display options": "顯示選項",
+    "More filters": "更多篩選",
+    "Fewer filters": "收起篩選"
   }
 }

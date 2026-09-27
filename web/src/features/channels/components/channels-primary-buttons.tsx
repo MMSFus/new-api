@@ -27,6 +27,7 @@ import {
   DollarSign,
   ListChecks,
   SortAsc,
+  SlidersHorizontal,
   RefreshCw,
   ArrowUpFromLine,
 } from 'lucide-react'
@@ -44,8 +45,6 @@ import {
   DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { Label } from '@/components/ui/label'
-import { Switch } from '@/components/ui/switch'
 import {
   Tooltip,
   TooltipContent,
@@ -107,45 +106,44 @@ export function ChannelsPrimaryButtons() {
   return (
     <>
       <div className='flex items-center gap-2'>
-        {/* Desktop: Toggle switches visible */}
-        <div className='hidden items-center gap-2 rounded-md border px-3 py-1.5 sm:flex'>
-          <ListChecks className='text-muted-foreground h-4 w-4' />
-          <Label
-            htmlFor='channel-batch-mode'
-            className='cursor-pointer text-sm'
+        {/* Display modes: low-frequency switches kept in one menu */}
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                variant='outline'
+                size='sm'
+                aria-label={t('Display options')}
+              />
+            }
           >
-            {t('Batch Operations')}
-          </Label>
-          <Switch
-            id='channel-batch-mode'
-            checked={batchMode}
-            onCheckedChange={handleBatchModeToggle}
-          />
-        </div>
-
-        <div className='hidden items-center gap-2 rounded-md border px-3 py-1.5 sm:flex'>
-          <Tags className='text-muted-foreground h-4 w-4' />
-          <Label htmlFor='tag-mode' className='cursor-pointer text-sm'>
-            {t('Tag Mode')}
-          </Label>
-          <Switch
-            id='tag-mode'
-            checked={enableTagMode}
-            onCheckedChange={handleTagModeToggle}
-          />
-        </div>
-
-        <div className='hidden items-center gap-2 rounded-md border px-3 py-1.5 sm:flex'>
-          <SortAsc className='text-muted-foreground h-4 w-4' />
-          <Label htmlFor='id-sort' className='cursor-pointer text-sm'>
-            {t('Sort by ID')}
-          </Label>
-          <Switch
-            id='id-sort'
-            checked={idSort}
-            onCheckedChange={handleIdSortToggle}
-          />
-        </div>
+            <SlidersHorizontal className='h-4 w-4' />
+            <span className='max-sm:hidden'>{t('Display')}</span>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align='end' className='w-52'>
+            <DropdownMenuCheckboxItem
+              checked={batchMode}
+              onCheckedChange={handleBatchModeToggle}
+            >
+              <ListChecks className='mr-2 h-4 w-4' />
+              {t('Batch Operations')}
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuCheckboxItem
+              checked={enableTagMode}
+              onCheckedChange={handleTagModeToggle}
+            >
+              <Tags className='mr-2 h-4 w-4' />
+              {t('Tag Mode')}
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuCheckboxItem
+              checked={idSort}
+              onCheckedChange={handleIdSortToggle}
+            >
+              <SortAsc className='mr-2 h-4 w-4' />
+              {t('Sort by ID')}
+            </DropdownMenuCheckboxItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
 
         {/* Create Channel */}
         <Tooltip>
@@ -173,40 +171,18 @@ export function ChannelsPrimaryButtons() {
 
         {/* More Actions */}
         <DropdownMenu>
-          <DropdownMenuTrigger render={<Button variant='outline' size='sm' />}>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                variant='outline'
+                size='sm'
+                aria-label={t('More actions')}
+              />
+            }
+          >
             <MoreHorizontal className='h-4 w-4' />
           </DropdownMenuTrigger>
           <DropdownMenuContent align='end' className='w-56'>
-            {/* Mobile-only: toggle switches */}
-            <DropdownMenuCheckboxItem
-              className='sm:hidden'
-              checked={batchMode}
-              onCheckedChange={handleBatchModeToggle}
-            >
-              <ListChecks className='mr-2 h-4 w-4' />
-              {t('Batch Operations')}
-            </DropdownMenuCheckboxItem>
-
-            <DropdownMenuCheckboxItem
-              className='sm:hidden'
-              checked={enableTagMode}
-              onCheckedChange={handleTagModeToggle}
-            >
-              <Tags className='mr-2 h-4 w-4' />
-              {t('Tag Mode')}
-            </DropdownMenuCheckboxItem>
-
-            <DropdownMenuCheckboxItem
-              className='sm:hidden'
-              checked={idSort}
-              onCheckedChange={handleIdSortToggle}
-            >
-              <SortAsc className='mr-2 h-4 w-4' />
-              {t('Sort by ID')}
-            </DropdownMenuCheckboxItem>
-
-            <DropdownMenuSeparator className='sm:hidden' />
-
             <DropdownMenuItem
               onClick={() => {
                 handleTestAllChannels(queryClient)

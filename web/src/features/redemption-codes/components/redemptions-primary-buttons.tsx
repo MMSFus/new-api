@@ -16,13 +16,20 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Plus, Trash2 } from 'lucide-react'
+import { MoreHorizontal, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuShortcut,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { handleServerError } from '@/lib/handle-server-error'
 
 import { deleteInvalidRedemptions } from '../api'
@@ -59,19 +66,38 @@ export function RedemptionsPrimaryButtons() {
 
   return (
     <>
-      <div className='flex flex-wrap gap-2'>
-        <Button
-          size='sm'
-          variant='outline'
-          onClick={() => setShowDeleteInvalidConfirm(true)}
-        >
-          <Trash2 className='text-destructive h-4 w-4' />
-          {t('Delete Invalid')}
-        </Button>
+      <div className='flex items-center gap-2'>
         <Button size='sm' onClick={() => setOpen('create')}>
           <Plus className='h-4 w-4' />
           {t('Create Code')}
         </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                variant='outline'
+                size='sm'
+                aria-label={t('More actions')}
+              />
+            }
+          >
+            <MoreHorizontal className='h-4 w-4' />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align='end' className='w-52'>
+            <DropdownMenuItem
+              onSelect={(e) => {
+                e.preventDefault()
+                setShowDeleteInvalidConfirm(true)
+              }}
+              className='text-destructive focus:text-destructive'
+            >
+              {t('Delete Invalid')}
+              <DropdownMenuShortcut>
+                <Trash2 className='h-4 w-4' />
+              </DropdownMenuShortcut>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       <ConfirmDialog
