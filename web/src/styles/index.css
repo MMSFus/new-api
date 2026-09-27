@@ -28,6 +28,7 @@ For commercial licensing, please contact support@quantumnous.com
 @import '@fontsource-variable/lora';
 
 @import './theme.css';
+@import './huidian-themes.css';
 @import './theme-presets.css';
 
 @layer base {

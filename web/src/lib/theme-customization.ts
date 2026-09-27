@@ -25,9 +25,37 @@ For commercial licensing, please contact support@quantumnous.com
 
 export const THEME_PRESETS = [
   {
+    // Huidian graphite: the :root palette in theme.css.
     value: 'default',
-    name: 'Default',
-    swatches: ['oklch(0.72 0.18 250)', 'oklch(0.7 0.12 280)'],
+    name: 'Graphite',
+    swatches: ['oklch(0.499 0.203 268.7)', 'oklch(0.7 0.135 271.7)'],
+  },
+  // Huidian themes (styles/huidian-themes.css): swatches are the light and
+  // dark accents of each theme.
+  {
+    value: 'teal',
+    name: 'Teal',
+    swatches: ['oklch(0.555 0.097 181.9)', 'oklch(0.765 0.128 179.5)'],
+  },
+  {
+    value: 'amber',
+    name: 'Amber',
+    swatches: ['oklch(0.575 0.138 56.4)', 'oklch(0.778 0.141 69.6)'],
+  },
+  {
+    value: 'rose',
+    name: 'Rose',
+    swatches: ['oklch(0.547 0.195 13.1)', 'oklch(0.711 0.162 7.7)'],
+  },
+  {
+    value: 'violet',
+    name: 'Violet',
+    swatches: ['oklch(0.509 0.223 290.8)', 'oklch(0.708 0.153 295.3)'],
+  },
+  {
+    value: 'mono',
+    name: 'Mono',
+    swatches: ['oklch(0.239 0.014 267)', 'oklch(0.934 0.008 271.3)'],
   },
   {
     // Inspired by Anthropic's official brand language: warm cream canvas
@@ -80,6 +108,18 @@ export const THEME_PRESETS = [
 ] as const
 
 export type ThemePreset = (typeof THEME_PRESETS)[number]['value']
+
+/**
+ * Presets offered in the theme picker. The upstream presets stay registered
+ * so saved preferences keep working, but the picker only lists the Huidian
+ * themes to keep the choice short.
+ */
+export const PICKER_THEME_PRESETS = THEME_PRESETS.slice(0, 6)
+
+/** i18n key of a preset's display name (`preset.graphite`, `preset.teal`…). */
+export function presetLabelKey(preset: ThemePreset): string {
+  return `preset.${preset === 'default' ? 'graphite' : preset}`
+}
 export type ThemeRadius = 'default' | 'none' | 'sm' | 'md' | 'lg' | 'xl'
 export type ThemeScale = 'default' | 'sm' | 'lg' | 'xl'
 export type ContentLayout = 'full' | 'centered'

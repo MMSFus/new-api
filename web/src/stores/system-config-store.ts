@@ -44,6 +44,10 @@ export interface SystemConfig {
   footerHtml?: string
   demoSiteEnabled?: boolean
   displayTokenStatEnabled?: boolean
+  /** Site default color preset when the resolved scheme is light */
+  themeDefaultLight?: string
+  /** Site default color preset when the resolved scheme is dark */
+  themeDefaultDark?: string
   currency: CurrencyConfig
 }
 

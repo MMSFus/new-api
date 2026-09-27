@@ -16,18 +16,24 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-/**
- * Application-wide constants
- */
+import { expect, test } from 'vitest'
 
-// System Configuration Defaults
-export const DEFAULT_SYSTEM_NAME = 'New API'
-// Built-in brand mark; the upstream /logo.png is kept in public/.
-export const DEFAULT_LOGO = '/favicon.svg'
+import {
+  PICKER_THEME_PRESETS,
+  THEME_PRESET_VALUES,
+} from '@/lib/theme-customization'
 
-// LocalStorage Keys
-export const STORAGE_KEYS = {
-  SYSTEM_NAME: 'system_name',
-  LOGO: 'logo',
-  FOOTER_HTML: 'footer_html',
-} as const
+test('theme picker offers exactly the six Huidian color themes', () => {
+  expect(PICKER_THEME_PRESETS.map((preset) => preset.value)).toEqual([
+    'default',
+    'teal',
+    'amber',
+    'rose',
+    'violet',
+    'mono',
+  ])
+})
+
+test('presets hidden from the picker stay valid for saved preferences', () => {
+  expect(THEME_PRESET_VALUES.has('anthropic')).toBe(true)
+})

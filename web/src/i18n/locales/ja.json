@@ -4425,6 +4425,12 @@
     "Preset recharge amounts displayed to users": "ユーザーに表示されるプリセットチャージ金額",
     "Preset Template": "プリセットテンプレート",
     "Preset templates": "プリセットのテンプレート",
+    "preset.graphite": "グラファイト",
+    "preset.teal": "ティール",
+    "preset.amber": "アンバー",
+    "preset.rose": "ローズ",
+    "preset.violet": "バイオレット",
+    "preset.mono": "モノ",
     "preset.anthropic": "Anthropic",
     "preset.default": "デフォルト",
     "preset.forest-whisper": "フォレストウィスパー",
@@ -6791,6 +6797,10 @@
     "Zhipu": "Zhipu",
     "Zhipu GLM": "Zhipu GLM",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Default theme": "Default theme",
+    "Color theme for visitors who have not picked one. Their own choice always takes priority.": "Color theme for visitors who have not picked one. Their own choice always takes priority.",
+    "When the system is light": "When the system is light",
+    "When the system is dark": "When the system is dark"
   }
 }

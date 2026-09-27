@@ -17,10 +17,19 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useNavigate } from '@tanstack/react-router'
-import { User, Wallet, LogOut, Settings, ShieldCheck } from 'lucide-react'
-import { useMemo } from 'react'
+import {
+  User,
+  Wallet,
+  LogOut,
+  Palette,
+  Settings,
+  ShieldCheck,
+} from 'lucide-react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { ConfigDrawer } from '@/components/config-drawer'
+import { LanguageSubmenu } from '@/components/language-switcher'
 import { SignOutDialog } from '@/components/sign-out-dialog'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
@@ -40,10 +49,21 @@ import { useAuthStore } from '@/stores/auth-store'
 
 const avatarFallbackClassName = 'font-semibold text-white'
 
-export function ProfileDropdown() {
+type ProfileDropdownProps = {
+  /**
+   * Show the theme settings and language entries. Headers that keep their
+   * own switchers can turn this off.
+   * @default true
+   */
+  showPreferences?: boolean
+}
+
+export function ProfileDropdown(props: ProfileDropdownProps) {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const [open, setOpen] = useDialogState()
+  const [appearanceOpen, setAppearanceOpen] = useState(false)
+  const showPreferences = props.showPreferences !== false
   const user = useAuthStore((state) => state.auth.user)
   const { displayName, roleLabel } = useUserDisplay(user)
   const isSuperAdmin = user?.role === ROLE.SUPER_ADMIN
@@ -136,6 +156,17 @@ export function ProfileDropdown() {
             </DropdownMenuItem>
           )}
 
+          {showPreferences && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => setAppearanceOpen(true)}>
+                <Palette className='size-4' />
+                {t('Theme Settings')}
+              </DropdownMenuItem>
+              <LanguageSubmenu />
+            </>
+          )}
+
           <DropdownMenuSeparator />
 
           <DropdownMenuItem variant='destructive' onClick={() => setOpen(true)}>
@@ -146,6 +177,13 @@ export function ProfileDropdown() {
       </DropdownMenu>
 
       <SignOutDialog open={!!open} onOpenChange={setOpen} />
+      {showPreferences && (
+        <ConfigDrawer
+          open={appearanceOpen}
+          onOpenChange={setAppearanceOpen}
+          showTrigger={false}
+        />
+      )}
     </>
   )
 }

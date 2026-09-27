@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 
+import { BrandMark } from '@/components/brand-mark'
 import {
   SidebarMenu,
   SidebarMenuButton,
@@ -26,6 +27,7 @@ import {
 } from '@/components/ui/sidebar'
 import { useStatus } from '@/hooks/use-status'
 import { useSystemConfig } from '@/hooks/use-system-config'
+import { DEFAULT_LOGO } from '@/lib/constants'
 import { cn } from '@/lib/utils'
 
 type SystemBrandProps = {
@@ -66,11 +68,15 @@ export function SystemBrand(props: SystemBrandProps) {
         )}
       >
         <div className='flex size-5 shrink-0 items-center justify-center overflow-hidden rounded-md'>
-          <img
-            src={logo}
-            alt={t('Logo')}
-            className='size-full rounded-md object-cover'
-          />
+          {logo === DEFAULT_LOGO ? (
+            <BrandMark variant='tile' className='size-full' />
+          ) : (
+            <img
+              src={logo}
+              alt={t('Logo')}
+              className='size-full rounded-md object-cover'
+            />
+          )}
         </div>
         <span className='max-w-[12rem] truncate'>{name}</span>
       </Link>
@@ -86,11 +92,15 @@ export function SystemBrand(props: SystemBrandProps) {
           render={<div />}
         >
           <div className='flex aspect-square size-8 items-center justify-center overflow-hidden rounded-lg'>
-            <img
-              src={logo}
-              alt={t('Logo')}
-              className='size-full rounded-lg object-cover'
-            />
+            {logo === DEFAULT_LOGO ? (
+              <BrandMark variant='tile' className='size-full' />
+            ) : (
+              <img
+                src={logo}
+                alt={t('Logo')}
+                className='size-full rounded-lg object-cover'
+              />
+            )}
           </div>
           <div className='grid flex-1 text-start text-sm leading-tight group-data-[collapsible=icon]:hidden'>
             <span className='truncate font-semibold'>{name}</span>

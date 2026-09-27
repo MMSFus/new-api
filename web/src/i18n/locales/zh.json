@@ -4425,6 +4425,12 @@
     "Preset recharge amounts displayed to users": "向用户显示的预设充值金额",
     "Preset Template": "预设模板",
     "Preset templates": "预设模板",
+    "preset.graphite": "石墨",
+    "preset.teal": "青碧",
+    "preset.amber": "琥珀",
+    "preset.rose": "玫红",
+    "preset.violet": "堇紫",
+    "preset.mono": "素黑",
     "preset.anthropic": "Anthropic",
     "preset.default": "默认",
     "preset.forest-whisper": "森林低语",
@@ -6791,6 +6797,10 @@
     "Zhipu": "智谱",
     "Zhipu GLM": "智谱GLM",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "Default theme": "默认主题",
+    "Color theme for visitors who have not picked one. Their own choice always takes priority.": "访客未选择配色时使用的主题，访客自己的选择始终优先。",
+    "When the system is light": "系统为亮色时",
+    "When the system is dark": "系统为暗色时"
   }
 }

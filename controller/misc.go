@@ -49,6 +49,7 @@ func GetStatus(c *gin.Context) {
 	defer common.OptionMapRWMutex.RUnlock()
 
 	legalSetting := system_setting.GetLegalSettings()
+	themeDefault := system_setting.GetThemeDefaultSettings()
 
 	data := gin.H{
 		"version":                     common.Version,
@@ -65,6 +66,8 @@ func GetStatus(c *gin.Context) {
 		"telegram_oauth_configured":   oauth.TelegramConfigurationError() == nil,
 		"telegram_bot_name":           common.TelegramBotName,
 		"theme":                       "default",
+		"theme_default_light":         themeDefault.Light,
+		"theme_default_dark":          themeDefault.Dark,
 		"system_name":                 common.SystemName,
 		"logo":                        common.Logo,
 		"footer_html":                 common.Footer,
