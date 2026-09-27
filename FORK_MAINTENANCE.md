@@ -13,12 +13,15 @@ This repository is a customization fork of `QuantumNous/new-api`.
 
 ```bash
 git fetch upstream
-git switch -c chore/sync-upstream
-git rebase upstream/main
-git push -u origin chore/sync-upstream
+git switch main && git pull --ff-only origin main
+git switch -c chore/sync-upstream-YYYYMMDD
+git merge --no-ff upstream/main
+git push -u origin chore/sync-upstream-YYYYMMDD
 ```
 
-Open a pull request from `chore/sync-upstream` into `main` and resolve any customization conflicts there.
+Resolve customization conflicts in the merge commit, then open a pull request into `main`.
+
+Merge sync pull requests with **Create a merge commit**. Squash or rebase merges rewrite the upstream commits, so the next sync no longer sees them as merged and repeats the same conflicts. Do not rebase the sync branch onto `upstream/main` either, because that rewrites fork commits already on `main`. Feature pull requests may still be squash-merged.
 
 ## Image publishing
 

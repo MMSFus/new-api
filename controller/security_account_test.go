@@ -26,6 +26,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"github.com/pquerna/otp/totp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -209,6 +210,22 @@ func TestSecurityAccountDeletionRechecksTransactionAndConsumesFailedProof(t *tes
 
 func TestSecurityAccountDeletionConcurrentRequestsHaveOneWinner(t *testing.T) {
 	user, identity := setupSecurityEnrollmentTest(t)
+	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
+		// Two real writers race here, so use the concurrency pragmas of
+		// common.SQLitePath; the bare test file fails one with SQLITE_BUSY.
+		// Other tests park transactions on barriers and must keep the bare file.
+		var file string
+		require.NoError(t, model.DB.Raw("SELECT file FROM pragma_database_list WHERE name = 'main'").Scan(&file).Error)
+		db, err := gorm.Open(sqlite.Open(file+"?_pragma=busy_timeout(30000)&_pragma=journal_mode(WAL)&_txlock=immediate"), &gorm.Config{})
+		require.NoError(t, err)
+		model.DB = db
+		t.Cleanup(func() {
+			connection, err := db.DB()
+			if err == nil {
+				_ = connection.Close()
+			}
+		})
+	}
 	proof := issueSecurityEnrollmentProof(t, identity, service.VerificationOperation{Scope: service.VerificationScopeAccountDelete}, "password")
 	start := make(chan struct{})
 	responses := make(chan string, 2)
