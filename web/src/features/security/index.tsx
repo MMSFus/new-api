@@ -30,6 +30,7 @@ import {
 } from '@/components/ui/empty'
 import { Skeleton } from '@/components/ui/skeleton'
 import { TitledCard } from '@/components/ui/titled-card'
+import { PersonalSettingsTabs } from '@/features/profile/components/personal-settings-tabs'
 import { useProfile } from '@/features/profile/hooks/use-profile'
 
 import { AccessTokenCard } from './components/access-token-card'
@@ -139,10 +140,13 @@ export function Security() {
   return (
     <SectionPageLayout>
       <SectionPageLayout.Title>
-        {t('Security & Access')}
+        {t('Personal Settings')}
       </SectionPageLayout.Title>
       <SectionPageLayout.Content>
-        <div className='mx-auto w-full max-w-7xl'>{content}</div>
+        <div className='mx-auto flex w-full max-w-7xl flex-col gap-4 sm:gap-6'>
+          <PersonalSettingsTabs value='security' />
+          {content}
+        </div>
       </SectionPageLayout.Content>
     </SectionPageLayout>
   )

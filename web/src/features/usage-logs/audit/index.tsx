@@ -31,6 +31,7 @@ import {
 import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
 
+import { UsageLogsSectionTabs } from '../components/usage-logs-section-tabs'
 import { AuditLogViewer } from './components/audit-log-viewer'
 
 export function AuditLogs() {
@@ -89,7 +90,7 @@ export function AuditLogs() {
   }, [queryClient, userId])
   return (
     <SectionPageLayout fixedContent>
-      <SectionPageLayout.Title>{t('Audit Logs')}</SectionPageLayout.Title>
+      <SectionPageLayout.Title>{t('Usage Logs')}</SectionPageLayout.Title>
       <SectionPageLayout.Actions>
         {canReadAll && !accessRevoked && (
           <Tabs
@@ -107,6 +108,7 @@ export function AuditLogs() {
       </SectionPageLayout.Actions>
       <SectionPageLayout.Content>
         <div className='flex h-full min-h-0 flex-col gap-3'>
+          <UsageLogsSectionTabs value='audit' />
           {accessRevoked && (
             <p role='status' className='text-muted-foreground shrink-0 text-xs'>
               {t('Audit access changed. Showing only your records.')}

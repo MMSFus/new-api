@@ -16,11 +16,22 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-export { CTA } from './sections/cta'
-export { Features } from './sections/features'
-export { Hero } from './sections/hero'
-export { HowItWorks } from './sections/how-it-works'
-export { Stats } from './sections/stats'
-export { QuickStart } from './storefront/quick-start'
-export { StorefrontHero } from './storefront/storefront-hero'
-export { ValuePoints } from './storefront/value-points'
+import { useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
+
+import { SectionNavTabs } from '@/components/layout/components/section-nav-tabs'
+
+/**
+ * Switches between the pages folded into the Personal Settings sidebar entry.
+ */
+export function PersonalSettingsTabs(props: { value: 'profile' | 'security' }) {
+  const { t } = useTranslation()
+  const tabs = useMemo(
+    () => [
+      { value: 'profile', label: t('Profile'), url: '/profile' },
+      { value: 'security', label: t('Security & Access'), url: '/security' },
+    ],
+    [t]
+  )
+  return <SectionNavTabs tabs={tabs} value={props.value} />
+}
