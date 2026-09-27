@@ -437,9 +437,7 @@ func (releasedAuditLog) TableName() string { return "logs" }
 func newAuditTestDatabase(t *testing.T, kind, dsn string) (*gorm.DB, string) {
 	t.Helper()
 	if kind == "sqlite" {
-		// Match the concurrency pragmas of common.SQLitePath; without them
-		// concurrent writers fail with SQLITE_BUSY instead of queueing.
-		path := t.TempDir() + "/audit.db?_pragma=busy_timeout(30000)&_pragma=journal_mode(WAL)&_txlock=immediate"
+		path := t.TempDir() + "/audit.db"
 		db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
 		require.NoError(t, err)
 		return db, path
