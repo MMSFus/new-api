@@ -31,6 +31,7 @@ import { useTranslation } from 'react-i18next'
 import { ConfigDrawer } from '@/components/config-drawer'
 import { LanguageSubmenu } from '@/components/language-switcher'
 import { SignOutDialog } from '@/components/sign-out-dialog'
+import { ThemeSubmenu } from '@/components/theme-switch'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import {
@@ -57,6 +58,12 @@ type ProfileDropdownProps = {
    * @default false
    */
   showPreferences?: boolean
+  /**
+   * Show light/dark and language pickers inline. Unlike `showPreferences` it
+   * needs no SidebarProvider, so public headers can fold their switchers in.
+   * @default false
+   */
+  showQuickPreferences?: boolean
 }
 
 export function ProfileDropdown(props: ProfileDropdownProps) {
@@ -65,6 +72,8 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
   const [open, setOpen] = useDialogState()
   const [appearanceOpen, setAppearanceOpen] = useState(false)
   const showPreferences = props.showPreferences === true
+  const showQuickPreferences =
+    !showPreferences && props.showQuickPreferences === true
   const user = useAuthStore((state) => state.auth.user)
   const { displayName, roleLabel } = useUserDisplay(user)
   const isSuperAdmin = user?.role === ROLE.SUPER_ADMIN
@@ -164,6 +173,14 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
                 <Palette className='size-4' />
                 {t('Theme Settings')}
               </DropdownMenuItem>
+              <LanguageSubmenu />
+            </>
+          )}
+
+          {showQuickPreferences && (
+            <>
+              <DropdownMenuSeparator />
+              <ThemeSubmenu />
               <LanguageSubmenu />
             </>
           )}
