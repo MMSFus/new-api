@@ -17,7 +17,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Languages, Check } from 'lucide-react'
-import { useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
@@ -25,33 +24,18 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import {
-  INTERFACE_LANGUAGE_OPTIONS,
-  normalizeInterfaceLanguage,
-} from '@/i18n/languages'
-import { api } from '@/lib/api'
+import { useInterfaceLanguage } from '@/hooks/use-interface-language'
+import { INTERFACE_LANGUAGE_OPTIONS } from '@/i18n/languages'
 import { cn } from '@/lib/utils'
-import { useAuthStore } from '@/stores/auth-store'
 
 export function LanguageSwitcher() {
-  const { i18n, t } = useTranslation()
-  const user = useAuthStore((s) => s.auth.user)
-  const currentLanguage = normalizeInterfaceLanguage(i18n.language)
-  const handleChangeLanguage = useCallback(
-    async (code: string) => {
-      await i18n.changeLanguage(code)
-      if (user) {
-        try {
-          await api.put('/api/user/self', { language: code })
-        } catch {
-          // Best-effort persistence; don't block the UI on failure
-        }
-      }
-    },
-    [i18n, user]
-  )
+  const { t } = useTranslation()
+  const language = useInterfaceLanguage()
 
   return (
     <DropdownMenu modal={false}>
@@ -62,22 +46,56 @@ export function LanguageSwitcher() {
         <span className='sr-only'>{t('Change language')}</span>
       </DropdownMenuTrigger>
       <DropdownMenuContent align='end'>
-        {INTERFACE_LANGUAGE_OPTIONS.map((lang) => (
-          <DropdownMenuItem
-            key={lang.code}
-            onClick={() => handleChangeLanguage(lang.code)}
-          >
-            {lang.label}
-            <Check
-              size={14}
-              className={cn(
-                'ms-auto',
-                currentLanguage !== lang.code && 'hidden'
-              )}
-            />
-          </DropdownMenuItem>
-        ))}
+        <LanguageOptions
+          currentLanguage={language.currentLanguage}
+          onSelect={language.changeLanguage}
+        />
       </DropdownMenuContent>
     </DropdownMenu>
   )
+}
+
+/** Language picker nested inside another dropdown menu. */
+export function LanguageSubmenu() {
+  const { t } = useTranslation()
+  const language = useInterfaceLanguage()
+  const current = INTERFACE_LANGUAGE_OPTIONS.find(
+    (lang) => lang.code === language.currentLanguage
+  )
+
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger>
+        <Languages className='size-4' aria-hidden='true' />
+        {t('Change language')}
+        <span className='text-muted-foreground ms-auto text-xs'>
+          {current?.label}
+        </span>
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent>
+        <LanguageOptions
+          currentLanguage={language.currentLanguage}
+          onSelect={language.changeLanguage}
+        />
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
+  )
+}
+
+function LanguageOptions(props: {
+  currentLanguage: string
+  onSelect: (code: string) => void
+}) {
+  return INTERFACE_LANGUAGE_OPTIONS.map((lang) => (
+    <DropdownMenuItem key={lang.code} onClick={() => props.onSelect(lang.code)}>
+      {lang.label}
+      <Check
+        size={14}
+        className={cn(
+          'ms-auto',
+          props.currentLanguage !== lang.code && 'hidden'
+        )}
+      />
+    </DropdownMenuItem>
+  ))
 }
