@@ -17,21 +17,17 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import {
-  Activity,
   Box,
-  ClipboardList,
   CreditCard,
   FileText,
   FlaskConical,
   Key,
   LayoutDashboard,
-  ListTodo,
   MessageSquare,
   PlugZap,
   Radio,
   ServerCog,
   Settings,
-  ShieldCheck,
   Ticket,
   User,
   Users,
@@ -41,6 +37,19 @@ import { useTranslation } from 'react-i18next'
 
 import type { SidebarData } from '@/components/layout/types'
 import { ROLE } from '@/lib/roles'
+
+/**
+ * Destinations folded into one sidebar entry. The entry opens the first one
+ * the sidebar modules configuration leaves visible; the pages link to each
+ * other with tabs.
+ */
+const USAGE_LOG_URLS = [
+  '/usage-logs/common',
+  '/usage-logs/task',
+  '/usage-logs/drawing',
+  '/usage-logs/audit',
+]
+const ACCOUNT_URLS = ['/profile', '/security']
 
 /**
  * Root navigation groups for the application sidebar.
@@ -54,33 +63,19 @@ export function useSidebarData(): SidebarData {
   return {
     navGroups: [
       {
-        id: 'chat',
-        title: t('Chat'),
-        items: [
-          {
-            title: t('Playground'),
-            url: '/playground',
-            icon: FlaskConical,
-          },
-          {
-            title: t('Chat'),
-            icon: MessageSquare,
-            type: 'chat-presets',
-          },
-        ],
-      },
-      {
         id: 'general',
-        title: t('General'),
+        title: t('Console'),
         items: [
           {
             title: t('Overview'),
             url: '/dashboard/overview',
-            icon: Activity,
-          },
-          {
-            title: t('Dashboard'),
-            url: '/dashboard/models',
+            activeUrls: [
+              '/dashboard',
+              '/dashboard/overview',
+              '/dashboard/models',
+              '/dashboard/flow',
+              '/dashboard/users',
+            ],
             icon: LayoutDashboard,
           },
           {
@@ -91,40 +86,31 @@ export function useSidebarData(): SidebarData {
           {
             title: t('Usage Logs'),
             url: '/usage-logs/common',
+            activeUrls: USAGE_LOG_URLS,
+            configUrls: USAGE_LOG_URLS,
             icon: FileText,
           },
-          {
-            title: t('Audit Logs'),
-            url: '/usage-logs/audit',
-            icon: ClipboardList,
-          },
-          {
-            title: t('Task Logs'),
-            url: '/usage-logs/task',
-            activeUrls: ['/usage-logs/drawing'],
-            configUrls: ['/usage-logs/drawing', '/usage-logs/task'],
-            icon: ListTodo,
-          },
-        ],
-      },
-      {
-        id: 'personal',
-        title: t('Personal'),
-        items: [
           {
             title: t('Wallet'),
             url: '/wallet',
             icon: Wallet,
           },
           {
-            title: t('Profile'),
-            url: '/profile',
-            icon: User,
+            title: t('Playground'),
+            url: '/playground',
+            icon: FlaskConical,
           },
           {
-            title: t('Security & Access'),
-            url: '/security',
-            icon: ShieldCheck,
+            title: t('Chat'),
+            icon: MessageSquare,
+            type: 'chat-presets',
+          },
+          {
+            title: t('Personal Settings'),
+            url: '/profile',
+            activeUrls: ACCOUNT_URLS,
+            configUrls: ACCOUNT_URLS,
+            icon: User,
           },
         ],
       },

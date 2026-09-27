@@ -255,6 +255,13 @@ function filterNavItems(
           items: filteredSubItems,
         }
       }
+      // A link folding several destinations opens the first one still enabled
+      if ('url' in item && item.url && item.configUrls) {
+        const target = item.configUrls.find((url) =>
+          isModuleEnabled(url as string, adminConfig, userConfig)
+        )
+        if (target && target !== item.url) return { ...item, url: target }
+      }
       return item
     })
     .filter((item) => isNavItemVisible(item, adminConfig, userConfig))
