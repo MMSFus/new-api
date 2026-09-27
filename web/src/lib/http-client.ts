@@ -30,6 +30,7 @@ import {
   getServerErrorMessage,
   safeServerErrorMessage,
 } from '@/lib/server-error-message'
+import { claimSignInRedirect } from '@/lib/sign-in-redirect'
 import { useAuthStore } from '@/stores/auth-store'
 
 declare module 'axios' {
@@ -75,12 +76,16 @@ api.get = ((url: string, config: ApiRequestConfig = {}) => {
 }) as typeof api.get
 
 function redirectToSignIn(): void {
-  if (
-    typeof window !== 'undefined' &&
-    window.location.pathname !== '/sign-in'
-  ) {
-    window.location.replace('/sign-in')
+  if (typeof window === 'undefined') return
+  if (window.location.pathname === '/sign-in') return
+  let storage: Storage | undefined
+  try {
+    storage = window.sessionStorage
+  } catch {
+    storage = undefined
   }
+  if (!claimSignInRedirect(storage)) return
+  window.location.replace('/sign-in')
 }
 
 api.interceptors.response.use(

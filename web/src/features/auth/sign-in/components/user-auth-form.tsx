@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Link } from '@tanstack/react-router'
-import { Loader2, LogIn, KeyRound } from 'lucide-react'
+import { ChevronDown, Loader2, LogIn, KeyRound } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
@@ -29,6 +29,11 @@ import { Dialog } from '@/components/dialog'
 import { PasswordInput } from '@/components/password-input'
 import { Turnstile } from '@/components/turnstile'
 import { Button } from '@/components/ui/button'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
 import {
   Form,
   FormControl,
@@ -349,6 +354,80 @@ export function UserAuthForm({
     </>
   )
 
+  const passwordSignIn = passwordLoginEnabled && (
+    <div className='space-y-4'>
+      <div className='space-y-1 border-t pt-4'>
+        <p className='font-medium'>{t('On-site account sign-in')}</p>
+        <p className='text-muted-foreground text-sm'>
+          {t(
+            'Only use this option if you have already set a username and password for this site.'
+          )}
+        </p>
+      </div>
+
+      {/* Username Field */}
+      <FormField
+        control={form.control}
+        name='username'
+        render={({ field }) => (
+          <FormItem>
+            <FormLabel>{t('Username or Email')}</FormLabel>
+            <FormControl>
+              <Input
+                placeholder={t('Enter your username or email')}
+                {...field}
+              />
+            </FormControl>
+            <FormMessage />
+          </FormItem>
+        )}
+      />
+
+      {/* Password Field */}
+      <FormField
+        control={form.control}
+        name='password'
+        render={({ field }) => (
+          <FormItem className='relative'>
+            <FormLabel>{t('Password')}</FormLabel>
+            <FormControl>
+              <PasswordInput placeholder={t('Enter password')} {...field} />
+            </FormControl>
+            <FormMessage />
+            <Link
+              to='/forgot-password'
+              className='text-muted-foreground absolute end-0 -top-0.5 z-10 text-sm font-medium hover:opacity-75'
+            >
+              {t('Forgot password?')}
+            </Link>
+          </FormItem>
+        )}
+      />
+
+      {/* Submit Button */}
+      <Button
+        type='submit'
+        className='mt-2 w-full justify-center gap-2'
+        disabled={isLoading || (requiresLegalConsent && !agreedToLegal)}
+      >
+        {isLoading ? <Loader2 className='animate-spin' /> : <LogIn />}
+        {t('Sign in')}
+      </Button>
+
+      {/* Turnstile */}
+      {isTurnstileEnabled && (
+        <div className='mt-2'>
+          <Turnstile
+            key={turnstileWidgetKey}
+            siteKey={turnstileSiteKey}
+            onVerify={setTurnstileToken}
+            onExpire={() => setTurnstileToken('')}
+          />
+        </div>
+      )}
+    </div>
+  )
+
   return (
     <Form {...form}>
       <form
@@ -366,83 +445,33 @@ export function UserAuthForm({
           />
         )}
 
-        {hasSecondaryLogin && alternativeLoginMethods}
-
-        {passwordLoginEnabled && (
-          <div className='space-y-4'>
-            <div className='space-y-1 border-t pt-4'>
-              <p className='font-medium'>{t('On-site account sign-in')}</p>
-              <p className='text-muted-foreground text-sm'>
-                {t(
-                  'Only use this option if you have already set a username and password for this site.'
-                )}
-              </p>
-            </div>
-
-            {/* Username Field */}
-            <FormField
-              control={form.control}
-              name='username'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Username or Email')}</FormLabel>
-                  <FormControl>
-                    <Input
-                      placeholder={t('Enter your username or email')}
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            {/* Password Field */}
-            <FormField
-              control={form.control}
-              name='password'
-              render={({ field }) => (
-                <FormItem className='relative'>
-                  <FormLabel>{t('Password')}</FormLabel>
-                  <FormControl>
-                    <PasswordInput
-                      placeholder={t('Enter password')}
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                  <Link
-                    to='/forgot-password'
-                    className='text-muted-foreground absolute end-0 -top-0.5 z-10 text-sm font-medium hover:opacity-75'
-                  >
-                    {t('Forgot password?')}
-                  </Link>
-                </FormItem>
-              )}
-            />
-
-            {/* Submit Button */}
-            <Button
-              type='submit'
-              className='mt-2 w-full justify-center gap-2'
-              disabled={isLoading || (requiresLegalConsent && !agreedToLegal)}
-            >
-              {isLoading ? <Loader2 className='animate-spin' /> : <LogIn />}
-              {t('Sign in')}
-            </Button>
-
-            {/* Turnstile */}
-            {isTurnstileEnabled && (
-              <div className='mt-2'>
-                <Turnstile
-                  key={turnstileWidgetKey}
-                  siteKey={turnstileSiteKey}
-                  onVerify={setTurnstileToken}
-                  onExpire={() => setTurnstileToken('')}
+        {hasOIDCLogin && (hasSecondaryLogin || passwordLoginEnabled) ? (
+          <Collapsible className='grid gap-4'>
+            <CollapsibleTrigger
+              render={
+                <Button
+                  type='button'
+                  variant='ghost'
+                  className='text-muted-foreground group justify-center gap-1.5'
                 />
-              </div>
-            )}
-          </div>
+              }
+            >
+              {t('Other sign-in methods')}
+              <ChevronDown
+                className='size-4 transition-transform group-data-[panel-open]:rotate-180'
+                aria-hidden='true'
+              />
+            </CollapsibleTrigger>
+            <CollapsibleContent className='grid gap-4'>
+              {hasSecondaryLogin && alternativeLoginMethods}
+              {passwordSignIn}
+            </CollapsibleContent>
+          </Collapsible>
+        ) : (
+          <>
+            {hasSecondaryLogin && alternativeLoginMethods}
+            {passwordSignIn}
+          </>
         )}
 
         <LegalConsent
