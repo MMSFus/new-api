@@ -6801,6 +6801,23 @@
     "Default theme": "默认主题",
     "Color theme for visitors who have not picked one. Their own choice always takes priority.": "访客未选择配色时使用的主题，访客自己的选择始终优先。",
     "When the system is light": "系统为亮色时",
-    "When the system is dark": "系统为暗色时"
+    "When the system is dark": "系统为暗色时",
+    "Other sign-in methods": "其他登录方式",
+    "Low-cost, unified AI API": "低价统一的 AI API 接口",
+    "One API key for OpenAI, Claude, Gemini and more. Works with the OpenAI format, and you only pay for what you use.": "一个 API 密钥即可调用 OpenAI、Claude、Gemini 等模型，兼容 OpenAI 格式，按实际用量付费。",
+    "Low price": "低价",
+    "Pay as you go. You are only charged for the tokens you actually use.": "按量计费，只为实际使用的 token 付费。",
+    "One unified API": "统一接口",
+    "The same key and base URL work for every model. Switch models by changing one parameter.": "同一个密钥和 Base URL 可调用所有模型，切换模型只需改一个参数。",
+    "Clear usage": "用量清楚",
+    "Every request and its cost shows up in your usage log, so you always know where the balance went.": "每次请求及其费用都记录在使用日志中，余额花在哪里一目了然。",
+    "Why choose us": "为什么选择我们",
+    "Get started in three steps": "三步开始使用",
+    "Sign up and top up your balance.": "注册并充值余额。",
+    "Create an API key": "创建 API 密钥",
+    "Open API Keys in the console and create a key.": "在控制台打开「API 密钥」并创建一个密钥。",
+    "Replace the base URL": "替换 Base URL",
+    "Point your app or SDK at the address below and keep the rest of your code.": "把应用或 SDK 的地址改成下面这个，其余代码不用动。",
+    "Other sign-up methods": "其他注册方式"
   }
 }
