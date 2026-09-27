@@ -38,7 +38,7 @@ afterEach(() => {
   window.localStorage.clear()
 })
 
-function renderMenu(showPreferences?: boolean) {
+function renderMenu(menu: React.ReactNode, options = { sidebar: true }) {
   const queryClient = new QueryClient()
   queryClient.setQueryData(statusQueryOptions.queryKey, {})
   return render(
@@ -47,9 +47,11 @@ function renderMenu(showPreferences?: boolean) {
         <ThemeCustomizationProvider>
           <DirectionProvider>
             <LayoutProvider>
-              <SidebarProvider>
-                <ProfileDropdown showPreferences={showPreferences} />
-              </SidebarProvider>
+              {options.sidebar ? (
+                <SidebarProvider>{menu}</SidebarProvider>
+              ) : (
+                menu
+              )}
             </LayoutProvider>
           </DirectionProvider>
         </ThemeCustomizationProvider>
@@ -60,7 +62,7 @@ function renderMenu(showPreferences?: boolean) {
 
 test('theme settings entry in the profile menu opens the theme drawer', async () => {
   const user = userEvent.setup()
-  renderMenu()
+  renderMenu(<ProfileDropdown showPreferences />)
 
   await user.click(screen.getByRole('button'))
   await user.click(
@@ -74,7 +76,7 @@ test('theme settings entry in the profile menu opens the theme drawer', async ()
 
 test('profile menu offers the language picker next to theme settings', async () => {
   const user = userEvent.setup()
-  renderMenu()
+  renderMenu(<ProfileDropdown showPreferences />)
 
   await user.click(screen.getByRole('button'))
 
@@ -83,9 +85,10 @@ test('profile menu offers the language picker next to theme settings', async () 
   ).toBeVisible()
 })
 
-test('profile menu hides preferences when the header turns them off', async () => {
+// Public headers render the menu outside the sidebar layout.
+test('profile menu renders without a sidebar and hides preferences by default', async () => {
   const user = userEvent.setup()
-  renderMenu(false)
+  renderMenu(<ProfileDropdown />, { sidebar: false })
 
   await user.click(screen.getByRole('button'))
   await screen.findByRole('menuitem', { name: 'Profile' })

@@ -51,9 +51,10 @@ const avatarFallbackClassName = 'font-semibold text-white'
 
 type ProfileDropdownProps = {
   /**
-   * Show the theme settings and language entries. Headers that keep their
-   * own switchers can turn this off.
-   * @default true
+   * Show the theme settings and language entries. The theme drawer needs a
+   * SidebarProvider, so only headers inside the sidebar layout turn this on;
+   * public headers keep their own switchers.
+   * @default false
    */
   showPreferences?: boolean
 }
@@ -63,7 +64,7 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
   const navigate = useNavigate()
   const [open, setOpen] = useDialogState()
   const [appearanceOpen, setAppearanceOpen] = useState(false)
-  const showPreferences = props.showPreferences !== false
+  const showPreferences = props.showPreferences === true
   const user = useAuthStore((state) => state.auth.user)
   const { displayName, roleLabel } = useUserDisplay(user)
   const isSuperAdmin = user?.role === ROLE.SUPER_ADMIN
