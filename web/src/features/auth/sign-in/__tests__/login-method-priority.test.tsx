@@ -99,15 +99,34 @@ it('makes Moments Auth the single recommended identity entry', async () => {
   expect(mocks.handleOIDCLogin).toHaveBeenCalledOnce()
 })
 
-it('labels password authentication as an on-site account option', () => {
+it('keeps on-site sign-in behind other methods when Moments Auth is available', async () => {
+  const user = userEvent.setup()
   render(<UserAuthForm />)
 
+  expect(screen.queryByLabelText('Username or Email')).not.toBeInTheDocument()
+  const toggle = screen.getByRole('button', { name: 'Other sign-in methods' })
+  expect(toggle).toHaveAttribute('aria-expanded', 'false')
+
+  await user.click(toggle)
+
+  expect(toggle).toHaveAttribute('aria-expanded', 'true')
   expect(screen.getByText('On-site account sign-in')).toBeVisible()
   expect(
     screen.getByText(
       'Only use this option if you have already set a username and password for this site.'
     )
   ).toBeVisible()
+  expect(screen.getByLabelText('Username or Email')).toBeVisible()
+  expect(screen.getByLabelText('Password')).toBeVisible()
+})
+
+it('shows on-site sign-in directly when Moments Auth is not configured', () => {
+  mocks.status = { ...mocks.status, oidc_enabled: false }
+  render(<UserAuthForm />)
+
+  expect(
+    screen.queryByRole('button', { name: 'Other sign-in methods' })
+  ).not.toBeInTheDocument()
   expect(screen.getByLabelText('Username or Email')).toBeVisible()
   expect(screen.getByLabelText('Password')).toBeVisible()
 })

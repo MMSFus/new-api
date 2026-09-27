@@ -114,13 +114,36 @@ it('uses only Moments Auth when password registration is disabled', async () => 
   expect(mocks.handleOIDCLogin).toHaveBeenCalledOnce()
 })
 
-it('preserves password registration when it is enabled', () => {
+it('keeps password registration behind other methods when Moments Auth is available', async () => {
+  const user = userEvent.setup()
   mocks.status = {
     ...mocks.status,
     password_register_enabled: true,
   }
   render(<SignUpForm />)
 
+  expect(screen.queryByLabelText('Username')).not.toBeInTheDocument()
+  const toggle = screen.getByRole('button', { name: 'Other sign-up methods' })
+  expect(toggle).toHaveAttribute('aria-expanded', 'false')
+
+  await user.click(toggle)
+
+  expect(toggle).toHaveAttribute('aria-expanded', 'true')
+  expect(screen.getByLabelText('Username')).toBeVisible()
+  expect(screen.getByRole('button', { name: 'Create account' })).toBeEnabled()
+})
+
+it('shows password registration directly when Moments Auth is not configured', () => {
+  mocks.status = {
+    ...mocks.status,
+    password_register_enabled: true,
+    oidc_enabled: false,
+  }
+  render(<SignUpForm />)
+
+  expect(
+    screen.queryByRole('button', { name: 'Other sign-up methods' })
+  ).not.toBeInTheDocument()
   expect(screen.getByLabelText('Username')).toBeVisible()
   expect(screen.getByLabelText('Password')).toBeVisible()
   expect(screen.getByLabelText('Confirm password')).toBeVisible()

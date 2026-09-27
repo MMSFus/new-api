@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { Loader2 } from 'lucide-react'
+import { ChevronDown, Loader2 } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
@@ -29,6 +29,11 @@ import { PasswordInput } from '@/components/password-input'
 import { Turnstile } from '@/components/turnstile'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
 import {
   Form,
   FormControl,
@@ -129,6 +134,13 @@ export function SignUpForm({
   )
   const hasExternalRegistration =
     hasOIDCRegistration || hasOtherOAuthRegistration
+  // With Moments Auth available, the other ways to register fold away so the
+  // recommended entry stands alone; consent then sits above it.
+  const collapseOtherMethods =
+    hasOIDCRegistration &&
+    (passwordRegisterEnabled || hasOtherOAuthRegistration)
+  const showConsentBeforeEntry =
+    !passwordRegisterEnabled || collapseOtherMethods
   const turnstileReady = !isTurnstileEnabled || Boolean(turnstileToken)
 
   const wechatQrCodeUrl = useMemo(() => {
@@ -305,6 +317,159 @@ export function SignUpForm({
     )
   }
 
+  const otherRegistrationMethods = (
+    <>
+      {passwordRegisterEnabled && (
+        <>
+          {/* Username Field */}
+          <FormField
+            control={form.control}
+            name='username'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('Username')}</FormLabel>
+                <FormControl>
+                  <Input placeholder={t('Enter your username')} {...field} />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          {/* Password Field */}
+          <FormField
+            control={form.control}
+            name='password'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('Password')}</FormLabel>
+                <FormControl>
+                  <PasswordInput
+                    placeholder={t('Enter password (8–128 characters)')}
+                    {...field}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          {/* Confirm Password Field */}
+          <FormField
+            control={form.control}
+            name='confirmPassword'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('Confirm password')}</FormLabel>
+                <FormControl>
+                  <PasswordInput
+                    placeholder={t('Confirm password')}
+                    {...field}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          {/* Email Verification Section */}
+          {emailVerificationRequired && (
+            <>
+              <FormField
+                control={form.control}
+                name='email'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>
+                      {t('Email (required for verification)')}
+                    </FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder={t('name@example.com')}
+                        type='email'
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <div className='flex items-end gap-2'>
+                <div className='flex-1'>
+                  <Input
+                    placeholder={t('Verification code')}
+                    value={verificationCode}
+                    onChange={(event) =>
+                      setVerificationCode(event.target.value)
+                    }
+                  />
+                </div>
+                <Button
+                  variant='outline'
+                  type='button'
+                  disabled={
+                    isLoading ||
+                    isSendingCode ||
+                    isActive ||
+                    !emailValue ||
+                    !turnstileReady
+                  }
+                  onClick={handleSendVerificationCode}
+                >
+                  {verificationCodeAction}
+                </Button>
+              </div>
+            </>
+          )}
+
+          {isTurnstileEnabled && (
+            <div className='mt-2'>
+              <Turnstile
+                key={turnstileWidgetKey}
+                siteKey={turnstileSiteKey}
+                onVerify={setTurnstileToken}
+              />
+            </div>
+          )}
+
+          {!showConsentBeforeEntry && (
+            <LegalConsent
+              status={status}
+              checked={agreedToLegal}
+              onCheckedChange={setAgreedToLegal}
+              className='mt-1'
+            />
+          )}
+
+          <Button
+            type='submit'
+            className='mt-2 w-full justify-center gap-2'
+            disabled={
+              isLoading ||
+              (requiresLegalConsent && !agreedToLegal) ||
+              !turnstileReady
+            }
+          >
+            {isLoading ? <Loader2 className='h-4 w-4 animate-spin' /> : null}
+            {t('Create account')}
+          </Button>
+        </>
+      )}
+
+      {hasOtherOAuthRegistration && (
+        <OAuthProviders
+          status={status}
+          excludedProviders={['oidc']}
+          disabled={isLoading || (requiresLegalConsent && !agreedToLegal)}
+          onWeChatLogin={hasWeChatLogin ? handleOpenWeChatDialog : undefined}
+          isWeChatLoading={isWeChatSubmitting}
+          className='pt-2'
+        />
+      )}
+    </>
+  )
+
   return (
     <Form {...form}>
       <form
@@ -321,7 +486,7 @@ export function SignUpForm({
           </p>
         )}
 
-        {!passwordRegisterEnabled && (
+        {showConsentBeforeEntry && (
           <LegalConsent
             status={status}
             checked={agreedToLegal}
@@ -340,151 +505,29 @@ export function SignUpForm({
           />
         )}
 
-        {passwordRegisterEnabled && (
-          <>
-            {/* Username Field */}
-            <FormField
-              control={form.control}
-              name='username'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Username')}</FormLabel>
-                  <FormControl>
-                    <Input placeholder={t('Enter your username')} {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            {/* Password Field */}
-            <FormField
-              control={form.control}
-              name='password'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Password')}</FormLabel>
-                  <FormControl>
-                    <PasswordInput
-                      placeholder={t('Enter password (8–128 characters)')}
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            {/* Confirm Password Field */}
-            <FormField
-              control={form.control}
-              name='confirmPassword'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Confirm password')}</FormLabel>
-                  <FormControl>
-                    <PasswordInput
-                      placeholder={t('Confirm password')}
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            {/* Email Verification Section */}
-            {emailVerificationRequired && (
-              <>
-                <FormField
-                  control={form.control}
-                  name='email'
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>
-                        {t('Email (required for verification)')}
-                      </FormLabel>
-                      <FormControl>
-                        <Input
-                          placeholder={t('name@example.com')}
-                          type='email'
-                          {...field}
-                        />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
+        {collapseOtherMethods ? (
+          <Collapsible className='grid gap-4'>
+            <CollapsibleTrigger
+              render={
+                <Button
+                  type='button'
+                  variant='ghost'
+                  className='text-muted-foreground group justify-center gap-1.5'
                 />
-
-                <div className='flex items-end gap-2'>
-                  <div className='flex-1'>
-                    <Input
-                      placeholder={t('Verification code')}
-                      value={verificationCode}
-                      onChange={(event) =>
-                        setVerificationCode(event.target.value)
-                      }
-                    />
-                  </div>
-                  <Button
-                    variant='outline'
-                    type='button'
-                    disabled={
-                      isLoading ||
-                      isSendingCode ||
-                      isActive ||
-                      !emailValue ||
-                      !turnstileReady
-                    }
-                    onClick={handleSendVerificationCode}
-                  >
-                    {verificationCodeAction}
-                  </Button>
-                </div>
-              </>
-            )}
-
-            {isTurnstileEnabled && (
-              <div className='mt-2'>
-                <Turnstile
-                  key={turnstileWidgetKey}
-                  siteKey={turnstileSiteKey}
-                  onVerify={setTurnstileToken}
-                />
-              </div>
-            )}
-
-            <LegalConsent
-              status={status}
-              checked={agreedToLegal}
-              onCheckedChange={setAgreedToLegal}
-              className='mt-1'
-            />
-
-            <Button
-              type='submit'
-              className='mt-2 w-full justify-center gap-2'
-              disabled={
-                isLoading ||
-                (requiresLegalConsent && !agreedToLegal) ||
-                !turnstileReady
               }
             >
-              {isLoading ? <Loader2 className='h-4 w-4 animate-spin' /> : null}
-              {t('Create account')}
-            </Button>
-          </>
-        )}
-
-        {hasOtherOAuthRegistration && (
-          <OAuthProviders
-            status={status}
-            excludedProviders={['oidc']}
-            disabled={isLoading || (requiresLegalConsent && !agreedToLegal)}
-            onWeChatLogin={hasWeChatLogin ? handleOpenWeChatDialog : undefined}
-            isWeChatLoading={isWeChatSubmitting}
-            className='pt-2'
-          />
+              {t('Other sign-up methods')}
+              <ChevronDown
+                className='size-4 transition-transform group-data-[panel-open]:rotate-180'
+                aria-hidden='true'
+              />
+            </CollapsibleTrigger>
+            <CollapsibleContent className='grid gap-4'>
+              {otherRegistrationMethods}
+            </CollapsibleContent>
+          </Collapsible>
+        ) : (
+          otherRegistrationMethods
         )}
       </form>
 
