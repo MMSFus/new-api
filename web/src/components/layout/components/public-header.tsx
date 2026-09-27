@@ -97,7 +97,13 @@ export function PublicHeader(props: PublicHeaderProps) {
   const user = auth.user
   const isAuthenticated = !!user
   const displaySiteName = customSiteName || systemName
-  const links = dynamicLinks.length > 0 ? dynamicLinks : navLinks
+  // Pages that need sign-in (e.g. the model square) stay out of the menu
+  // until the visitor signs in, instead of luring them into a sign-in prompt.
+  const links = (dynamicLinks.length > 0 ? dynamicLinks : navLinks).filter(
+    (link) => isAuthenticated || !link.requiresAuth
+  )
+  // Signed-in visitors get language and theme from the avatar menu.
+  const showStandaloneSwitchers = !isAuthenticated
 
   let logoContent: ReactNode = (
     <HeaderLogo
@@ -119,7 +125,7 @@ export function PublicHeader(props: PublicHeaderProps) {
       {t('Sign in')}
     </Button>
   )
-  if (isAuthenticated) authContent = <ProfileDropdown />
+  if (isAuthenticated) authContent = <ProfileDropdown showQuickPreferences />
   if (loading) authContent = <Skeleton className='h-8 w-20 rounded-lg' />
 
   useEffect(() => {
@@ -281,14 +287,16 @@ export function PublicHeader(props: PublicHeaderProps) {
                 )
               })}
 
-              {(showLanguageSwitcher ||
-                showThemeSwitch ||
+              {((showStandaloneSwitchers &&
+                (showLanguageSwitcher || showThemeSwitch)) ||
                 showNotifications) && (
                 <div className='bg-border/40 mx-2 h-4 w-px' />
               )}
 
-              {showLanguageSwitcher && <LanguageSwitcher />}
-              {showThemeSwitch && <ThemeSwitch />}
+              {showStandaloneSwitchers && showLanguageSwitcher && (
+                <LanguageSwitcher />
+              )}
+              {showStandaloneSwitchers && showThemeSwitch && <ThemeSwitch />}
               {showNotifications && (
                 <NotificationPopover
                   open={notifications.popoverOpen}
@@ -312,9 +320,9 @@ export function PublicHeader(props: PublicHeaderProps) {
 
             {/* Mobile: compact actions + hamburger */}
             <div className='flex shrink-0 items-center gap-2 lg:hidden'>
-              {showThemeSwitch && <ThemeSwitch />}
+              {showStandaloneSwitchers && showThemeSwitch && <ThemeSwitch />}
               {showAuthButtons && !loading && isAuthenticated && (
-                <ProfileDropdown />
+                <ProfileDropdown showQuickPreferences />
               )}
               <Button
                 type='button'

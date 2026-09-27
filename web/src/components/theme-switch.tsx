@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Check, Moon, Sun } from 'lucide-react'
+import { Check, Moon, SunMoon, Sun } from 'lucide-react'
 import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -25,6 +25,9 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { useTheme } from '@/context/theme-provider'
@@ -75,5 +78,39 @@ export function ThemeSwitch() {
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+  )
+}
+
+/** Light / dark / system picker nested inside another dropdown menu. */
+export function ThemeSubmenu() {
+  const { t } = useTranslation()
+  const { theme, setTheme } = useTheme()
+  const modes = [
+    { value: 'light', label: t('Light') },
+    { value: 'dark', label: t('Dark') },
+    { value: 'system', label: t('System') },
+  ] as const
+
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger>
+        <SunMoon className='size-4' aria-hidden='true' />
+        {t('Toggle theme')}
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent>
+        {modes.map((mode) => (
+          <DropdownMenuItem
+            key={mode.value}
+            onClick={() => setTheme(mode.value)}
+          >
+            {mode.label}
+            <Check
+              size={14}
+              className={cn('ms-auto', theme !== mode.value && 'hidden')}
+            />
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
   )
 }
