@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { Radio as RadioPrimitive } from '@base-ui/react/radio'
 import { RadioGroup as Radio } from '@base-ui/react/radio-group'
-import { CircleCheck, Palette, RotateCcw } from 'lucide-react'
+import { ChevronDown, CircleCheck, Palette, RotateCcw } from 'lucide-react'
 import type { SVGProps } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -40,6 +40,11 @@ import {
 } from '@/components/drawer-layout'
 import { Button } from '@/components/ui/button'
 import {
+  Collapsible as CollapsibleRoot,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
+import {
   Sheet,
   SheetContent,
   SheetDescription,
@@ -54,7 +59,7 @@ import { useThemeCustomization } from '@/context/theme-customization-provider'
 import { useTheme } from '@/context/theme-provider'
 import {
   type ContentLayout,
-  THEME_PRESETS,
+  PICKER_THEME_PRESETS,
   type ThemeFont,
   type ThemePreset,
   type ThemeRadius,
@@ -66,7 +71,18 @@ import { useSidebar } from './ui/sidebar'
 
 const Item = RadioPrimitive.Root
 
-export function ConfigDrawer() {
+type ConfigDrawerProps = {
+  /** Controlled open state; omit to let the drawer manage itself. */
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
+  /**
+   * Render the palette icon button that opens the drawer.
+   * @default true
+   */
+  showTrigger?: boolean
+}
+
+export function ConfigDrawer(props: ConfigDrawerProps) {
   const { t } = useTranslation()
   const { setOpen } = useSidebar()
   const { resetDir } = useDirection()
@@ -83,20 +99,22 @@ export function ConfigDrawer() {
   }
 
   return (
-    <Sheet>
-      <SheetTrigger
-        render={
-          <Button
-            size='icon'
-            variant='ghost'
-            aria-label={t('Open theme settings')}
-            aria-describedby='config-drawer-description'
-            className='max-md:hidden'
-          />
-        }
-      >
-        <Palette className='size-[1.2rem]' aria-hidden='true' />
-      </SheetTrigger>
+    <Sheet open={props.open} onOpenChange={props.onOpenChange}>
+      {props.showTrigger !== false && (
+        <SheetTrigger
+          render={
+            <Button
+              size='icon'
+              variant='ghost'
+              aria-label={t('Open theme settings')}
+              aria-describedby='config-drawer-description'
+              className='max-md:hidden'
+            />
+          }
+        >
+          <Palette className='size-[1.2rem]' aria-hidden='true' />
+        </SheetTrigger>
+      )}
       <SheetContent className={sideDrawerContentClassName('sm:max-w-md')}>
         <SheetHeader className={sideDrawerHeaderClassName()}>
           <SheetTitle>{t('Theme Settings')}</SheetTitle>
@@ -107,13 +125,7 @@ export function ConfigDrawer() {
         <div className={sideDrawerFormClassName()}>
           <ThemeConfig />
           <PresetConfig />
-          <FontConfig />
-          <RadiusConfig />
-          <ScaleConfig />
-          <SidebarConfig />
-          <LayoutConfig />
-          <ContentLayoutConfig />
-          <DirConfig />
+          <AdvancedConfig />
         </div>
         <SheetFooter className={sideDrawerFooterClassName('grid-cols-1')}>
           <Button
@@ -256,15 +268,15 @@ function PresetConfig() {
       <Radio
         value={customization.preset}
         onValueChange={(v) => setPreset(v as ThemePreset)}
-        className='grid w-full grid-cols-4 gap-3'
+        className='grid w-full grid-cols-3 gap-3'
         aria-label={t('Select color preset')}
       >
-        {THEME_PRESETS.map((preset) => (
+        {PICKER_THEME_PRESETS.map((preset) => (
           <Item
             key={preset.value}
             value={preset.value}
             className='group flex flex-col items-stretch outline-none'
-            aria-label={t(`preset.${preset.value}`)}
+            aria-label={t(presetLabelKey(preset.value))}
           >
             <div
               className={cn(
@@ -278,10 +290,7 @@ function PresetConfig() {
                 aria-hidden='true'
                 className='absolute inset-0 rounded-md'
                 style={{
-                  background:
-                    preset.value === 'default'
-                      ? 'linear-gradient(135deg, oklch(0.68 0.2 25) 0%, oklch(0.8 0.17 85) 25%, oklch(0.72 0.18 155) 50%, oklch(0.66 0.19 245) 75%, oklch(0.68 0.2 315) 100%)'
-                      : `linear-gradient(135deg, ${preset.swatches[0]} 0%, ${preset.swatches[1] ?? preset.swatches[0]} 100%)`,
+                  background: `linear-gradient(135deg, ${preset.swatches[0]} 50%, ${preset.swatches[1]} 50%)`,
                 }}
               />
               <CircleCheck
@@ -293,12 +302,52 @@ function PresetConfig() {
               />
             </div>
             <div className='mt-1.5 truncate text-center text-xs'>
-              {t(`preset.${preset.value}`)}
+              {t(presetLabelKey(preset.value))}
             </div>
           </Item>
         ))}
       </Radio>
     </div>
+  )
+}
+
+// The default preset is the graphite palette on :root.
+function presetLabelKey(preset: ThemePreset): string {
+  return `preset.${preset === 'default' ? 'graphite' : preset}`
+}
+
+/**
+ * Everything beyond mode and color theme. Folded by default so the drawer
+ * opens on the two choices most people make.
+ */
+function AdvancedConfig() {
+  const { t } = useTranslation()
+  return (
+    <CollapsibleRoot className='flex flex-col gap-6'>
+      <CollapsibleTrigger
+        render={
+          <Button
+            variant='ghost'
+            className='text-muted-foreground group justify-between px-0 hover:bg-transparent'
+          />
+        }
+      >
+        {t('Advanced options')}
+        <ChevronDown
+          className='size-4 transition-transform group-data-[panel-open]:rotate-180'
+          aria-hidden='true'
+        />
+      </CollapsibleTrigger>
+      <CollapsibleContent className='flex flex-col gap-6'>
+        <FontConfig />
+        <RadiusConfig />
+        <ScaleConfig />
+        <SidebarConfig />
+        <LayoutConfig />
+        <ContentLayoutConfig />
+        <DirConfig />
+      </CollapsibleContent>
+    </CollapsibleRoot>
   )
 }
 
