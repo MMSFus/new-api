@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"slices"
 	"strings"
 	"time"
 
@@ -21,7 +22,8 @@ import (
 //   - 钱包增减一律直写数据库（不再进入 BatchUpdate 队列），提交后再把总额
 //     增量同步到 Redis 缓存，因此数据库是余额的唯一权威来源；
 //   - 读取时若发现 quota 与桶之和不一致（旧版本节点或遗漏路径直接改了
-//     quota），差额在下一次写入时自愈：正差计入充值余额，负差按默认顺序扣减。
+//     quota），差额在下一次写入时自愈：正差计入赠送余额（来源未知的钱
+//     绝不计入权限最高的充值余额），负差按默认顺序扣减。
 
 var (
 	// ErrInsufficientGroupBalance 分组可用余额不足（预扣严格校验）。
@@ -157,8 +159,9 @@ func (b *BalanceBuckets) debit(order []string, amount int, overdraft bool) (comm
 	return ledger, remaining
 }
 
-// normalize 修复负数桶以及 quota 与桶之和的偏差：正差计入充值余额，
-// 负差按默认顺序扣减、不足记欠费。
+// normalize 修复负数桶以及 quota 与桶之和的偏差：正差来源未知，计入赠送
+// 余额（充值余额可被分组设为专用，不能凭空获得）；负差按默认顺序扣减、
+// 不足记欠费。
 func (b BalanceBuckets) normalize(quota int) BalanceBuckets {
 	if b.Debt > 0 {
 		b.Gift += b.Debt
@@ -171,7 +174,7 @@ func (b BalanceBuckets) normalize(quota int) BalanceBuckets {
 		}
 	}
 	if diff := quota - b.Total(); diff > 0 {
-		b.credit(common.BalanceBucketTopup, diff)
+		b.credit(common.BalanceBucketGift, diff)
 	} else if diff < 0 {
 		b.debit(common.DefaultBalanceBucketOrder(), -diff, true)
 	}
@@ -419,12 +422,21 @@ func RefundUserBalance(userId int, entries common.BalanceLedger) error {
 	return err
 }
 
-// RefundUserBalanceForGroup 退还来源未知的额度（无扣费账本的旧路径）：
-// 计入该分组扣费顺序中的第一个余额桶，即最先被扣的那一类，避免把赠送类
-// 余额经退款"洗"成充值余额。
-func RefundUserBalanceForGroup(userId int, group string, amount int) error {
+// unknownRefundBucket 返回来源未知的退款应计入的余额桶：分组允许赠送余额时
+// 计入赠送，否则计入该分组扣费顺序中的第一个桶。来源未知的钱不能经退款
+// "洗"成权限更高的充值余额，同时要保证退款在该分组内仍可使用。
+func unknownRefundBucket(group string) string {
 	order := setting.GetGroupBalanceBuckets(group)
-	return CreditUserBalance(userId, order[0], amount)
+	if slices.Contains(order, common.BalanceBucketGift) {
+		return common.BalanceBucketGift
+	}
+	return order[0]
+}
+
+// RefundUserBalanceForGroup 退还来源未知的额度（无扣费账本的旧路径），
+// 计入 unknownRefundBucket 选出的余额桶。
+func RefundUserBalanceForGroup(userId int, group string, amount int) error {
+	return CreditUserBalance(userId, unknownRefundBucket(group), amount)
 }
 
 // RefundUserBalanceForUserGroup 与 RefundUserBalanceForGroup 相同，但在同一事务中
@@ -441,14 +453,13 @@ func RefundUserBalanceForUserGroup(userId int, amount int) error {
 		if err := tx.Where("id = ?", userId).Take(&user).Error; err != nil { // 读整行：group 在 MySQL/PG 上是保留字
 			return 0, err
 		}
-		order := setting.GetGroupBalanceBuckets(user.Group)
-		return mutateUserBalanceTx(tx, userId, creditMutation(order[0], amount, ErrWalletQuotaLimitExceeded))
+		return mutateUserBalanceTx(tx, userId, creditMutation(unknownRefundBucket(user.Group), amount, ErrWalletQuotaLimitExceeded))
 	})
 	return err
 }
 
 // RefundUserBalanceWithLedger 退还 amount：优先按账本尾部退回原桶，账本
-// 不足的部分按分组规则退还。ledger 会被原地消耗。
+// 不足的部分计入 unknownRefundBucket 选出的余额桶。ledger 会被原地消耗。
 func RefundUserBalanceWithLedger(userId int, group string, ledger *common.BalanceLedger, amount int) error {
 	if amount <= 0 {
 		return nil
@@ -459,8 +470,7 @@ func RefundUserBalanceWithLedger(userId int, group string, ledger *common.Balanc
 		entries, remaining = ledger.PopTail(amount)
 	}
 	if remaining > 0 {
-		order := setting.GetGroupBalanceBuckets(group)
-		entries = append(entries, common.BalanceLedgerEntry{Bucket: order[0], Amount: remaining})
+		entries = append(entries, common.BalanceLedgerEntry{Bucket: unknownRefundBucket(group), Amount: remaining})
 	}
 	return RefundUserBalance(userId, entries)
 }
@@ -556,8 +566,9 @@ func AdjustUserBalanceBucket(userID, operatorRole int, bucket, mode string, valu
 
 const balanceBucketsMigrationKey = "BalanceBucketsMigrationV1"
 
-// migrateUserBalanceBuckets 一次性把存量用户的 quota 迁入充值余额（负数迁入欠费）。
-// 迁入充值余额可保证升级后用户在任何分组的可用余额都不减少。
+// migrateUserBalanceBuckets 一次性把存量用户的 quota 迁入赠送余额（负数迁入欠费）。
+// 存量余额来源无法区分，且实际多为注册赠送、邀请奖励等，不能计入权限最高的
+// 充值余额；升级后如有用户确属充值，由管理员按桶调整。
 // 以 options 表标记防重复；SQL 本身也只处理各桶全为 0 的行，重复执行无副作用。
 func migrateUserBalanceBuckets(db *gorm.DB) error {
 	var marker Option
@@ -571,7 +582,7 @@ func migrateUserBalanceBuckets(db *gorm.DB) error {
 	return db.Transaction(func(tx *gorm.DB) error {
 		emptyBuckets := "quota_topup = 0 AND quota_aff_rebate = 0 AND quota_invite_bonus = 0 AND quota_gift = 0 AND quota_debt = 0"
 		positive := tx.Model(&User{}).Unscoped().Where("quota > 0 AND "+emptyBuckets).
-			Update("quota_topup", gorm.Expr("quota"))
+			Update("quota_gift", gorm.Expr("quota"))
 		if positive.Error != nil {
 			return positive.Error
 		}
@@ -580,7 +591,7 @@ func migrateUserBalanceBuckets(db *gorm.DB) error {
 		if negative.Error != nil {
 			return negative.Error
 		}
-		common.SysLog(fmt.Sprintf("balance buckets migration: %d users -> topup, %d users -> debt", positive.RowsAffected, negative.RowsAffected))
+		common.SysLog(fmt.Sprintf("balance buckets migration: %d users -> gift, %d users -> debt", positive.RowsAffected, negative.RowsAffected))
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return tx.Create(&Option{Key: balanceBucketsMigrationKey, Value: "done"}).Error
 		}
