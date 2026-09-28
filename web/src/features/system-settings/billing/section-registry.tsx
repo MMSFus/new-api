@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { parseCurrencyDisplayType } from '@/lib/currency'
 
+import { BalanceBucketsSettingsSection } from '../general/balance-buckets-settings-section'
 import { CheckinSettingsSection } from '../general/checkin-settings-section'
 import { PricingSection } from '../general/pricing-section'
 import { QuotaSettingsSection } from '../general/quota-settings-section'
@@ -210,6 +211,15 @@ const BILLING_SECTIONS = [
           minQuota: settings['checkin_setting.min_quota'],
           maxQuota: settings['checkin_setting.max_quota'],
         }}
+      />
+    ),
+  },
+  {
+    id: 'balance-buckets',
+    titleKey: 'Group Balance Types',
+    build: (settings: BillingSettings) => (
+      <BalanceBucketsSettingsSection
+        defaultValue={settings.GroupBalanceBuckets ?? '{}'}
       />
     ),
   },

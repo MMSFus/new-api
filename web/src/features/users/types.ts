@@ -50,6 +50,11 @@ export const userSchema = z.object({
   aff_count: z.number().optional(),
   aff_quota: z.number().optional(),
   aff_history_quota: z.number().optional(),
+  quota_topup: z.number().optional(),
+  quota_aff_rebate: z.number().optional(),
+  quota_invite_bonus: z.number().optional(),
+  quota_gift: z.number().optional(),
+  quota_debt: z.number().optional(),
   inviter_id: z.number().optional(),
   linux_do_id: z.string().optional(),
   status: userStatusSchema,
@@ -138,11 +143,20 @@ export type ManageUserAction =
 
 export type QuotaAdjustMode = 'add' | 'subtract' | 'override'
 
+export type BalanceBucketKey = 'topup' | 'aff_rebate' | 'invite_bonus' | 'gift'
+
+/** Per-bucket wallet balance; quota = topup + aff_rebate + invite_bonus + gift + debt */
+export type UserBalanceBuckets = Record<BalanceBucketKey, number> & {
+  debt: number
+}
+
 export interface ManageUserQuotaPayload {
   id: number
   action: 'add_quota'
   mode: QuotaAdjustMode
   value: number
+  /** Adjust a single balance bucket instead of the total balance */
+  bucket?: BalanceBucketKey
 }
 
 // ============================================================================
