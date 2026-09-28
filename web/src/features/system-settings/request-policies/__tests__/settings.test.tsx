@@ -53,6 +53,26 @@ type PolicyBeforeLoad = (context: { params: { section: string } }) => void
 let queryClient: QueryClient
 let settings: RequestPolicySettings
 
+const existingErrorRewriteRule = {
+  name: 'Hide extra usage',
+  enabled: true,
+  response_message: 'Switch client or group',
+  status_codes: '400',
+  error_codes: ['upstream_extra_usage_required'],
+  response_status_code: 403,
+  response_error_code: 'third_party_client_not_supported',
+  skip_retry: true,
+}
+
+async function addErrorRewriteRule(message: string) {
+  await userEvent.click(await screen.findByRole('button', { name: 'Add rule' }))
+  const added = screen
+    .getAllByRole('textbox', { name: 'Customer message' })
+    .at(-1)
+  if (!added) throw new Error('added rule is missing')
+  fireEvent.change(added, { target: { value: message } })
+}
+
 function optionsResponse() {
   return {
     success: true,
@@ -140,6 +160,7 @@ beforeEach(() => {
         param_override_template: { temperature: 0 },
       },
     ]),
+    ErrorRewriteRules: JSON.stringify([existingErrorRewriteRule]),
   }
   vi.spyOn(api, 'patch').mockResolvedValue({
     data: {
@@ -347,6 +368,52 @@ describe('request policy settings', () => {
       })
     ).toHaveValue(3600)
     expect(api.put).not.toHaveBeenCalled()
+  })
+
+  it('saving unchanged error rewrite rules does not write options', async () => {
+    await renderPolicies('/system-settings/request-policies/error-rewrite')
+    expect(
+      await screen.findByRole('textbox', { name: 'Customer message' })
+    ).toHaveValue('Switch client or group')
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Save Changes' })).toBeEnabled()
+    )
+    expect(api.patch).not.toHaveBeenCalled()
+  })
+
+  it('adding an error rewrite rule with a keyword saves all rules as JSON', async () => {
+    await renderPolicies('/system-settings/request-policies/error-rewrite')
+    await addErrorRewriteRule('Try again later')
+    const keywords = screen.getAllByRole('textbox', { name: 'Keywords' })
+    fireEvent.change(keywords[1], { target: { value: 'quota\n\n' } })
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+    await waitFor(() => expect(api.patch).toHaveBeenCalledOnce())
+    const [url, body] = vi.mocked(api.patch).mock.calls[0]
+    expect(url).toBe('/api/option/request_policy')
+    const saved = (body as { options: { ErrorRewriteRules: string } }).options
+    expect(Object.keys(saved)).toEqual(['ErrorRewriteRules'])
+    expect(JSON.parse(saved.ErrorRewriteRules)).toEqual([
+      existingErrorRewriteRule,
+      {
+        name: '',
+        enabled: true,
+        response_message: 'Try again later',
+        keywords: ['quota'],
+      },
+    ])
+  })
+
+  it('an error rewrite rule without conditions shows validation and is not saved', async () => {
+    await renderPolicies('/system-settings/request-policies/error-rewrite')
+    await addErrorRewriteRule('Try again later')
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+    const keywords = screen.getAllByRole('textbox', { name: 'Keywords' })
+    await waitFor(() =>
+      expect(keywords[1]).toHaveAttribute('aria-invalid', 'true')
+    )
+    expect(keywords[0]).toHaveAttribute('aria-invalid', 'false')
+    expect(api.patch).not.toHaveBeenCalled()
   })
 
   it.each([

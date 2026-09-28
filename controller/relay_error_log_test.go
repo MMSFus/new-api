@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -95,5 +97,38 @@ func TestProcessChannelErrorUsesSnapshotWithoutLeakingChannelMetadata(t *testing
 	assert.NotContains(t, userOther, "admin_info")
 	for _, key := range []string{"channel_id", "channel_name", "channel_type"} {
 		assert.NotContains(t, userOther, key)
+	}
+}
+
+func TestRelayRewritesClientErrorWithoutLeakingOriginal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	require.NoError(t, operation_setting.ErrorRewriteRulesFromString(`[{"name":"hide","enabled":true,"channel_ids":[202],"status_codes":"400","error_codes":["invalid_request"],"response_status_code":403,"response_error_code":"client_not_supported","response_message":"custom message"}]`))
+	t.Cleanup(func() { require.NoError(t, operation_setting.ErrorRewriteRulesFromString("[]")) })
+
+	for _, tc := range []struct {
+		format types.RelayFormat
+		path   string
+	}{
+		{types.RelayFormatOpenAI, "/v1/chat/completions"},
+		{types.RelayFormatClaude, "/v1/messages"},
+	} {
+		t.Run(string(tc.format), func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(`{"model":`))
+			ctx.Request.Header.Set("Content-Type", "application/json")
+			common.SetContextKey(ctx, constant.ContextKeyChannelId, 202)
+
+			Relay(ctx, tc.format)
+
+			assert.Equal(t, http.StatusForbidden, recorder.Code)
+			var body struct {
+				Error map[string]any `json:"error"`
+			}
+			require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &body))
+			assert.Equal(t, "client_not_supported", body.Error["type"])
+			assert.True(t, strings.HasPrefix(body.Error["message"].(string), "custom message"))
+			assert.NotContains(t, recorder.Body.String(), "JSON input", "the original error must not reach the client")
+		})
 	}
 }

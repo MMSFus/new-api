@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { createSectionRegistry } from '../utils/section-registry'
 import { ChannelHealthSection } from './channel-health-section'
 import type { RequestPolicySettings } from './defaults'
+import { ErrorRewriteSection } from './error-rewrite-section'
 import { RequestChecksSection } from './request-checks-section'
 import { RoutingPolicySection } from './routing-section'
 
@@ -46,6 +47,15 @@ const POLICY_SECTIONS = [
     titleKey: 'Channel health',
     build: (settings: RequestPolicySettings) => (
       <ChannelHealthSection defaultValues={settings} />
+    ),
+  },
+  {
+    id: 'error-rewrite',
+    titleKey: 'Error responses',
+    build: (settings: RequestPolicySettings) => (
+      <ErrorRewriteSection
+        defaultValues={{ ErrorRewriteRules: settings.ErrorRewriteRules }}
+      />
     ),
   },
 ] as const

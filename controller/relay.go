@@ -90,6 +90,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		if newAPIError != nil {
 			service.RecordRequestPolicyTermination(c, newAPIError)
 			logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(newAPIError.Error())))
+			// Billing, refunds and logs above use the original error; only the
+			// client-facing output is rewritten.
+			if rule := operation_setting.MatchErrorRewriteRule(newAPIError, common.GetContextKeyInt(c, constant.ContextKeyChannelId)); rule != nil {
+				logger.LogInfo(c, fmt.Sprintf("relay error rewritten by rule %q", rule.Name))
+				newAPIError = rule.RewriteClientError(newAPIError)
+			}
 			newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
 			switch relayFormat {
 			case types.RelayFormatOpenAIRealtime:
@@ -205,6 +211,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		relayInfo.LastError = newAPIError
 
 		decision := service.DecideRelayRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry())
+		if rule := operation_setting.MatchErrorRewriteRule(newAPIError, channel.Id); rule != nil && rule.SkipRetry && decision.Action == "retry" {
+			source := rule.Name
+			if source == "" {
+				source = "error_rewrite"
+			}
+			decision = service.PolicyDecision{Action: "stop", Reason: "error_rewrite_rule", Source: source}
+		}
 		service.RecordPolicyFailure(c, channel.Id, newAPIError, decision)
 		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError, relayInfo)
 
