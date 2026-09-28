@@ -223,6 +223,15 @@ func SetApiRouter(router *gin.Engine) {
 			optionRoute.GET("/waffo-pancake/subscription-product-options", controller.ListWaffoPancakeSubscriptionProductOptions)
 		}
 
+		sessionRecorderRoute := apiRouter.Group("/session_recorder")
+		sessionRecorderRoute.Use(middleware.RootAuth())
+		{
+			sessionRecorderRoute.GET("/setting", controller.GetSessionRecorderSetting)
+			sessionRecorderRoute.PUT("/setting", controller.UpdateSessionRecorderSetting)
+			sessionRecorderRoute.GET("/status", controller.GetSessionRecorderStatus)
+			sessionRecorderRoute.POST("/check", controller.CheckSessionRecorder)
+		}
+
 		// Custom OAuth provider management (root only)
 		customOAuthRoute := apiRouter.Group("/custom-oauth-provider")
 		customOAuthRoute.Use(middleware.RootAuth())
