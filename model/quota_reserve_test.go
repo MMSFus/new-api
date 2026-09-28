@@ -113,7 +113,8 @@ func TestRedisBatchReserveNeverFallsBackToStaleDatabaseBalance(t *testing.T) {
 	reserved, err := TryReserveUserQuota(user.Id, 8)
 	require.NoError(t, err)
 	assert.True(t, reserved)
-	assert.Equal(t, 10, getUserQuotaFromDB(t, user.Id), "batch delta is not flushed yet")
+	// 钱包余额分桶后用户预扣直接以数据库为准，缓存同步应用同一增量。
+	assert.Equal(t, 2, getUserQuotaFromDB(t, user.Id), "wallet reserve is DB-authoritative")
 
 	reserved, err = TryReserveUserQuota(user.Id, 3)
 	require.NoError(t, err)
