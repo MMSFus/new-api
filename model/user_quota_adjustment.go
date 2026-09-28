@@ -2,7 +2,6 @@ package model
 
 import (
 	"errors"
-	"fmt"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/shopspring/decimal"
@@ -34,54 +33,44 @@ func AdjustUserQuota(userID, operatorRole int, mode string, value int) (*UserQuo
 		return nil, ErrWalletQuotaLimitExceeded
 	}
 
+	// 管理员调整总额：增加部分计入赠送余额，减少部分按默认顺序扣减（不足记欠费）。
+	// 按桶调整请使用 AdjustUserBalanceBucket。
 	var adjustment UserQuotaAdjustment
-	err := DB.Transaction(func(tx *gorm.DB) error {
+	_, err := runBalanceTransaction(userID, func(tx *gorm.DB) (int, error) {
 		var user User
 		if err := lockForUpdate(tx).First(&user, userID).Error; err != nil {
-			return err
+			return 0, err
 		}
 		if operatorRole != common.RoleRootUser && operatorRole <= user.Role {
-			return ErrUserQuotaPermission
+			return 0, ErrUserQuotaPermission
 		}
-		if user.Quota > common.MaxWalletQuota || user.Quota < -common.MaxWalletQuota {
-			return ErrWalletQuotaLimitExceeded
-		}
-		quota := decimal.NewFromInt(int64(value))
-		switch mode {
-		case "add":
-			quota = decimal.NewFromInt(int64(user.Quota)).Add(quota)
-		case "subtract":
-			quota = decimal.NewFromInt(int64(user.Quota)).Sub(quota)
-		}
-		after, err := common.WalletQuotaFromDecimalStrict(quota)
-		if err != nil {
-			return ErrWalletQuotaLimitExceeded
-		}
-		// An unchanged override is a successful operation, including on MySQL
-		// configurations that count only changed rows in RowsAffected.
-		if after != user.Quota {
-			result := tx.Model(&User{}).Where("id = ?", userID).Update("quota", after)
-			if result.Error != nil {
-				return result.Error
+		return applyUserBalanceMutationTx(tx, &user, func(b *BalanceBuckets) error {
+			before := b.Total()
+			if before > common.MaxWalletQuota || before < -common.MaxWalletQuota {
+				return ErrWalletQuotaLimitExceeded
 			}
-			if result.RowsAffected != 1 {
-				return gorm.ErrRecordNotFound
+			quota := decimal.NewFromInt(int64(value))
+			switch mode {
+			case "add":
+				quota = decimal.NewFromInt(int64(before)).Add(quota)
+			case "subtract":
+				quota = decimal.NewFromInt(int64(before)).Sub(quota)
 			}
-		}
-		adjustment = UserQuotaAdjustment{UserID: user.Id, Username: user.Username, Before: user.Quota, After: after}
-		return nil
+			after, err := common.WalletQuotaFromDecimalStrict(quota)
+			if err != nil {
+				return ErrWalletQuotaLimitExceeded
+			}
+			if after > before {
+				b.credit(common.BalanceBucketGift, after-before)
+			} else if after < before {
+				b.debit(common.DefaultBalanceBucketOrder(), before-after, true)
+			}
+			adjustment = UserQuotaAdjustment{UserID: user.Id, Username: user.Username, Before: before, After: after}
+			return nil
+		})
 	})
 	if err != nil {
 		return nil, err
-	}
-
-	// Apply only the committed difference, preserving outstanding reservations.
-	// Both balances are bounded above, so their difference fits in int64.
-	delta := int64(adjustment.After) - int64(adjustment.Before)
-	if delta != 0 {
-		if err := cacheIncrUserQuota(userID, delta); err != nil {
-			common.SysError(fmt.Sprintf("failed to sync manual quota adjustment for user %d: %s", userID, err))
-		}
 	}
 	return &adjustment, nil
 }

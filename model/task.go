@@ -121,6 +121,10 @@ type TaskPrivateData struct {
 	TokenId        int                 `json:"token_id,omitempty"`        // 令牌 ID，用于令牌额度退款
 	NodeName       string              `json:"node_name,omitempty"`       // 发起任务的节点名，轮询结算阶段据此归属日志而非最后查询节点
 	BillingContext *TaskBillingContext `json:"billing_context,omitempty"` // 计费参数快照（用于轮询阶段重新计算）
+	// WalletBuckets 钱包计费时各余额桶的扣减明细，退款按此退回原余额桶。
+	WalletBuckets common.BalanceLedger `json:"wallet_buckets,omitempty"`
+	// WalletGroup 钱包计费实际使用的分组（auto 令牌为选中的真实分组）。
+	WalletGroup string `json:"wallet_group,omitempty"`
 	// ResponsesBackground records that the openai_responses create request
 	// asked for background:true. Every task is durable and survives client
 	// disconnect regardless; this only echoes the protocol-level request
@@ -241,6 +245,10 @@ type SyncTaskQueryParams struct {
 func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) *Task {
 	properties := Properties{}
 	privateData := TaskPrivateData{}
+	if relayInfo != nil {
+		privateData.WalletBuckets = relayInfo.WalletBalanceLedger.Clone()
+		privateData.WalletGroup = relayInfo.WalletBillingGroup
+	}
 	if relayInfo != nil && relayInfo.ChannelMeta != nil {
 		// A New API channel may rotate between several gateway tokens, so the
 		// task keeps the key that submitted it and polls with the same identity.
@@ -543,6 +551,11 @@ func (Task *Task) Update() error {
 
 func (t *Task) UpdateQuota() error {
 	return DB.Model(t).Update("quota", t.Quota).Error
+}
+
+// UpdateQuotaWithWalletBuckets 同时回写任务额度与钱包扣费明细。
+func (t *Task) UpdateQuotaWithWalletBuckets() error {
+	return DB.Model(t).Updates(map[string]any{"quota": t.Quota, "private_data": t.PrivateData}).Error
 }
 
 // UpdateWithStatus performs a conditional UPDATE guarded by fromStatus (CAS).

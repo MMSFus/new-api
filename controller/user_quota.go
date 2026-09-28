@@ -44,9 +44,29 @@ func manageUserQuota(c *gin.Context, req ManageRequest) {
 		markAuditLogged(c)
 	}()
 
-	adjustment, err := model.AdjustUserQuota(req.Id, c.GetInt("role"), req.Mode, req.Value)
+	var adjustment *model.UserQuotaAdjustment
+	var err error
+	if req.Bucket != "" {
+		action = "user.bucket_adjust"
+		params["bucket"] = req.Bucket
+		var bucketAdjustment *model.UserBalanceBucketAdjustment
+		bucketAdjustment, err = model.AdjustUserBalanceBucket(req.Id, c.GetInt("role"), req.Bucket, req.Mode, req.Value)
+		if err == nil {
+			adjustment = &model.UserQuotaAdjustment{
+				UserID:   bucketAdjustment.UserID,
+				Username: bucketAdjustment.Username,
+				Before:   bucketAdjustment.Before.Get(req.Bucket),
+				After:    bucketAdjustment.After.Get(req.Bucket),
+			}
+		}
+	} else {
+		adjustment, err = model.AdjustUserQuota(req.Id, c.GetInt("role"), req.Mode, req.Value)
+	}
 	if err != nil {
 		switch {
+		case errors.Is(err, model.ErrBalanceBucketInsufficient):
+			params["failure_reason"] = "bucket_insufficient"
+			common.ApiError(c, err)
 		case errors.Is(err, model.ErrInvalidUserQuotaAdjustment):
 			params["failure_reason"] = "invalid_parameters"
 			if (req.Mode == "add" || req.Mode == "subtract") && req.Value <= 0 {

@@ -242,6 +242,20 @@ export interface UserWalletData {
   aff_count: number
   /** User group */
   group: string
+  /** Balance breakdown; quota equals the sum of all buckets */
+  balance_buckets?: BalanceBuckets
+}
+
+/**
+ * Wallet balance buckets. debt is <= 0 and only appears after a settlement
+ * overdraft; the remaining buckets are never negative.
+ */
+export interface BalanceBuckets {
+  topup: number
+  aff_rebate: number
+  invite_bonus: number
+  gift: number
+  debt: number
 }
 
 /**

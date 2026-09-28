@@ -117,10 +117,45 @@ func taskAdjustFunding(task *model.Task, delta int) error {
 	if taskIsSubscription(task) {
 		return model.PostConsumeUserSubscriptionDelta(task.PrivateData.SubscriptionId, int64(delta))
 	}
+	// 钱包：扣费明细先与持久化额度对齐（提交阶段结算可能已退还尾部），
+	// 退还按明细尾部退回原余额桶，补扣按任务分组的可用余额扣减（不足记欠费）。
+	ledger := task.PrivateData.WalletBuckets.Clone()
+	ledger.TrimTo(task.Quota)
+	group := taskWalletGroup(task)
 	if delta > 0 {
-		return model.DecreaseUserQuota(task.UserId, delta, false)
+		debited, err := model.DebitUserBalance(task.UserId, group, delta)
+		if err != nil {
+			return err
+		}
+		ledger.Append(debited)
+	} else if err := model.RefundUserBalanceWithLedger(task.UserId, group, &ledger, -delta); err != nil {
+		return err
 	}
-	return model.IncreaseUserQuota(task.UserId, -delta, false)
+	task.PrivateData.WalletBuckets = ledger
+	return nil
+}
+
+// taskWalletGroup 返回任务钱包计费的真实分组：优先使用提交时记录的分组；
+// 旧任务或 task.Group 为 "auto" 时回退到用户当前分组，避免 "auto" 落到全部余额。
+func taskWalletGroup(task *model.Task) string {
+	if isConcreteBillingGroup(task.PrivateData.WalletGroup) {
+		return task.PrivateData.WalletGroup
+	}
+	if isConcreteBillingGroup(task.Group) {
+		return task.Group
+	}
+	if group, err := model.GetUserGroup(task.UserId, false); err == nil && isConcreteBillingGroup(group) {
+		return group
+	}
+	return ""
+}
+
+// persistTaskQuota 回写任务额度；钱包任务同时回写扣费明细。
+func persistTaskQuota(task *model.Task) error {
+	if taskIsSubscription(task) {
+		return task.UpdateQuota()
+	}
+	return task.UpdateQuotaWithWalletBuckets()
 }
 
 // taskAdjustTokenQuota 调整任务的令牌额度，delta > 0 表示扣费，delta < 0 表示退还。
@@ -296,7 +331,7 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool 
 	// 5. 资金退款完成后再清除持久化标记。
 	// 回写失败必须显式告警，避免漏掉潜在的重复退款风险。
 	task.Quota = 0
-	if err := task.UpdateQuota(); err != nil {
+	if err := persistTaskQuota(task); err != nil {
 		logger.LogError(ctx, fmt.Sprintf("退款成功但清除 task quota 失败 task %s: %s", task.TaskID, err.Error()))
 	}
 	return true
@@ -337,7 +372,7 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 	taskAdjustTokenQuota(ctx, task, quotaDelta)
 
 	task.Quota = actualQuota
-	if err := task.UpdateQuota(); err != nil {
+	if err := persistTaskQuota(task); err != nil {
 		logger.LogError(ctx, fmt.Sprintf("差额结算回写 quota 失败 task %s: %s", task.TaskID, err.Error()))
 	}
 

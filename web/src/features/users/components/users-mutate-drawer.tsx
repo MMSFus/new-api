@@ -92,8 +92,9 @@ import {
   USER_FORM_DEFAULT_VALUES,
   transformFormDataToPayload,
   transformUserToFormDefaults,
+  toUserBalanceBuckets,
 } from '../lib'
-import type { User } from '../types'
+import type { User, UserBalanceBuckets } from '../types'
 import { UserQuotaDialog } from './user-quota-dialog'
 import { useUsers } from './users-provider'
 
@@ -114,6 +115,8 @@ export function UsersMutateDrawer({
   const currentUser = useAuthStore((s) => s.auth.user)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [quotaDialogOpen, setQuotaDialogOpen] = useState(false)
+  const [balanceBuckets, setBalanceBuckets] =
+    useState<UserBalanceBuckets | null>(null)
 
   // Fetch groups
   const { data: groupsData } = useQuery({
@@ -144,6 +147,7 @@ export function UsersMutateDrawer({
         .then((result) => {
           if (result.success && result.data) {
             form.reset(transformUserToFormDefaults(result.data))
+            setBalanceBuckets(toUserBalanceBuckets(result.data))
           } else {
             handleServerError(result, t('Failed to load'))
           }
@@ -210,6 +214,7 @@ export function UsersMutateDrawer({
       const result = requireServerSuccess(await getUser(currentRow.id))
       if (result.success && result.data) {
         form.reset(transformUserToFormDefaults(result.data))
+        setBalanceBuckets(toUserBalanceBuckets(result.data))
       }
       triggerRefresh()
     } catch (error) {
@@ -585,6 +590,7 @@ export function UsersMutateDrawer({
           onOpenChange={setQuotaDialogOpen}
           userId={currentRow.id}
           currentQuota={parseQuotaFromDollars(currentQuotaRaw || 0)}
+          buckets={balanceBuckets}
           onSuccess={refreshUserData}
         />
       )}

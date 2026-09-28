@@ -30,19 +30,31 @@ import { handleServerError } from '@/lib/handle-server-error'
 import { cn } from '@/lib/utils'
 
 import { adjustUserQuota } from '../api'
-import type { QuotaAdjustMode } from '../types'
+import { BALANCE_BUCKET_OPTIONS } from '../lib'
+import type {
+  BalanceBucketKey,
+  QuotaAdjustMode,
+  UserBalanceBuckets,
+} from '../types'
+
+type BucketTarget = 'total' | BalanceBucketKey
+
+const DEFAULT_TARGET: BucketTarget = 'gift'
 
 interface UserQuotaDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   userId: number
   currentQuota: number
+  /** Current balance buckets; enables per-bucket adjustment when present */
+  buckets?: UserBalanceBuckets | null
   onSuccess: () => void
 }
 
 export function UserQuotaDialog(props: UserQuotaDialogProps) {
   const { t } = useTranslation()
   const [mode, setMode] = useState<QuotaAdjustMode>('add')
+  const [target, setTarget] = useState<BucketTarget>(DEFAULT_TARGET)
   const [amount, setAmount] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -50,11 +62,20 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
   const currencyLabel = getCurrencyLabel()
   const tokensOnly = currencyMeta.kind === 'tokens'
 
+  // 增加额度必须指定余额类型（默认赠送余额）；扣减与覆盖可选按默认顺序作用于总额。
+  const targets: BucketTarget[] =
+    mode === 'add'
+      ? BALANCE_BUCKET_OPTIONS.map((o) => o.key)
+      : ['total', ...BALANCE_BUCKET_OPTIONS.map((o) => o.key)]
+
   const amountValue = Number.parseFloat(amount) || 0
   const quotaValue = parseQuotaFromDollars(Math.abs(amountValue))
 
   const getPreviewText = () => {
-    const current = props.currentQuota
+    const current =
+      target === 'total' || !props.buckets
+        ? props.currentQuota
+        : props.buckets[target]
     const val = quotaValue
     switch (mode) {
       case 'add':
@@ -83,11 +104,13 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
         action: 'add_quota',
         mode,
         value: mode === 'override' ? value : Math.abs(value),
+        bucket: target === 'total' ? undefined : target,
       })
       if (result.success) {
         toast.success(t('Quota adjusted successfully'))
         setAmount('')
         setMode('add')
+        setTarget(DEFAULT_TARGET)
         props.onOpenChange(false)
         props.onSuccess()
       } else {
@@ -103,6 +126,7 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
   const handleCancel = () => {
     setAmount('')
     setMode('add')
+    setTarget(DEFAULT_TARGET)
     props.onOpenChange(false)
   }
 
@@ -130,6 +154,74 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
       }
     >
       <div className='space-y-4'>
+        {props.buckets && (
+          <div className='space-y-2'>
+            <Label>{t('Balance Breakdown')}</Label>
+            <div className='grid grid-cols-2 gap-x-4 gap-y-1 rounded-md border px-3 py-2 text-sm'>
+              {BALANCE_BUCKET_OPTIONS.map((option) => (
+                <div key={option.key} className='flex justify-between gap-2'>
+                  <span className='text-muted-foreground'>
+                    {t(option.labelKey)}
+                  </span>
+                  <span className='font-mono tabular-nums'>
+                    {formatQuota(props.buckets?.[option.key] ?? 0)}
+                  </span>
+                </div>
+              ))}
+              {props.buckets.debt < 0 && (
+                <div className='flex justify-between gap-2'>
+                  <span className='text-muted-foreground'>
+                    {t('Outstanding Debt')}
+                  </span>
+                  <span className='text-destructive font-mono tabular-nums'>
+                    {formatQuota(props.buckets.debt)}
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        <div className='space-y-2'>
+          <Label>{t('Balance type')}</Label>
+          <div className='flex flex-wrap gap-1'>
+            {targets.map((key) => (
+              <Button
+                key={key}
+                type='button'
+                variant='outline'
+                size='sm'
+                className={cn(
+                  target === key &&
+                    'bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground'
+                )}
+                onClick={() => {
+                  setTarget(key)
+                  setAmount('')
+                }}
+              >
+                {key === 'total'
+                  ? t(mode === 'subtract' ? 'Default order' : 'Total Balance')
+                  : t(
+                      BALANCE_BUCKET_OPTIONS.find((o) => o.key === key)
+                        ?.labelKey ?? key
+                    )}
+              </Button>
+            ))}
+          </div>
+          {target === 'total' && (
+            <div className='text-muted-foreground text-xs'>
+              {mode === 'subtract'
+                ? t(
+                    'Deducts invite reward, referral cashback, gift, then top-up. Any shortfall becomes debt.'
+                  )
+                : t(
+                    'Overriding the total credits the difference to the gift balance, or deducts it in the default order.'
+                  )}
+            </div>
+          )}
+        </div>
+
         <div className='text-muted-foreground text-sm'>{getPreviewText()}</div>
 
         <div className='space-y-2'>
@@ -147,6 +239,9 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
                 )}
                 onClick={() => {
                   setMode(m)
+                  if (m === 'add' && target === 'total') {
+                    setTarget(DEFAULT_TARGET)
+                  }
                   setAmount('')
                 }}
               >
@@ -165,7 +260,7 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
           <Input
             type='number'
             step={tokensOnly ? 1 : 0.000001}
-            min={mode === 'override' ? undefined : 0}
+            min={mode === 'override' && target === 'total' ? undefined : 0}
             placeholder={placeholder}
             value={amount}
             onChange={(e) => setAmount(e.target.value)}

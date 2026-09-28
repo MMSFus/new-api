@@ -3,13 +3,16 @@ package service
 import (
 	"math"
 	"math/rand"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
@@ -513,6 +516,117 @@ func TestBillingSessionReserveWalletTopUpDecrementsBalance(t *testing.T) {
 	userQuota, err := model.GetUserQuota(userID, false)
 	require.NoError(t, err)
 	assert.Equal(t, 450_000, userQuota)
+}
+
+// seedBucketUser 创建带余额分桶的用户（quota = 各桶之和）。
+func seedBucketUser(t *testing.T, id int, group string, topup, gift int) {
+	t.Helper()
+	user := &model.User{Id: id, Username: "bucket_user", Group: group, Status: common.UserStatusEnabled,
+		Quota: topup + gift, QuotaTopup: topup, QuotaGift: gift}
+	require.NoError(t, model.DB.Create(user).Error)
+}
+
+func loadServiceBuckets(t *testing.T, id int) model.BalanceBuckets {
+	t.Helper()
+	view, err := model.GetUserBalanceBuckets(id)
+	require.NoError(t, err)
+	return view.Buckets
+}
+
+// auto 令牌路由到受限分组时，钱包计费必须按选中的真实分组限制余额桶，
+// 不能因 UsingGroup == "auto" 落到全部余额。
+func TestWalletBillingUsesSelectedGroupForAutoToken(t *testing.T) {
+	require.NoError(t, setting.UpdateGroupBalanceBucketsByJSONString(`{"vip":["topup"]}`))
+	t.Cleanup(func() { require.NoError(t, setting.UpdateGroupBalanceBucketsByJSONString("{}")) })
+
+	tests := []struct {
+		name        string
+		preConsume  int
+		wantErr     bool
+		wantBuckets model.BalanceBuckets
+	}{
+		{name: "gift not usable by vip", preConsume: 50, wantErr: true, wantBuckets: model.BalanceBuckets{Topup: 10, Gift: 1000}},
+		{name: "topup within vip allowance", preConsume: 8, wantBuckets: model.BalanceBuckets{Topup: 2, Gift: 1000}},
+	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			truncate(t)
+			userID := 710 + i
+			seedBucketUser(t, userID, "default", 10, 1000)
+
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			common.SetContextKey(c, constant.ContextKeyAutoGroup, "vip")
+			relayInfo := &relaycommon.RelayInfo{
+				UserId:          userID,
+				IsPlayground:    true,
+				ForcePreConsume: true,
+				UsingGroup:      "auto",
+				TokenGroup:      "auto",
+				UserGroup:       "default",
+				UserSetting:     dto.UserSetting{BillingPreference: "wallet_only"},
+			}
+			assert.Equal(t, "vip", ResolveWalletBillingGroup(c, relayInfo))
+
+			session, apiErr := NewBillingSession(c, relayInfo, tt.preConsume)
+			if tt.wantErr {
+				require.NotNil(t, apiErr)
+				assert.ErrorIs(t, apiErr, model.ErrInsufficientGroupBalance)
+			} else {
+				require.Nil(t, apiErr)
+				assert.Equal(t, "vip", relayInfo.WalletBillingGroup)
+				assert.Equal(t, common.BalanceLedger{{Bucket: "topup", Amount: tt.preConsume}}, relayInfo.WalletBalanceLedger)
+				require.NotNil(t, session)
+			}
+			assert.Equal(t, tt.wantBuckets, loadServiceBuckets(t, userID))
+		})
+	}
+}
+
+// 跨分组重试切换到受限分组：已扣的 gift 退回原桶，改在新分组允许的桶扣减，
+// 不足部分记欠费，绝不动用新分组未授权的余额桶。
+func TestWalletBillingSwitchesGroupOnRetry(t *testing.T) {
+	truncate(t)
+	require.NoError(t, setting.UpdateGroupBalanceBucketsByJSONString(`{"vip":["topup"],"promo":["gift"]}`))
+	t.Cleanup(func() { require.NoError(t, setting.UpdateGroupBalanceBucketsByJSONString("{}")) })
+
+	const userID = 720
+	seedBucketUser(t, userID, "default", 10, 1000)
+	ledger, err := model.ReserveUserBalance(userID, "promo", 40)
+	require.NoError(t, err)
+
+	relayInfo := &relaycommon.RelayInfo{UserId: userID, IsPlayground: true, UsingGroup: "vip"}
+	session := &BillingSession{
+		relayInfo:        relayInfo,
+		funding:          &WalletFunding{userId: userID, group: "promo", consumed: 40, ledger: ledger},
+		preConsumedQuota: 40,
+	}
+
+	require.NoError(t, session.Settle(40))
+	assert.Equal(t, "vip", relayInfo.WalletBillingGroup)
+	assert.Equal(t, common.BalanceLedger{{Bucket: "topup", Amount: 10}, {Bucket: "debt", Amount: 30}}, relayInfo.WalletBalanceLedger)
+	assert.Equal(t, model.BalanceBuckets{Gift: 1000, Debt: -30}, loadServiceBuckets(t, userID))
+	userQuota, err := model.GetUserQuota(userID, false)
+	require.NoError(t, err)
+	assert.Equal(t, 970, userQuota)
+}
+
+func TestTaskWalletGroupSkipsAuto(t *testing.T) {
+	tests := []struct {
+		name        string
+		taskGroup   string
+		walletGroup string
+		want        string
+	}{
+		{name: "recorded wallet group", taskGroup: "auto", walletGroup: "vip", want: "vip"},
+		{name: "concrete task group", taskGroup: "vip", want: "vip"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			task := &model.Task{UserId: 730, Group: tt.taskGroup}
+			task.PrivateData.WalletGroup = tt.walletGroup
+			assert.Equal(t, tt.want, taskWalletGroup(task))
+		})
+	}
 }
 
 func TestTryTieredSettleUsesFinalGroupAfterRetry(t *testing.T) {
