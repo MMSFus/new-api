@@ -51,6 +51,7 @@ await i18n.use(initReactI18next).init({
         'Search...': 'Search...',
         'No group found.': 'No group found.',
         'Select a group': 'Select a group',
+        'Config group': 'Config group',
       },
     },
   },
@@ -65,6 +66,12 @@ const options = [
   },
   { value: 'default', label: 'default', desc: 'User group', ratio: 1 },
   { value: 'vip', label: 'vip', desc: 'Priority group', ratio: 3 },
+  {
+    value: 'cfg:claude-best',
+    label: 'Claude Best',
+    desc: 'vip → default',
+    kind: 'config-group' as const,
+  },
 ]
 
 function Harness(props: { initialValue: string }) {
@@ -220,5 +227,32 @@ describe('API key group combobox Auto effect', () => {
     expect(autoOption.querySelector('[data-auto-group-flow-border]')).toBe(null)
     expect(within(autoOption).getByText('Auto')).toBeInTheDocument()
     setReducedMotion(false)
+  })
+})
+
+describe('API key group combobox config groups', () => {
+  test('tags config group options and the selected config group distinctly', () => {
+    setReducedMotion(false)
+    render(<Harness initialValue='vip' />)
+
+    const trigger = getTrigger()
+    expect(trigger).not.toHaveAttribute('data-group-kind')
+    fireEvent.click(trigger)
+
+    const planOption = getCommandItem('Claude Best')
+    expect(planOption).toHaveAttribute('data-group-kind', 'config-group')
+    expect(within(planOption).getByText('Config group')).toBeInTheDocument()
+    expect(getCommandItem('Priority group')).not.toHaveAttribute(
+      'data-group-kind'
+    )
+
+    fireEvent.click(planOption)
+
+    expect(screen.getByTestId('selected-group')).toHaveTextContent(
+      'cfg:claude-best'
+    )
+    expect(trigger).toHaveAttribute('data-group-kind', 'config-group')
+    expect(within(trigger).getByText('Config group')).toBeInTheDocument()
+    expect(trigger).not.toHaveAttribute('data-auto-group-effect')
   })
 })

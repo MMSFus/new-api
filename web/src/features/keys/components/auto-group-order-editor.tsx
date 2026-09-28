@@ -147,53 +147,10 @@ export function AutoGroupOrderEditor(props: AutoGroupOrderEditorProps) {
       )}
 
       {isInheriting && props.globalOptions.length > 0 && (
-        <ol
-          data-slot='global-auto-order'
+        <AutoGroupOrderPreview
+          options={props.globalOptions}
           aria-label={t('Inherit global Auto order')}
-          className='flex max-h-24 flex-wrap content-start gap-1.5 overflow-y-auto'
-        >
-          {props.globalOptions.map((option, index) => (
-            <li key={option.value} className='flex min-w-0 items-center gap-1'>
-              {index > 0 && (
-                <HugeiconsIcon
-                  icon={ArrowRight01Icon}
-                  strokeWidth={2}
-                  aria-hidden='true'
-                  data-slot='global-auto-order-connector'
-                  className='text-muted-foreground size-3.5 shrink-0'
-                />
-              )}
-              <span
-                data-slot='global-auto-order-chip'
-                title={option.desc}
-                className='bg-muted/30 flex min-w-0 items-center gap-1.5 rounded-md border px-2 py-1'
-              >
-                <span
-                  data-slot='global-auto-order-index'
-                  aria-hidden='true'
-                  className='bg-primary/10 text-primary flex size-4 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold tabular-nums'
-                >
-                  {index + 1}
-                </span>
-                <span
-                  data-slot='global-auto-order-name'
-                  className='max-w-40 truncate text-xs font-medium'
-                >
-                  {option.label}
-                </span>
-                {option.desc && (
-                  <span
-                    data-slot='global-auto-order-description'
-                    className='sr-only'
-                  >
-                    {option.desc}
-                  </span>
-                )}
-                <GroupRatioBadge ratio={option.ratio} />
-              </span>
-            </li>
-          ))}
-        </ol>
+        />
       )}
 
       {!isInheriting && props.value.length === 0 && (
@@ -229,5 +186,64 @@ export function AutoGroupOrderEditor(props: AutoGroupOrderEditorProps) {
         </Reorder.Group>
       )}
     </div>
+  )
+}
+
+type AutoGroupOrderPreviewProps = {
+  options: ApiKeyGroupOption[]
+  'aria-label': string
+  'data-slot'?: string
+}
+
+/** Read-only, numbered chip list of groups in routing order. */
+export function AutoGroupOrderPreview(props: AutoGroupOrderPreviewProps) {
+  return (
+    <ol
+      data-slot={props['data-slot'] ?? 'global-auto-order'}
+      aria-label={props['aria-label']}
+      className='flex max-h-24 flex-wrap content-start gap-1.5 overflow-y-auto'
+    >
+      {props.options.map((option, index) => (
+        <li key={option.value} className='flex min-w-0 items-center gap-1'>
+          {index > 0 && (
+            <HugeiconsIcon
+              icon={ArrowRight01Icon}
+              strokeWidth={2}
+              aria-hidden='true'
+              data-slot='global-auto-order-connector'
+              className='text-muted-foreground size-3.5 shrink-0'
+            />
+          )}
+          <span
+            data-slot='global-auto-order-chip'
+            title={option.desc}
+            className='bg-muted/30 flex min-w-0 items-center gap-1.5 rounded-md border px-2 py-1'
+          >
+            <span
+              data-slot='global-auto-order-index'
+              aria-hidden='true'
+              className='bg-primary/10 text-primary flex size-4 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold tabular-nums'
+            >
+              {index + 1}
+            </span>
+            <span
+              data-slot='global-auto-order-name'
+              className='max-w-40 truncate text-xs font-medium'
+            >
+              {option.label}
+            </span>
+            {option.desc && (
+              <span
+                data-slot='global-auto-order-description'
+                className='sr-only'
+              >
+                {option.desc}
+              </span>
+            )}
+            <GroupRatioBadge ratio={option.ratio} />
+          </span>
+        </li>
+      ))}
+    </ol>
   )
 }

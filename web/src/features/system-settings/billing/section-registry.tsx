@@ -25,6 +25,7 @@ import { PaymentSettingsSection } from '../integrations/payment-settings-section
 import { RatioSettingsCard } from '../models/ratio-settings-card'
 import type { BillingSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
+import { ConfigGroupsSection } from './config-groups-section'
 
 const getModelDefaults = (settings: BillingSettings) => ({
   ModelPrice: settings.ModelPrice,
@@ -125,6 +126,17 @@ const BILLING_SECTIONS = [
         groupDefaults={getGroupDefaults(settings)}
         toolPricesDefault={settings['tool_price_setting.prices']}
         visibleTabs={['groups']}
+      />
+    ),
+  },
+  {
+    id: 'config-groups',
+    titleKey: 'Config Groups',
+    build: (settings: BillingSettings) => (
+      <ConfigGroupsSection
+        defaultValue={settings.ConfigGroups}
+        groupRatio={settings.GroupRatio}
+        userUsableGroups={settings.UserUsableGroups}
       />
     ),
   },

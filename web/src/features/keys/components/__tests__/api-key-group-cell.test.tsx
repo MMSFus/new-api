@@ -33,6 +33,7 @@ await i18n.use(initReactI18next).init({
       translation: {
         Auto: 'Auto',
         'Cross-group': 'Cross-group',
+        'Config group': 'Config group',
         Ratio: 'Ratio',
         'Automatically selects the best available group with circuit breaker mechanism':
           'Automatically selects the best available group with circuit breaker mechanism',
@@ -156,5 +157,18 @@ describe('API key group table cell', () => {
     expect(screen.getByText('vip')).toBeInTheDocument()
     expect(screen.queryByText('Auto')).not.toBeInTheDocument()
     expect(screen.queryByText('自动')).not.toBeInTheDocument()
+  })
+})
+
+describe('API key group table cell for config groups', () => {
+  test('shows the config group tag and plan key instead of the raw reference', () => {
+    const { container } = render(<CellHarness group='cfg:claude-best' />)
+
+    expect(screen.getByText('Config group')).toBeInTheDocument()
+    expect(screen.getByText('claude-best')).toBeInTheDocument()
+    expect(container).not.toHaveTextContent('cfg:claude-best')
+    expect(
+      container.querySelector('[data-api-key-group-cell="config-group"]')
+    ).not.toBeNull()
   })
 })

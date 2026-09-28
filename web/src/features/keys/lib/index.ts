@@ -26,4 +26,7 @@ export {
   getApiKeyFormDefaultValues,
   transformFormDataToPayload,
   transformApiKeyToFormDefaults,
+  CONFIG_GROUP_REF_PREFIX,
+  isConfigGroupRef,
+  usesAutoRouting,
 } from './api-key-form'

@@ -96,9 +96,24 @@ export interface ApiKeyFormData {
   cross_group_retry: boolean
 }
 
+/**
+ * Admin-defined config group visible to the current user. `value` is the
+ * token group reference (`cfg:<key>`); `groups` is already filtered to the
+ * groups the user may use, in routing order.
+ */
+export interface TokenConfigGroup {
+  key: string
+  value: string
+  name: string
+  description: string
+  groups: string[]
+  cross_group_retry: boolean
+}
+
 export interface TokenAutoGroupsConfig {
   groups: string[]
   max_count: number
+  config_groups?: TokenConfigGroup[]
 }
 
 // ============================================================================

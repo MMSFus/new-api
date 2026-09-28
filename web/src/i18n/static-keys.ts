@@ -819,4 +819,16 @@ export const STATIC_I18N_KEYS = [
   'Vendor name and icon must not exceed 128 characters.',
   'Shown',
   'Not shown',
+  // Config group validation messages (system-settings/billing/config-groups.ts).
+  'Key is required',
+  'Key "auto" is reserved',
+  'Key must not contain spaces, colons or commas',
+  'Key must be at most {{max}} characters',
+  'Key conflicts with an existing group',
+  'Key is duplicated',
+  'Name must be at most {{max}} characters',
+  'Description must be at most {{max}} characters',
+  'Select at least one group',
+  'Select at most {{max}} groups',
+  'Group {{group}} does not exist',
 ] as const
