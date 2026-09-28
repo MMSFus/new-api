@@ -438,7 +438,7 @@ func RefundUserBalanceForUserGroup(userId int, amount int) error {
 	}
 	_, err := runBalanceTransaction(userId, func(tx *gorm.DB) (int, error) {
 		var user User
-		if err := tx.Select("group").Where("id = ?", userId).Take(&user).Error; err != nil {
+		if err := tx.Where("id = ?", userId).Take(&user).Error; err != nil { // 读整行：group 在 MySQL/PG 上是保留字
 			return 0, err
 		}
 		order := setting.GetGroupBalanceBuckets(user.Group)
