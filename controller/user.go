@@ -634,6 +634,11 @@ func GetUserModels(c *gin.Context) {
 		if _, ok := groups[group]; ok {
 			groupsToQuery = service.GetUserAutoGroup(user.Group)
 		}
+	case setting.IsConfigGroupRef(group):
+		key, _ := setting.ParseConfigGroupRef(group)
+		if resolved, err := service.ResolveUserConfigGroup(user.Group, key); err == nil {
+			groupsToQuery = resolved.Groups
+		}
 	default:
 		if _, ok := groups[group]; ok {
 			groupsToQuery = []string{group}

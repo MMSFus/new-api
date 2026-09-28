@@ -29,6 +29,7 @@ import {
 import { useMediaQuery } from '@/hooks'
 import { cn } from '@/lib/utils'
 
+import { CONFIG_GROUP_REF_PREFIX, isConfigGroupRef } from '../lib'
 import { GroupRatioBadge, type GroupRatio } from './auto-group-visuals'
 
 type ApiKeyGroupCellProps = {
@@ -43,6 +44,34 @@ export function ApiKeyGroupCell(props: ApiKeyGroupCellProps) {
   const isMobile = useMediaQuery('(max-width: 640px)')
 
   const group = props.group?.trim() || ''
+  if (isConfigGroupRef(group)) {
+    const configGroupKey = group.slice(CONFIG_GROUP_REF_PREFIX.length)
+    return (
+      <TruncatedCell
+        className={isMobile ? 'w-full' : 'max-w-50'}
+        tabIndex={0}
+        tooltipContent={t('Config group: {{name}}', { name: configGroupKey })}
+        tooltipClassName='break-all'
+      >
+        <span
+          data-api-key-group-cell='config-group'
+          className={cn(
+            'flex min-w-0 items-center gap-2',
+            isMobile && 'w-full justify-between'
+          )}
+        >
+          <StatusBadge
+            label={t('Config group')}
+            variant='purple'
+            copyable={false}
+            className='shrink-0 px-0'
+          />
+          <span className='truncate text-xs font-medium'>{configGroupKey}</span>
+        </span>
+      </TruncatedCell>
+    )
+  }
+
   if (group !== 'auto') {
     const ratio =
       group && typeof props.ratio === 'number' ? props.ratio : undefined

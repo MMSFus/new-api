@@ -54,6 +54,9 @@ token.db_error: "无效的令牌，数据库查询出错，请联系管理员"
 token.auto_groups_too_many: "每个令牌最多可选择 {{.Max}} 个 Auto 分组"
 token.auto_groups_duplicate: "Auto 分组 {{.Group}} 重复"
 token.auto_groups_invalid: "Auto 分组 {{.Group}} 不可用或无权访问"
+token.config_group_not_found: "配置分组 {{.Group}} 不存在或已被删除，请编辑令牌重新选择分组"
+token.config_group_forbidden: "当前用户分组无权使用配置分组 {{.Group}}"
+token.config_group_no_usable: "配置分组 {{.Group}} 中没有您可用的分组"
 
 # Redemption messages
 redemption.name_length: "兑换码名称长度必须在1-20之间"

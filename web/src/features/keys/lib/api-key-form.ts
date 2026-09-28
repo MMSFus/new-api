@@ -25,6 +25,26 @@ import { DEFAULT_GROUP } from '../constants'
 import type { ApiKey, ApiKeyFormData } from '../types'
 
 // ============================================================================
+// Config groups
+// ============================================================================
+
+/** Token group values with this prefix reference an admin config group. */
+export const CONFIG_GROUP_REF_PREFIX = 'cfg:'
+
+export function isConfigGroupRef(group: string | undefined | null): boolean {
+  return (
+    typeof group === 'string' &&
+    group.length > CONFIG_GROUP_REF_PREFIX.length &&
+    group.startsWith(CONFIG_GROUP_REF_PREFIX)
+  )
+}
+
+/** Auto and config groups both route through the ordered Auto failover. */
+export function usesAutoRouting(group: string | undefined | null): boolean {
+  return group === 'auto' || isConfigGroupRef(group)
+}
+
+// ============================================================================
 // Form Schema
 // ============================================================================
 
@@ -156,7 +176,9 @@ export function transformFormDataToPayload(
       data.group === 'auto' && data.auto_groups_mode === 'custom'
         ? data.auto_groups
         : [],
-    cross_group_retry: data.group === 'auto' ? !!data.cross_group_retry : false,
+    cross_group_retry: usesAutoRouting(data.group)
+      ? !!data.cross_group_retry
+      : false,
   }
 }
 

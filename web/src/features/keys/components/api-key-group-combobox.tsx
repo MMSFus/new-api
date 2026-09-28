@@ -20,6 +20,7 @@ import { Check, ChevronsUpDown } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
 import {
   Command,
@@ -48,6 +49,21 @@ export type ApiKeyGroupOption = {
   label: string
   desc?: string
   ratio?: number | string
+  /** `config-group` marks an admin-defined plan referenced as `cfg:<key>`. */
+  kind?: 'group' | 'config-group'
+}
+
+function ConfigGroupTag() {
+  const { t } = useTranslation()
+  return (
+    <StatusBadge
+      data-config-group-tag='true'
+      label={t('Config group')}
+      variant='purple'
+      copyable={false}
+      className='shrink-0'
+    />
+  )
 }
 
 type ApiKeyGroupComboboxProps = {
@@ -71,6 +87,7 @@ export function ApiKeyGroupCombobox({
   const shouldReduceMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
   const selectedOption = options.find((option) => option.value === value)
   const isAutoSelected = selectedOption?.value === 'auto'
+  const isConfigGroupSelected = selectedOption?.kind === 'config-group'
 
   const filteredOptions = useMemo(() => {
     const search = searchValue.trim().toLowerCase()
@@ -103,6 +120,7 @@ export function ApiKeyGroupCombobox({
             role='combobox'
             aria-expanded={open}
             data-auto-group-effect={isAutoSelected ? 'trigger' : undefined}
+            data-group-kind={isConfigGroupSelected ? 'config-group' : undefined}
             disabled={disabled}
             className={cn(
               'border-input bg-muted/40 hover:bg-muted/55 hover:text-foreground active:bg-background data-popup-open:border-ring data-popup-open:bg-background data-popup-open:ring-ring/20 relative h-auto min-h-14 w-full justify-between gap-2 rounded-lg px-3 py-2 text-start shadow-none transition-[background-color,border-color,box-shadow] duration-150 data-popup-open:ring-[3px] sm:min-h-20 sm:gap-3 sm:px-4 sm:py-3',
@@ -129,6 +147,7 @@ export function ApiKeyGroupCombobox({
               </span>
             )}
           </span>
+          {isConfigGroupSelected && <ConfigGroupTag />}
           <span className='hidden sm:block'>
             <GroupRatioBadge
               ratio={selectedOption?.ratio}
@@ -159,12 +178,16 @@ export function ApiKeyGroupCombobox({
             <CommandGroup>
               {filteredOptions.map((option) => {
                 const isAutoOption = option.value === 'auto'
+                const isConfigGroupOption = option.kind === 'config-group'
 
                 return (
                   <CommandItem
                     key={option.value}
                     value={option.value}
                     data-auto-group-effect={isAutoOption ? 'option' : undefined}
+                    data-group-kind={
+                      isConfigGroupOption ? 'config-group' : undefined
+                    }
                     onSelect={() => handleSelect(option.value)}
                     className={cn(
                       'data-[selected=true]:bg-muted items-start gap-3 rounded-lg px-3 py-3 transition-colors',
@@ -197,6 +220,7 @@ export function ApiKeyGroupCombobox({
                         </span>
                       )}
                     </span>
+                    {isConfigGroupOption && <ConfigGroupTag />}
                     <GroupRatioBadge
                       ratio={option.ratio}
                       isAuto={isAutoOption}

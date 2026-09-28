@@ -95,6 +95,11 @@ func FilterUserTokenAutoGroups(userGroup string, groups []string) []string {
 // The absence of the context value means that the token inherits the complete
 // global Auto list; a present (even empty) value is an explicit token snapshot.
 func GetRequestAutoGroups(c *gin.Context, userGroup string) []string {
+	// Config group tokens carry the admin-defined order, which is not subject
+	// to the per-token MaxTokenAutoGroups limit.
+	if groups, ok := getRequestConfigGroupGroups(c, userGroup); ok {
+		return groups
+	}
 	value, ok := common.GetContextKey(c, constant.ContextKeyTokenAutoGroups)
 	if !ok {
 		return GetUserAutoGroup(userGroup)

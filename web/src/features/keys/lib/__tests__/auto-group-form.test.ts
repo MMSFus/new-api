@@ -23,6 +23,7 @@ import { apiKeySchema, type ApiKey } from '../../types'
 import {
   getApiKeyFormDefaultValues,
   getApiKeyFormSchema,
+  isConfigGroupRef,
   transformApiKeyToFormDefaults,
   transformFormDataToPayload,
 } from '../api-key-form'
@@ -178,5 +179,53 @@ describe('API key Auto group form mapping', () => {
     expect(result.error.issues[0]?.message).toBe(
       'Auto groups must not contain duplicates'
     )
+  })
+})
+
+describe('API key config group form mapping', () => {
+  test('recognises only non-empty cfg: references as config groups', () => {
+    expect(isConfigGroupRef('cfg:claude-best')).toBe(true)
+    expect(isConfigGroupRef('cfg:')).toBe(false)
+    expect(isConfigGroupRef('auto')).toBe(false)
+    expect(isConfigGroupRef('vip')).toBe(false)
+    expect(isConfigGroupRef(undefined)).toBe(false)
+  })
+
+  test('keeps cross-group retry and drops custom Auto groups for a config group', () => {
+    const payload = transformFormDataToPayload({
+      ...getApiKeyFormDefaultValues(false),
+      name: 'plan token',
+      group: 'cfg:claude-best',
+      auto_groups_mode: 'custom',
+      auto_groups: ['vip'],
+      cross_group_retry: true,
+    })
+
+    expect(payload.group).toBe('cfg:claude-best')
+    expect(payload.auto_groups).toEqual([])
+    expect(payload.cross_group_retry).toBe(true)
+  })
+
+  test('clears cross-group retry for an ordinary group', () => {
+    const payload = transformFormDataToPayload({
+      ...getApiKeyFormDefaultValues(false),
+      name: 'plain token',
+      group: 'vip',
+      cross_group_retry: true,
+    })
+
+    expect(payload.cross_group_retry).toBe(false)
+  })
+
+  test('restores a stored config group token for editing', () => {
+    const defaults = transformApiKeyToFormDefaults(
+      { ...baseApiKey, group: 'cfg:claude-best', cross_group_retry: false },
+      ['default', 'vip'],
+      5
+    )
+
+    expect(defaults.group).toBe('cfg:claude-best')
+    expect(defaults.auto_groups_mode).toBe('inherit')
+    expect(defaults.cross_group_retry).toBe(false)
   })
 })

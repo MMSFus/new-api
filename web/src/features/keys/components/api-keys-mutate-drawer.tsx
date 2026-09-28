@@ -83,6 +83,8 @@ import {
   getApiKeyFormDefaultValues,
   transformFormDataToPayload,
   transformApiKeyToFormDefaults,
+  isConfigGroupRef,
+  usesAutoRouting,
 } from '../lib'
 import type { ApiKey } from '../types'
 import {
@@ -90,7 +92,10 @@ import {
   type ApiKeyGroupOption,
 } from './api-key-group-combobox'
 import { useApiKeys } from './api-keys-provider'
-import { AutoGroupOrderEditor } from './auto-group-order-editor'
+import {
+  AutoGroupOrderEditor,
+  AutoGroupOrderPreview,
+} from './auto-group-order-editor'
 
 type ApiKeyMutateDrawerProps = {
   open: boolean
@@ -187,6 +192,22 @@ export function ApiKeysMutateDrawer({
       return option ? [option] : []
     })
   }, [globalAutoGroups, groups])
+  const configGroups = useMemo(
+    () => autoGroupsData?.data?.config_groups ?? [],
+    [autoGroupsData]
+  )
+  const groupOptions = useMemo<ApiKeyGroupOption[]>(
+    () => [
+      ...groups,
+      ...configGroups.map((configGroup) => ({
+        value: configGroup.value,
+        label: configGroup.name || configGroup.key,
+        desc: configGroup.description || configGroup.groups.join(' → '),
+        kind: 'config-group' as const,
+      })),
+    ],
+    [groups, configGroups]
+  )
   const maxAutoGroups =
     Number.isInteger(autoGroupsData?.data?.max_count) &&
     Number(autoGroupsData?.data?.max_count) > 0
@@ -263,23 +284,35 @@ export function ApiKeysMutateDrawer({
   const isFormInitialized = initializedTarget === formTarget
   const selectedGroup = form.watch('group')
 
-  // Correct group after groups load: if the form value is not in available groups, fall back
+  const selectedConfigGroup = isConfigGroupRef(selectedGroup)
+    ? configGroups.find((configGroup) => configGroup.value === selectedGroup)
+    : undefined
+  const selectedConfigGroupOptions = useMemo<ApiKeyGroupOption[]>(() => {
+    if (!selectedConfigGroup) return []
+    const groupsByValue = new Map(groups.map((group) => [group.value, group]))
+    return selectedConfigGroup.groups.map(
+      (group) => groupsByValue.get(group) ?? { value: group, label: group }
+    )
+  }, [selectedConfigGroup, groups])
+
+  // Correct group after groups load: if the form value is not in available
+  // groups or config groups (e.g. the config group was deleted), fall back
   useEffect(() => {
-    if (groups.length === 0) return
+    if (groups.length === 0 || !autoGroupsFetched) return
     const currentGroup = selectedGroup
-    if (currentGroup && !groups.some((g) => g.value === currentGroup)) {
+    if (currentGroup && !groupOptions.some((g) => g.value === currentGroup)) {
       const fallback =
         groups.find((g) => g.value === 'default')?.value ??
         groups[0]?.value ??
         ''
       form.setValue('group', fallback)
-      if (currentGroup === 'auto') {
+      if (usesAutoRouting(currentGroup)) {
         form.setValue('auto_groups', [])
         form.setValue('auto_groups_mode', 'inherit')
         form.setValue('cross_group_retry', false)
       }
     }
-  }, [groups, form, selectedGroup])
+  }, [groups, groupOptions, autoGroupsFetched, form, selectedGroup])
 
   const onSubmit = async (data: ApiKeyFormValues) => {
     setIsSubmitting(true)
@@ -424,7 +457,7 @@ export function ApiKeysMutateDrawer({
                     <FormLabel>{t('Group')}</FormLabel>
                     <FormControl>
                       <ApiKeyGroupCombobox
-                        options={groups}
+                        options={groupOptions}
                         value={field.value}
                         onValueChange={(group) => {
                           field.onChange(group)
@@ -432,6 +465,17 @@ export function ApiKeysMutateDrawer({
                             form.setValue('cross_group_retry', true, {
                               shouldDirty: true,
                             })
+                            return
+                          }
+                          const configGroup = configGroups.find(
+                            (item) => item.value === group
+                          )
+                          if (configGroup) {
+                            form.setValue(
+                              'cross_group_retry',
+                              configGroup.cross_group_retry,
+                              { shouldDirty: true }
+                            )
                             return
                           }
                           form.setValue('cross_group_retry', false, {
@@ -487,7 +531,28 @@ export function ApiKeysMutateDrawer({
                 />
               )}
 
-              {selectedGroup === 'auto' && (
+              {selectedConfigGroup && (
+                <div
+                  data-slot='config-group-order'
+                  className='flex flex-col gap-2'
+                >
+                  <p className='text-sm font-medium'>
+                    {t('Config group order')}
+                  </p>
+                  <p className='text-muted-foreground text-xs'>
+                    {t(
+                      'Requests try these groups in order. The order is managed by the administrator.'
+                    )}
+                  </p>
+                  <AutoGroupOrderPreview
+                    data-slot='config-group-order-list'
+                    options={selectedConfigGroupOptions}
+                    aria-label={t('Config group order')}
+                  />
+                </div>
+              )}
+
+              {usesAutoRouting(selectedGroup) && (
                 <FormField
                   control={form.control}
                   name='cross_group_retry'

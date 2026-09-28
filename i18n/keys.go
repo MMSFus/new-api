@@ -60,6 +60,9 @@ const (
 	MsgTokenAutoGroupsTooMany    = "token.auto_groups_too_many"
 	MsgTokenAutoGroupsDuplicate  = "token.auto_groups_duplicate"
 	MsgTokenAutoGroupsInvalid    = "token.auto_groups_invalid"
+	MsgTokenConfigGroupNotFound  = "token.config_group_not_found"
+	MsgTokenConfigGroupForbidden = "token.config_group_forbidden"
+	MsgTokenConfigGroupNoUsable  = "token.config_group_no_usable"
 )
 
 // Redemption related messages
