@@ -130,6 +130,31 @@ export type PricingData = {
   usable_group: Record<string, { desc: string; ratio: number }>
   supported_endpoint: Record<string, string>
   auto_groups: string[]
+  /** Effective request rate limit per usable group for the current viewer. */
+  group_rate_limits?: Record<string, GroupRateLimit>
+  /** Config groups the current viewer may use. */
+  config_groups?: PricingConfigGroup[]
+  /** Balance types that may pay for each usable group. */
+  group_balance_buckets?: Record<string, string[]>
+}
+
+/** Request limits within a rolling window; a count of 0 means unlimited. */
+export type GroupRateLimit = {
+  total: number
+  success: number
+  /** Window length in minutes. */
+  duration: number
+}
+
+export type PricingConfigGroup = {
+  key: string
+  /** Token group reference, e.g. "cfg:key". */
+  value: string
+  name?: string
+  description?: string
+  /** Member groups in retry order. */
+  groups: string[]
+  cross_group_retry?: boolean
 }
 
 export type TokenUnit = 'M' | 'K'

@@ -77,7 +77,7 @@ import {
   isUnconfiguredTaskUsageModel,
   type DynamicPriceEntry,
 } from '../lib/dynamic-price'
-import { parseTags } from '../lib/filters'
+import { isModelInConfigGroup, parseTags } from '../lib/filters'
 import { getAvailableGroups, isTokenBasedModel } from '../lib/model-helpers'
 import { withPluginPricing } from '../lib/plugin-pricing'
 import { formatFixedPrice, formatGroupPrice } from '../lib/price'
@@ -95,12 +95,15 @@ import {
   pricingDisplayFallbackKey,
 } from '../lib/task-price-display'
 import type {
+  GroupRateLimit,
   ModelCapability,
   PriceType,
+  PricingConfigGroup,
   PricingModel,
   TokenUnit,
 } from '../types'
 import { DynamicPricingBreakdown } from './dynamic-pricing-breakdown'
+import { GroupChain } from './group-chain'
 import { ModelBillingModeBadge } from './model-billing-mode-badge'
 import { ModelDetailsApi } from './model-details-api'
 import { ModelDetailsPerformance } from './model-details-performance'
@@ -930,21 +933,57 @@ function AutoGroupChain(props: { model: PricingModel; autoGroups: string[] }) {
     modelEnableGroups.includes(g)
   )
 
-  if (autoChain.length === 0) return null
+  return (
+    <GroupChain
+      label={t('Auto Group Chain')}
+      groups={autoChain}
+      className='mb-3'
+    />
+  )
+}
+
+// ----------------------------------------------------------------------------
+// Config groups that can reach the model
+// ----------------------------------------------------------------------------
+
+function ConfigGroupsSection(props: {
+  model: PricingModel
+  configGroups: PricingConfigGroup[]
+}) {
+  const { t } = useTranslation()
+  const reachable = props.configGroups.filter((cfg) =>
+    isModelInConfigGroup(props.model, cfg)
+  )
+
+  if (reachable.length === 0) return null
 
   return (
-    <div className='text-muted-foreground mb-3 flex flex-wrap items-center gap-1 text-xs'>
-      <span className='font-medium'>{t('Auto Group Chain')}</span>
-      <span className='text-muted-foreground/40'>→</span>
-      {autoChain.map((g, idx) => (
-        <span key={g} className='flex items-center gap-1'>
-          <GroupBadge group={g} size='sm' />
-          {idx < autoChain.length - 1 && (
-            <span className='text-muted-foreground/40'>→</span>
-          )}
-        </span>
-      ))}
-    </div>
+    <section>
+      <SectionTitle>{t('Config Groups')}</SectionTitle>
+      <ul className='space-y-2'>
+        {reachable.map((cfg) => (
+          <li
+            key={cfg.key}
+            className='border-border/60 space-y-1.5 rounded-lg border p-3'
+          >
+            <div className='text-foreground text-sm font-medium'>
+              {cfg.name || cfg.key}
+            </div>
+            {cfg.description && (
+              <p className='text-muted-foreground text-xs leading-relaxed'>
+                {cfg.description}
+              </p>
+            )}
+            <GroupChain
+              label={t('Member groups')}
+              groups={cfg.groups.filter((g) =>
+                props.model.enable_groups?.includes(g)
+              )}
+            />
+          </li>
+        ))}
+      </ul>
+    </section>
   )
 }
 
@@ -1462,6 +1501,11 @@ export interface ModelDetailsContentProps {
   usableGroup: Record<string, { desc: string; ratio: number }>
   endpointMap: Record<string, { path?: string; method?: string }>
   autoGroups: string[]
+  /** Effective rate limit per group; missing groups are unlimited. */
+  groupRateLimits?: Record<string, GroupRateLimit>
+  configGroups?: PricingConfigGroup[]
+  /** Balance types allowed per group; missing groups accept all types. */
+  groupBalanceBuckets?: Record<string, string[]>
   priceRate: number
   usdExchangeRate: number
   tokenUnit: TokenUnit
@@ -1542,6 +1586,10 @@ export function ModelDetailsContent(props: ModelDetailsContentProps) {
               tokenUnit={props.tokenUnit}
               showRechargePrice={showRechargePrice}
             />
+            <ConfigGroupsSection
+              model={props.model}
+              configGroups={props.configGroups ?? []}
+            />
           </section>
 
           <ModelBackendDetailsSection model={props.model} />
@@ -1555,6 +1603,9 @@ export function ModelDetailsContent(props: ModelDetailsContentProps) {
           <ModelDetailsApi
             model={props.model}
             endpointMap={props.endpointMap}
+            usableGroup={props.usableGroup}
+            groupRateLimits={props.groupRateLimits ?? {}}
+            groupBalanceBuckets={props.groupBalanceBuckets ?? {}}
           />
         </TabsContent>
       </Tabs>
@@ -1607,6 +1658,9 @@ export function ModelDetails() {
     usableGroup,
     endpointMap,
     autoGroups,
+    groupRateLimits,
+    configGroups,
+    groupBalanceBuckets,
     isLoading,
     priceRate,
     usdExchangeRate,
@@ -1685,6 +1739,9 @@ export function ModelDetails() {
           groupRatio={groupRatio || {}}
           usableGroup={usableGroup || {}}
           autoGroups={autoGroups || []}
+          groupRateLimits={groupRateLimits}
+          configGroups={configGroups}
+          groupBalanceBuckets={groupBalanceBuckets}
           priceRate={priceRate ?? 1}
           usdExchangeRate={usdExchangeRate ?? 1}
           tokenUnit={tokenUnit}

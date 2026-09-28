@@ -197,6 +197,68 @@ describe('pricing controls', () => {
     expect(props.onSortChange).toHaveBeenCalledWith('price-low')
   })
 
+  it('selects a config group through the group filter and counts its reachable models', async () => {
+    const props = toolbarProps()
+    const user = userEvent.setup()
+    const base: PricingModel = {
+      id: 1,
+      model_name: 'default-model',
+      quota_type: 0,
+      model_ratio: 1,
+      completion_ratio: 1,
+      enable_groups: ['default'],
+    }
+    const models: PricingModel[] = [
+      base,
+      {
+        ...base,
+        id: 2,
+        model_name: 'premium-model',
+        enable_groups: ['premium'],
+      },
+    ]
+    const configGroups = [
+      {
+        key: 'plan',
+        value: 'cfg:plan',
+        name: 'Plan',
+        groups: ['premium', 'default'],
+      },
+      { key: 'empty', value: 'cfg:empty', groups: ['ghost'] },
+    ]
+    const { rerender } = render(
+      <PricingSidebar {...props} models={models} configGroups={configGroups} />
+    )
+
+    expect(screen.getByRole('button', { name: /^Plan\s*2$/ })).toBeVisible()
+    expect(screen.getByRole('button', { name: /^empty\s*0$/ })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: /^Plan/ }))
+    expect(props.onGroupChange).toHaveBeenCalledWith('cfg:plan')
+
+    rerender(
+      <PricingSidebar
+        {...props}
+        groupFilter='cfg:plan'
+        models={models}
+        configGroups={configGroups}
+      />
+    )
+    expect(screen.getByRole('button', { name: /^Plan/ })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    expect(screen.getByRole('button', { name: /^All Groups/ })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    )
+  })
+
+  it('hides the config group filter when the viewer has no config groups', () => {
+    render(<PricingSidebar {...toolbarProps()} />)
+
+    expect(screen.queryByText('Config Groups')).toBeNull()
+  })
+
   it('opens mobile filters from the left, selects a group, and restores focus on close', async () => {
     const props = toolbarProps()
     const user = userEvent.setup()
