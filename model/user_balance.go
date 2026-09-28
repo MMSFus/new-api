@@ -21,7 +21,8 @@ import (
 //   - 钱包增减一律直写数据库（不再进入 BatchUpdate 队列），提交后再把总额
 //     增量同步到 Redis 缓存，因此数据库是余额的唯一权威来源；
 //   - 读取时若发现 quota 与桶之和不一致（旧版本节点或遗漏路径直接改了
-//     quota），差额在下一次写入时自愈：正差计入充值余额，负差按默认顺序扣减。
+//     quota），差额在下一次写入时自愈：正差计入赠送余额（来源未知的钱
+//     绝不计入权限最高的充值余额），负差按默认顺序扣减。
 
 var (
 	// ErrInsufficientGroupBalance 分组可用余额不足（预扣严格校验）。
@@ -157,8 +158,9 @@ func (b *BalanceBuckets) debit(order []string, amount int, overdraft bool) (comm
 	return ledger, remaining
 }
 
-// normalize 修复负数桶以及 quota 与桶之和的偏差：正差计入充值余额，
-// 负差按默认顺序扣减、不足记欠费。
+// normalize 修复负数桶以及 quota 与桶之和的偏差：正差来源未知，计入赠送
+// 余额（充值余额可被分组设为专用，不能凭空获得）；负差按默认顺序扣减、
+// 不足记欠费。
 func (b BalanceBuckets) normalize(quota int) BalanceBuckets {
 	if b.Debt > 0 {
 		b.Gift += b.Debt
@@ -171,7 +173,7 @@ func (b BalanceBuckets) normalize(quota int) BalanceBuckets {
 		}
 	}
 	if diff := quota - b.Total(); diff > 0 {
-		b.credit(common.BalanceBucketTopup, diff)
+		b.credit(common.BalanceBucketGift, diff)
 	} else if diff < 0 {
 		b.debit(common.DefaultBalanceBucketOrder(), -diff, true)
 	}
@@ -556,8 +558,9 @@ func AdjustUserBalanceBucket(userID, operatorRole int, bucket, mode string, valu
 
 const balanceBucketsMigrationKey = "BalanceBucketsMigrationV1"
 
-// migrateUserBalanceBuckets 一次性把存量用户的 quota 迁入充值余额（负数迁入欠费）。
-// 迁入充值余额可保证升级后用户在任何分组的可用余额都不减少。
+// migrateUserBalanceBuckets 一次性把存量用户的 quota 迁入赠送余额（负数迁入欠费）。
+// 存量余额来源无法区分，且实际多为注册赠送、邀请奖励等，不能计入权限最高的
+// 充值余额；升级后如有用户确属充值，由管理员按桶调整。
 // 以 options 表标记防重复；SQL 本身也只处理各桶全为 0 的行，重复执行无副作用。
 func migrateUserBalanceBuckets(db *gorm.DB) error {
 	var marker Option
@@ -571,7 +574,7 @@ func migrateUserBalanceBuckets(db *gorm.DB) error {
 	return db.Transaction(func(tx *gorm.DB) error {
 		emptyBuckets := "quota_topup = 0 AND quota_aff_rebate = 0 AND quota_invite_bonus = 0 AND quota_gift = 0 AND quota_debt = 0"
 		positive := tx.Model(&User{}).Unscoped().Where("quota > 0 AND "+emptyBuckets).
-			Update("quota_topup", gorm.Expr("quota"))
+			Update("quota_gift", gorm.Expr("quota"))
 		if positive.Error != nil {
 			return positive.Error
 		}
@@ -580,7 +583,7 @@ func migrateUserBalanceBuckets(db *gorm.DB) error {
 		if negative.Error != nil {
 			return negative.Error
 		}
-		common.SysLog(fmt.Sprintf("balance buckets migration: %d users -> topup, %d users -> debt", positive.RowsAffected, negative.RowsAffected))
+		common.SysLog(fmt.Sprintf("balance buckets migration: %d users -> gift, %d users -> debt", positive.RowsAffected, negative.RowsAffected))
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return tx.Create(&Option{Key: balanceBucketsMigrationKey, Value: "done"}).Error
 		}

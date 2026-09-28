@@ -267,17 +267,17 @@ func TestBalanceHealsDriftAndKeepsCacheInSync(t *testing.T) {
 	useUserCacheMiniRedis(t)
 
 	user := createBalanceTestUser(t, "default", BalanceBuckets{Gift: 10})
-	// 旧版本节点只改 quota：差额在下一次写入时自愈进充值余额。
+	// 旧版本节点只改 quota：差额来源未知，在下一次写入时自愈进赠送余额。
 	require.NoError(t, DB.Model(&User{}).Where("id = ?", user.Id).Update("quota", 110).Error)
 	var drifted User
 	require.NoError(t, DB.Where("id = ?", user.Id).Take(&drifted).Error)
-	assert.Equal(t, BalanceBuckets{Topup: 100, Gift: 10}, drifted.NormalizedBalanceBuckets())
+	assert.Equal(t, BalanceBuckets{Gift: 110}, drifted.NormalizedBalanceBuckets())
 	require.NoError(t, populateUserCache(drifted))
 
 	ledger, err := ReserveUserBalance(user.Id, "", 15)
 	require.NoError(t, err)
-	assert.Equal(t, common.BalanceLedger{{Bucket: "gift", Amount: 10}, {Bucket: "topup", Amount: 5}}, ledger)
-	assert.Equal(t, BalanceBuckets{Topup: 95}, loadBalance(t, user.Id))
+	assert.Equal(t, common.BalanceLedger{{Bucket: "gift", Amount: 15}}, ledger)
+	assert.Equal(t, BalanceBuckets{Gift: 95}, loadBalance(t, user.Id))
 
 	cached, err := GetUserCache(user.Id)
 	require.NoError(t, err)
@@ -286,7 +286,32 @@ func TestBalanceHealsDriftAndKeepsCacheInSync(t *testing.T) {
 	// 负差自愈：quota 被直接调低时按默认顺序扣减。
 	require.NoError(t, DB.Model(&User{}).Where("id = ?", user.Id).Update("quota", 90).Error)
 	require.NoError(t, CreditUserBalance(user.Id, common.BalanceBucketGift, 1))
-	assert.Equal(t, BalanceBuckets{Topup: 90, Gift: 1}, loadBalance(t, user.Id))
+	assert.Equal(t, BalanceBuckets{Gift: 91}, loadBalance(t, user.Id))
+}
+
+// 来源未知的正差一律计入赠送余额，绝不计入可被分组设为专用的充值余额。
+func TestNormalizeCreditsUnexplainedQuotaToGift(t *testing.T) {
+	tests := []struct {
+		name    string
+		buckets BalanceBuckets
+		quota   int
+		want    BalanceBuckets
+	}{
+		{name: "empty buckets", quota: 100, want: BalanceBuckets{Gift: 100}},
+		{name: "positive diff keeps topup", buckets: BalanceBuckets{Topup: 30, InviteBonus: 5}, quota: 50, want: BalanceBuckets{Topup: 30, InviteBonus: 5, Gift: 15}},
+		{name: "positive diff repays debt first", buckets: BalanceBuckets{Topup: 10, Debt: -20}, quota: 15, want: BalanceBuckets{Topup: 10, Gift: 5}},
+		{name: "negative bucket becomes debt", buckets: BalanceBuckets{Topup: -10, Gift: 20}, quota: 20, want: BalanceBuckets{Gift: 20}},
+		{name: "positive debt moves to gift", buckets: BalanceBuckets{Debt: 7}, quota: 7, want: BalanceBuckets{Gift: 7}},
+		{name: "negative diff debits default order", buckets: BalanceBuckets{Topup: 50, Gift: 20}, quota: 60, want: BalanceBuckets{Topup: 50, Gift: 10}},
+		{name: "consistent buckets unchanged", buckets: BalanceBuckets{Topup: 50, Gift: 20}, quota: 70, want: BalanceBuckets{Topup: 50, Gift: 20}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.buckets.normalize(tt.quota)
+			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.quota, got.Total())
+		})
+	}
 }
 
 func TestAdjustUserBalanceBucket(t *testing.T) {
@@ -346,7 +371,7 @@ func TestMigrateUserBalanceBucketsIsIdempotent(t *testing.T) {
 
 	require.NoError(t, migrateUserBalanceBuckets(DB))
 	want := map[int]BalanceBuckets{
-		positive: {Topup: 100},
+		positive: {Gift: 100},
 		negative: {Debt: -30},
 		zero:     {},
 		already:  {Gift: 50},
@@ -363,7 +388,7 @@ func TestMigrateUserBalanceBucketsIsIdempotent(t *testing.T) {
 	require.NoError(t, migrateUserBalanceBuckets(DB))
 	var lateUser User
 	require.NoError(t, DB.Where("id = ?", late).Take(&lateUser).Error)
-	assert.Zero(t, lateUser.QuotaTopup)
+	assert.Zero(t, lateUser.QuotaGift)
 
 	// 标记丢失后重跑：已迁移的行不会被重复计入。
 	resetMarker()
@@ -371,7 +396,7 @@ func TestMigrateUserBalanceBucketsIsIdempotent(t *testing.T) {
 	for id, expected := range want {
 		assert.Equal(t, expected, loadBalance(t, id))
 	}
-	assert.Equal(t, BalanceBuckets{Topup: 40}, loadBalance(t, late))
+	assert.Equal(t, BalanceBuckets{Gift: 40}, loadBalance(t, late))
 }
 
 func TestParseGroupBalanceBuckets(t *testing.T) {
