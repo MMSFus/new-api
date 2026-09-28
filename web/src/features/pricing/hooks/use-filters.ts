@@ -31,7 +31,7 @@ import {
   type ViewMode,
 } from '../constants'
 import { filterAndSortModels, extractAllTags } from '../lib/filters'
-import type { PricingModel, TokenUnit } from '../types'
+import type { PricingConfigGroup, PricingModel, TokenUnit } from '../types'
 
 type FilterState = {
   search?: string
@@ -53,7 +53,12 @@ function normalizeViewMode(value: unknown): ViewMode {
   return VIEW_MODES.CARD
 }
 
-export function useFilters(models: PricingModel[]) {
+const EMPTY_CONFIG_GROUPS: PricingConfigGroup[] = []
+
+export function useFilters(
+  models: PricingModel[],
+  configGroups: PricingConfigGroup[] = EMPTY_CONFIG_GROUPS
+) {
   const search = useSearch({ from: '/pricing/' })
   const [filterState, setFilterState] = useState<FilterState>(() => ({
     search: search.search,
@@ -157,9 +162,11 @@ export function useFilters(models: PricingModel[]) {
       endpointType: endpointTypeFilter,
       tag: tagFilter,
       sortBy,
+      configGroups,
     })
   }, [
     models,
+    configGroups,
     debouncedSearchInput,
     vendorFilter,
     groupFilter,

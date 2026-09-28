@@ -29,3 +29,4 @@ export {
   ModelDetailsDrawer,
 } from './model-details'
 export { PricingTable } from './pricing-table'
+export { ConfigGroupSummary } from './config-group-summary'

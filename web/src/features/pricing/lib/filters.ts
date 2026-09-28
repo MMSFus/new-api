@@ -23,7 +23,7 @@ import {
   QUOTA_TYPE_VALUES,
   ENDPOINT_TYPES,
 } from '../constants'
-import type { PricingModel } from '../types'
+import type { PricingConfigGroup, PricingModel } from '../types'
 import { hasTaskUsageSchema } from './dynamic-price'
 
 // ----------------------------------------------------------------------------
@@ -61,13 +61,30 @@ export function filterByVendor(
 }
 
 /**
- * Filter models by group
+ * Whether a model is reachable through a config group, i.e. at least one of
+ * the config group's member groups enables it.
+ */
+export function isModelInConfigGroup(
+  model: PricingModel,
+  configGroup: PricingConfigGroup
+): boolean {
+  return configGroup.groups.some((g) => model.enable_groups?.includes(g))
+}
+
+/**
+ * Filter models by group. A config group reference (its `value`, e.g.
+ * "cfg:key") keeps the models reachable through any of its member groups.
  */
 export function filterByGroup(
   models: PricingModel[],
-  group: string
+  group: string,
+  configGroups: PricingConfigGroup[] = []
 ): PricingModel[] {
   if (group === FILTER_ALL) return models
+  const configGroup = configGroups.find((cfg) => cfg.value === group)
+  if (configGroup) {
+    return models.filter((m) => isModelInConfigGroup(m, configGroup))
+  }
   return models.filter((m) => m.enable_groups?.includes(group))
 }
 
@@ -151,11 +168,12 @@ export function filterAndSortModels(
     endpointType: string
     tag: string
     sortBy: string
+    configGroups?: PricingConfigGroup[]
   }
 ): PricingModel[] {
   let result = filterBySearch(models, filters.search)
   result = filterByVendor(result, filters.vendor)
-  result = filterByGroup(result, filters.group)
+  result = filterByGroup(result, filters.group, filters.configGroups)
   result = filterByQuotaType(result, filters.quotaType)
   result = filterByEndpointType(result, filters.endpointType)
   result = filterByTag(result, filters.tag)
