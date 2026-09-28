@@ -48,6 +48,11 @@ func (s *BillingSession) Settle(actualQuota int) error {
 	if s.settled {
 		return nil
 	}
+	if !s.fundingSettled {
+		if err := s.syncWalletGroup(); err != nil {
+			return err
+		}
+	}
 	delta := actualQuota - s.preConsumedQuota
 	if delta == 0 {
 		s.settled = true
@@ -59,6 +64,9 @@ func (s *BillingSession) Settle(actualQuota int) error {
 			return err
 		}
 		s.fundingSettled = true
+		if wallet, ok := s.funding.(*WalletFunding); ok {
+			s.relayInfo.WalletBalanceLedger = wallet.Ledger()
+		}
 	}
 	// 2) 调整令牌额度
 	var tokenErr error
@@ -171,6 +179,9 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 		return nil
 	}
 
+	if err := s.syncWalletGroup(); err != nil {
+		return err
+	}
 	if err := s.reserveFunding(delta, imageRequest); err != nil {
 		return err
 	}
@@ -358,6 +369,22 @@ func (s *BillingSession) shouldTrust(c *gin.Context) bool {
 	}
 }
 
+// syncWalletGroup 在跨分组重试切换到新的真实分组后，把钱包已扣额度迁移到
+// 新分组允许的余额桶（见 WalletFunding.switchGroup），并同步账本到 RelayInfo。
+// relayInfo.UsingGroup 由 HandleGroupRatio 在每次选渠道后更新；仍为 "auto" 时不切换。
+func (s *BillingSession) syncWalletGroup() error {
+	wallet, ok := s.funding.(*WalletFunding)
+	if !ok || s.relayInfo == nil {
+		return nil
+	}
+	if err := wallet.switchGroup(s.relayInfo.UsingGroup); err != nil {
+		return err
+	}
+	s.relayInfo.WalletBillingGroup = wallet.group
+	s.relayInfo.WalletBalanceLedger = wallet.Ledger()
+	return nil
+}
+
 // syncRelayInfo 将 BillingSession 的状态同步到 RelayInfo 的兼容字段上。
 func (s *BillingSession) syncRelayInfo() {
 	info := s.relayInfo
@@ -416,10 +443,8 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		relayInfo.UserQuota = userQuota
 
 		// 分组可用余额：未配置的分组可用全部余额，受限分组只计允许的余额桶。
-		group := relayInfo.UsingGroup
-		if group == "" {
-			group = relayInfo.UserGroup
-		}
+		group := ResolveWalletBillingGroup(c, relayInfo)
+		relayInfo.WalletBillingGroup = group
 		available, buckets, err := model.GetUserGroupAvailableBalance(relayInfo.UserId, group)
 		if err != nil {
 			return nil, types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())

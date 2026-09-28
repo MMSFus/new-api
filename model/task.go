@@ -123,6 +123,8 @@ type TaskPrivateData struct {
 	BillingContext *TaskBillingContext `json:"billing_context,omitempty"` // 计费参数快照（用于轮询阶段重新计算）
 	// WalletBuckets 钱包计费时各余额桶的扣减明细，退款按此退回原余额桶。
 	WalletBuckets common.BalanceLedger `json:"wallet_buckets,omitempty"`
+	// WalletGroup 钱包计费实际使用的分组（auto 令牌为选中的真实分组）。
+	WalletGroup string `json:"wallet_group,omitempty"`
 	// ResponsesBackground records that the openai_responses create request
 	// asked for background:true. Every task is durable and survives client
 	// disconnect regardless; this only echoes the protocol-level request
@@ -245,6 +247,7 @@ func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) 
 	privateData := TaskPrivateData{}
 	if relayInfo != nil {
 		privateData.WalletBuckets = relayInfo.WalletBalanceLedger.Clone()
+		privateData.WalletGroup = relayInfo.WalletBillingGroup
 	}
 	if relayInfo != nil && relayInfo.ChannelMeta != nil {
 		// A New API channel may rotate between several gateway tokens, so the

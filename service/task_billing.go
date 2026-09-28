@@ -121,17 +121,33 @@ func taskAdjustFunding(task *model.Task, delta int) error {
 	// 退还按明细尾部退回原余额桶，补扣按任务分组的可用余额扣减（不足记欠费）。
 	ledger := task.PrivateData.WalletBuckets.Clone()
 	ledger.TrimTo(task.Quota)
+	group := taskWalletGroup(task)
 	if delta > 0 {
-		debited, err := model.DebitUserBalance(task.UserId, task.Group, delta)
+		debited, err := model.DebitUserBalance(task.UserId, group, delta)
 		if err != nil {
 			return err
 		}
 		ledger.Append(debited)
-	} else if err := model.RefundUserBalanceWithLedger(task.UserId, task.Group, &ledger, -delta); err != nil {
+	} else if err := model.RefundUserBalanceWithLedger(task.UserId, group, &ledger, -delta); err != nil {
 		return err
 	}
 	task.PrivateData.WalletBuckets = ledger
 	return nil
+}
+
+// taskWalletGroup 返回任务钱包计费的真实分组：优先使用提交时记录的分组；
+// 旧任务或 task.Group 为 "auto" 时回退到用户当前分组，避免 "auto" 落到全部余额。
+func taskWalletGroup(task *model.Task) string {
+	if isConcreteBillingGroup(task.PrivateData.WalletGroup) {
+		return task.PrivateData.WalletGroup
+	}
+	if isConcreteBillingGroup(task.Group) {
+		return task.Group
+	}
+	if group, err := model.GetUserGroup(task.UserId, false); err == nil && isConcreteBillingGroup(group) {
+		return group
+	}
+	return ""
 }
 
 // persistTaskQuota 回写任务额度；钱包任务同时回写扣费明细。

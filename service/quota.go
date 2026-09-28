@@ -438,9 +438,9 @@ func postConsumeQuotaWithResult(relayInfo *relaycommon.RelayInfo, quota int, pre
 		}
 	} else {
 		// Wallet：按请求分组的可用余额扣减（不足记欠费），退还按扣费明细退回原余额桶。
-		group := relayInfo.UsingGroup
-		if group == "" {
-			group = relayInfo.UserGroup
+		group := relayInfo.WalletBillingGroup
+		if !isConcreteBillingGroup(group) {
+			group = ResolveWalletBillingGroup(nil, relayInfo)
 		}
 		if quota > 0 {
 			var ledger common.BalanceLedger

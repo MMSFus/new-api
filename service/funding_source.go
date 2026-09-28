@@ -5,8 +5,42 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
+
+	"github.com/gin-gonic/gin"
 )
+
+// ResolveWalletBillingGroup 返回钱包计费实际使用的分组，决定可用余额桶。
+// auto 令牌与配置分组令牌的 UsingGroup 为 "auto"，必须取 Distribute 选定的
+// 真实分组，否则会落到 "*"/全部余额，绕过受限分组的余额限制。
+// 顺序与限速一致：AutoGroup → UsingGroup → TokenGroup → UserGroup，跳过 "auto"。
+func ResolveWalletBillingGroup(c *gin.Context, info *relaycommon.RelayInfo) string {
+	var candidates []string
+	if c != nil {
+		candidates = append(candidates, common.GetContextKeyString(c, constant.ContextKeyAutoGroup))
+	}
+	if info != nil {
+		candidates = append(candidates, info.UsingGroup, info.TokenGroup, info.UserGroup)
+	}
+	if c != nil {
+		candidates = append(candidates,
+			common.GetContextKeyString(c, constant.ContextKeyUsingGroup),
+			common.GetContextKeyString(c, constant.ContextKeyTokenGroup),
+			common.GetContextKeyString(c, constant.ContextKeyUserGroup))
+	}
+	for _, group := range candidates {
+		if isConcreteBillingGroup(group) {
+			return group
+		}
+	}
+	return ""
+}
+
+func isConcreteBillingGroup(group string) bool {
+	return group != "" && group != "auto"
+}
 
 // ---------------------------------------------------------------------------
 // FundingSource — 资金来源接口（钱包 or 订阅）
@@ -85,6 +119,27 @@ func (w *WalletFunding) release(amount int) error {
 	}
 	w.ledger = remaining
 	w.consumed -= amount
+	return nil
+}
+
+// switchGroup 在跨分组重试选中新分组后迁移钱包扣费：先按账本把已扣额度
+// 原样退回原余额桶，再在新分组允许的余额桶中重新扣减，不足部分记欠费
+// （与结算补扣语义一致）。新分组永远不会动用它不被允许的余额桶。
+// group 为空或 "auto"（尚未确定真实分组）时保持原分组。
+func (w *WalletFunding) switchGroup(group string) error {
+	if !isConcreteBillingGroup(group) || group == w.group {
+		return nil
+	}
+	amount := w.consumed
+	if amount > 0 {
+		if err := w.release(amount); err != nil {
+			return err
+		}
+	}
+	w.group = group
+	if amount > 0 {
+		return w.overdraft(amount)
+	}
 	return nil
 }
 
