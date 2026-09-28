@@ -263,6 +263,9 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 		if apiErr = s.restoreConnectionContext(c, modelName); apiErr != nil {
 			return apiErr
 		}
+		if apiErr = middleware.CheckModelRequestRateLimit(c); apiErr != nil {
+			return apiErr
+		}
 		info = relaycommon.GenRelayInfoResponses(c, &create.Request)
 		info.IsStream = true
 		common.SetContextKey(c, appconstant.ContextKeyIsStream, true)
@@ -285,6 +288,11 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 			var channel *appmodel.Channel
 			channel, apiErr = selectResponsesWSChannel(c, modelName, retry)
 			if apiErr != nil {
+				return apiErr
+			}
+			// Admits an "auto" token against its first selected group; later
+			// retries in this loop are not counted again.
+			if apiErr = middleware.CheckModelRequestRateLimit(c); apiErr != nil {
 				return apiErr
 			}
 			service.AppendUsedChannel(c, channel.Id)

@@ -24,7 +24,7 @@ func TestModelRedisRateLimitUsesUTCRegardlessOfLocalTimezone(t *testing.T) {
 
 	ctx := context.Background()
 	recordKey := "rateLimit:model-utc-record"
-	recordRedisRequest(ctx, redisClient, recordKey, 2)
+	recordRedisRequest(ctx, redisClient, recordKey, 2, 60)
 	recorded, err := redisClient.LIndex(ctx, recordKey, 0).Result()
 	require.NoError(t, err)
 	recordedAt, err := time.Parse(modelRateLimitTimeFormat, recorded)

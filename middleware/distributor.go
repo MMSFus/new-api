@@ -121,6 +121,11 @@ func Distribute() func(c *gin.Context) {
 				return
 			}
 		}
+		// An "auto" token only has a concrete group once a channel is chosen;
+		// admit it against that group's rate limit now.
+		if !EnforceModelRequestRateLimit(c) {
+			return
+		}
 		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
 		SetupContextForSelectedChannel(c, channel, modelRequest.Model)
 		c.Next()

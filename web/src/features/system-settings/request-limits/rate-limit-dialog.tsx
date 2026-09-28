@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import * as z from 'zod'
@@ -35,33 +35,90 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 
-const rateLimitDialogSchema = z.object({
-  groupName: z.string().min(1, 'Group name is required'),
-  maxRequests: z
-    .number()
-    .min(0, 'Must be ≥ 0')
-    .max(2147483647, 'Must be ≤ 2,147,483,647'),
-  maxSuccess: z
-    .number()
-    .min(1, 'Must be ≥ 1')
-    .max(2147483647, 'Must be ≤ 2,147,483,647'),
-})
+import {
+  RATE_LIMIT_ANY_GROUP,
+  RATE_LIMIT_MAX_COUNT,
+  RATE_LIMIT_MAX_DURATION_MINUTES,
+  rateLimitEntryKey,
+  type RateLimitEntryData,
+  type RateLimitMode,
+} from './rate-limit-rules'
 
-type RateLimitDialogFormValues = z.infer<typeof rateLimitDialogSchema>
+export type { RateLimitEntryData } from './rate-limit-rules'
+
+const createRateLimitDialogSchema = (
+  t: (key: string) => string,
+  mode: RateLimitMode
+) =>
+  z
+    .object({
+      userGroup: z.string().trim(),
+      groupName: z.string().trim().min(1, t('Group name is required')),
+      maxRequests: z
+        .number()
+        .int()
+        .min(0, t('Must be ≥ 0'))
+        .max(RATE_LIMIT_MAX_COUNT, t('Must be ≤ 2,147,483,647')),
+      maxSuccess: z
+        .number()
+        .int()
+        .min(
+          mode === 'legacy' ? 1 : 0,
+          mode === 'legacy' ? t('Must be ≥ 1') : t('Must be ≥ 0')
+        )
+        .max(RATE_LIMIT_MAX_COUNT, t('Must be ≤ 2,147,483,647')),
+      durationMinutes: z
+        .number()
+        .int()
+        .min(0, t('Must be ≥ 0'))
+        .max(RATE_LIMIT_MAX_DURATION_MINUTES, t('Must be ≤ 1440')),
+    })
+    .superRefine((values, ctx) => {
+      if (mode === 'private' && values.userGroup === '') {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['userGroup'],
+          message: t('Group name is required'),
+        })
+      }
+      if (values.groupName === RATE_LIMIT_ANY_GROUP && mode !== 'private') {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['groupName'],
+          message: t('"*" is only allowed in private rules'),
+        })
+      }
+      if (mode === 'private' && values.userGroup === RATE_LIMIT_ANY_GROUP) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['userGroup'],
+          message: t('"*" is only allowed as the called group'),
+        })
+      }
+    })
+
+type RateLimitDialogFormValues = z.infer<
+  ReturnType<typeof createRateLimitDialogSchema>
+>
 
 const RATE_LIMIT_FORM_ID = 'rate-limit-form'
 
-export type RateLimitEntryData = {
-  groupName: string
-  maxRequests: number
-  maxSuccess: number
-}
+const emptyValues = (mode: RateLimitMode): RateLimitDialogFormValues => ({
+  userGroup: '',
+  groupName: '',
+  maxRequests: 0,
+  maxSuccess: mode === 'legacy' ? 1 : 0,
+  durationMinutes: 0,
+})
 
 type RateLimitDialogProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
   onSave: (data: RateLimitEntryData) => void
   editData?: RateLimitEntryData | null
+  mode?: RateLimitMode
+  /** Keys of existing rows, to reject adding a duplicate rule. */
+  existingKeys?: Set<string>
 }
 
 export function RateLimitDialog({
@@ -69,47 +126,125 @@ export function RateLimitDialog({
   onOpenChange,
   onSave,
   editData,
+  mode = 'legacy',
+  existingKeys,
 }: RateLimitDialogProps) {
   const { t } = useTranslation()
   const isEditMode = !!editData
+  const schema = useMemo(() => createRateLimitDialogSchema(t, mode), [t, mode])
 
   const form = useForm<RateLimitDialogFormValues>({
-    resolver: zodResolver(rateLimitDialogSchema),
-    defaultValues: {
-      groupName: '',
-      maxRequests: 0,
-      maxSuccess: 1,
-    },
+    resolver: zodResolver(schema),
+    defaultValues: emptyValues(mode),
   })
 
   useEffect(() => {
     if (editData) {
-      form.reset(editData)
-    } else {
       form.reset({
-        groupName: '',
-        maxRequests: 0,
-        maxSuccess: 1,
+        ...emptyValues(mode),
+        ...editData,
+        userGroup: editData.userGroup ?? '',
+        durationMinutes: editData.durationMinutes ?? 0,
       })
+    } else {
+      form.reset(emptyValues(mode))
     }
-  }, [editData, form, open])
+  }, [editData, form, open, mode])
 
   const handleSubmit = (values: RateLimitDialogFormValues) => {
-    onSave(values)
+    const entry: RateLimitEntryData = {
+      groupName: values.groupName,
+      maxRequests: values.maxRequests,
+      maxSuccess: values.maxSuccess,
+    }
+    if (mode === 'private') entry.userGroup = values.userGroup
+    if (mode !== 'legacy') entry.durationMinutes = values.durationMinutes
+    const key = rateLimitEntryKey(entry)
+    const previousKey = editData ? rateLimitEntryKey(editData) : undefined
+    if (key !== previousKey && existingKeys?.has(key)) {
+      form.setError('groupName', {
+        message: t('A rule for this group already exists'),
+      })
+      return
+    }
+    onSave(entry)
     form.reset()
     onOpenChange(false)
   }
+
+  const titles: Record<RateLimitMode, [edit: string, add: string]> = {
+    legacy: [t('Edit group rate limit'), t('Add group rate limit')],
+    global: [
+      t('Edit global group rate limit'),
+      t('Add global group rate limit'),
+    ],
+    private: [
+      t('Edit private rate limit rule'),
+      t('Add private rate limit rule'),
+    ],
+  }
+  const title = titles[mode][isEditMode ? 0 : 1]
+
+  const descriptions: Record<RateLimitMode, string> = {
+    legacy: t('Configure rate limiting rules for a specific user group.'),
+    global: t('Limits every user who calls this group.'),
+    private: t(
+      'Limits users of a user group when they call a specific group. Overrides global rules.'
+    ),
+  }
+  const description = descriptions[mode]
+
+  let groupNameHint = t(
+    'The group the request is served from (the token group, or the group picked for an auto token).'
+  )
+  if (mode === 'legacy') {
+    groupNameHint = isEditMode
+      ? t('Group name cannot be changed when editing.')
+      : t('Unique identifier for this group.')
+  }
+
+  const numberField = (
+    name: 'maxRequests' | 'maxSuccess' | 'durationMinutes',
+    label: string,
+    hint: string,
+    unit: string,
+    min: number,
+    max: number
+  ) => (
+    <FormField
+      control={form.control}
+      name={name}
+      render={({ field }) => (
+        <FormItem>
+          <FormLabel>{label}</FormLabel>
+          <FormControl>
+            <div className='flex items-center gap-2'>
+              <Input
+                type='number'
+                min={min}
+                max={max}
+                step={1}
+                {...field}
+                onChange={(e) =>
+                  field.onChange(Number.parseInt(e.target.value) || min)
+                }
+              />
+              <span className='text-muted-foreground text-sm'>{unit}</span>
+            </div>
+          </FormControl>
+          <FormDescription>{hint}</FormDescription>
+          <FormMessage />
+        </FormItem>
+      )}
+    />
+  )
 
   return (
     <Dialog
       open={open}
       onOpenChange={onOpenChange}
-      title={
-        isEditMode ? t('Edit group rate limit') : t('Add group rate limit')
-      }
-      description={t(
-        'Configure rate limiting rules for a specific user group.'
-      )}
+      title={title}
+      description={description}
       contentClassName='sm:max-w-[500px]'
       contentHeight='auto'
       bodyClassName='space-y-4'
@@ -131,93 +266,88 @@ export function RateLimitDialog({
       <Form {...form}>
         <form
           id={RATE_LIMIT_FORM_ID}
-          onSubmit={form.handleSubmit(handleSubmit)}
+          onSubmit={(e) => {
+            // The dialog renders inside the settings form; keep its submit
+            // from bubbling up and saving the whole page.
+            e.stopPropagation()
+            void form.handleSubmit(handleSubmit)(e)
+          }}
           className='space-y-4'
         >
+          {mode === 'private' && (
+            <FormField
+              control={form.control}
+              name='userGroup'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('User group')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      placeholder={t('e.g., default, vip, premium')}
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t('The group the calling user belongs to.')}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          )}
+
           <FormField
             control={form.control}
             name='groupName'
             render={({ field }) => (
               <FormItem>
-                <FormLabel>{t('Group Name')}</FormLabel>
+                <FormLabel>
+                  {mode === 'legacy' ? t('Group Name') : t('Called group')}
+                </FormLabel>
                 <FormControl>
                   <Input
-                    placeholder={t('e.g., default, vip, premium')}
+                    placeholder={
+                      mode === 'private'
+                        ? t('e.g., claude, or * for any group')
+                        : t('e.g., default, vip, premium')
+                    }
                     {...field}
-                    disabled={isEditMode}
+                    disabled={mode === 'legacy' && isEditMode}
                   />
                 </FormControl>
-                <FormDescription>
-                  {isEditMode
-                    ? t('Group name cannot be changed when editing.')
-                    : t('Unique identifier for this group.')}
-                </FormDescription>
+                <FormDescription>{groupNameHint}</FormDescription>
                 <FormMessage />
               </FormItem>
             )}
           />
 
-          <FormField
-            control={form.control}
-            name='maxRequests'
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>{t('Max Requests (including failures)')}</FormLabel>
-                <FormControl>
-                  <div className='flex items-center gap-2'>
-                    <Input
-                      type='number'
-                      min={0}
-                      max={2147483647}
-                      step={1}
-                      {...field}
-                      onChange={(e) =>
-                        field.onChange(parseInt(e.target.value) || 0)
-                      }
-                    />
-                    <span className='text-muted-foreground text-sm'>
-                      {t('times')}
-                    </span>
-                  </div>
-                </FormControl>
-                <FormDescription>
-                  {t('Total requests allowed per period. 0 = unlimited.')}
-                </FormDescription>
-                <FormMessage />
-              </FormItem>
+          {numberField(
+            'maxRequests',
+            t('Max Requests (including failures)'),
+            t('Total requests allowed per period. 0 = unlimited.'),
+            t('times'),
+            0,
+            RATE_LIMIT_MAX_COUNT
+          )}
+          {numberField(
+            'maxSuccess',
+            t('Max Successful Requests'),
+            mode === 'legacy'
+              ? t('Only successful requests count toward this limit.')
+              : t('Only successful requests count. 0 = unlimited.'),
+            t('times'),
+            mode === 'legacy' ? 1 : 0,
+            RATE_LIMIT_MAX_COUNT
+          )}
+          {mode !== 'legacy' &&
+            numberField(
+              'durationMinutes',
+              t('Limit period'),
+              t('0 = use the default limit period.'),
+              t('minutes'),
+              0,
+              RATE_LIMIT_MAX_DURATION_MINUTES
             )}
-          />
-
-          <FormField
-            control={form.control}
-            name='maxSuccess'
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>{t('Max Successful Requests')}</FormLabel>
-                <FormControl>
-                  <div className='flex items-center gap-2'>
-                    <Input
-                      type='number'
-                      min={1}
-                      max={2147483647}
-                      step={1}
-                      {...field}
-                      onChange={(e) =>
-                        field.onChange(parseInt(e.target.value) || 1)
-                      }
-                    />
-                    <span className='text-muted-foreground text-sm'>
-                      {t('times')}
-                    </span>
-                  </div>
-                </FormControl>
-                <FormDescription>
-                  {t('Only successful requests count toward this limit.')}
-                </FormDescription>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
         </form>
       </Form>
     </Dialog>
