@@ -227,6 +227,11 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 		}
 		// TODO: model 层应定义哨兵错误（如 ErrNoActiveSubscription），用 errors.Is 替代字符串匹配
 		if errors.Is(err, ErrInsufficientWalletQuota) {
+			if wallet, ok := s.funding.(*WalletFunding); ok && wallet.groupErr != nil {
+				return types.NewErrorWithStatusCode(wallet.groupErr,
+					types.ErrorCodeInsufficientUserQuota, http.StatusForbidden,
+					types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+			}
 			userQuota, quotaErr := model.GetUserQuota(s.relayInfo.UserId, false)
 			if quotaErr != nil {
 				userQuota = 0
@@ -259,6 +264,9 @@ func (s *BillingSession) reserveFunding(delta int, requireAvailableQuota bool) e
 			// overrides. Reserve atomically instead of admitting wallet debt.
 			if err := funding.PreConsume(delta); err != nil {
 				if errors.Is(err, ErrInsufficientWalletQuota) {
+					if funding.groupErr != nil {
+						err = funding.groupErr
+					}
 					return types.NewErrorWithStatusCode(err, types.ErrorCodeInsufficientUserQuota, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 				}
 				return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
@@ -266,13 +274,12 @@ func (s *BillingSession) reserveFunding(delta int, requireAvailableQuota bool) e
 			return nil
 		}
 		// 与结算补扣（SettleBilling 正差额 → WalletFunding.Settle）语义一致：
-		// 全额无条件扣减，余额不足的部分记为欠费（余额可为负），不中断请求，
+		// 按分组可用余额全额无条件扣减，不足的部分记为欠费，不中断请求，
 		// 保证日志记录的预扣额度与用户余额的实际变动始终对账一致。
-		// DecreaseUserQuota 仅在数据库错误时失败。
-		if err := model.DecreaseUserQuota(funding.userId, delta, false); err != nil {
+		// overdraft 仅在数据库错误时失败。
+		if err := funding.overdraft(delta); err != nil {
 			return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 		}
-		funding.consumed += delta
 		return nil
 	case *SubscriptionFunding:
 		if err := model.PostConsumeUserSubscriptionDelta(funding.subscriptionId, int64(delta)); err != nil {
@@ -293,10 +300,8 @@ func (s *BillingSession) reserveFunding(delta int, requireAvailableQuota bool) e
 func (s *BillingSession) rollbackFundingReserve(delta int) {
 	switch funding := s.funding.(type) {
 	case *WalletFunding:
-		if err := model.IncreaseUserQuota(funding.userId, delta, false); err != nil {
+		if err := funding.release(delta); err != nil {
 			common.SysLog("error rolling back wallet funding reserve: " + err.Error())
-		} else {
-			funding.consumed -= delta
 		}
 	case *SubscriptionFunding:
 		if err := model.PostConsumeUserSubscriptionDelta(funding.subscriptionId, -int64(delta)); err != nil {
@@ -339,7 +344,9 @@ func (s *BillingSession) shouldTrust(c *gin.Context) bool {
 
 	switch s.funding.Source() {
 	case BillingSourceWallet:
-		return float64(s.relayInfo.UserQuota) > trustQuota
+		// 以分组可用余额判断，避免受限分组借信任旁路动用不可用的余额桶。
+		wallet, ok := s.funding.(*WalletFunding)
+		return ok && float64(wallet.available) > trustQuota
 	case BillingSourceSubscription:
 		// 订阅不能启用信任旁路。原因：
 		// 1. PreConsumeUserSubscription 要求 amount>0 来创建预扣记录并锁定订阅
@@ -368,6 +375,11 @@ func (s *BillingSession) syncRelayInfo() {
 	} else {
 		info.SubscriptionId = 0
 		info.SubscriptionPreConsumed = 0
+	}
+	if wallet, ok := s.funding.(*WalletFunding); ok {
+		info.WalletBalanceLedger = wallet.Ledger()
+	} else {
+		info.WalletBalanceLedger = nil
 	}
 }
 
@@ -403,9 +415,25 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		}
 		relayInfo.UserQuota = userQuota
 
+		// 分组可用余额：未配置的分组可用全部余额，受限分组只计允许的余额桶。
+		group := relayInfo.UsingGroup
+		if group == "" {
+			group = relayInfo.UserGroup
+		}
+		available, buckets, err := model.GetUserGroupAvailableBalance(relayInfo.UserId, group)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
+		}
+		if available <= 0 || available < preConsumedQuota {
+			return nil, types.NewErrorWithStatusCode(
+				&model.GroupBalanceInsufficientError{Group: group, Buckets: buckets, Available: available, Required: max(preConsumedQuota, 1)},
+				types.ErrorCodeInsufficientUserQuota, http.StatusForbidden,
+				types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+		}
+
 		session := &BillingSession{
 			relayInfo: relayInfo,
-			funding:   &WalletFunding{userId: relayInfo.UserId},
+			funding:   &WalletFunding{userId: relayInfo.UserId, group: group, available: available},
 		}
 		if apiErr := session.preConsume(c, preConsumedQuota); apiErr != nil {
 			return nil, apiErr

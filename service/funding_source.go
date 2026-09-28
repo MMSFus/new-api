@@ -4,6 +4,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 )
 
@@ -32,25 +33,58 @@ type FundingSource interface {
 // 使 wallet_first 等计费偏好可以回退到订阅。
 var ErrInsufficientWalletQuota = errors.New("wallet quota insufficient")
 
+// WalletFunding 从钱包扣费。group 决定可用余额桶及扣费顺序；ledger 按扣费
+// 顺序记录各桶扣减量，退款与负差额结算从尾部逐条退回原桶。
 type WalletFunding struct {
-	userId   int
-	consumed int // 实际预扣的用户额度
+	userId    int
+	group     string
+	consumed  int                  // 实际预扣的用户额度
+	available int                  // 创建会话时分组可用余额（信任额度判断用）
+	ledger    common.BalanceLedger // 各余额桶扣减明细
+	groupErr  error                // 最近一次分组余额不足的明细
 }
 
 func (w *WalletFunding) Source() string { return BillingSourceWallet }
+
+// Ledger 返回当前扣费明细的副本。
+func (w *WalletFunding) Ledger() common.BalanceLedger { return w.ledger.Clone() }
 
 func (w *WalletFunding) PreConsume(amount int) error {
 	if amount <= 0 {
 		return nil
 	}
-	reserved, err := model.TryReserveUserQuota(w.userId, amount)
+	ledger, err := model.ReserveUserBalance(w.userId, w.group, amount)
+	if errors.Is(err, model.ErrInsufficientGroupBalance) {
+		w.groupErr = err
+		return ErrInsufficientWalletQuota
+	}
 	if err != nil {
 		return err
 	}
-	if !reserved {
-		return ErrInsufficientWalletQuota
+	w.consumed += amount
+	w.ledger.Append(ledger)
+	return nil
+}
+
+// overdraft 无条件扣减 amount：分组可用余额不足的部分记为欠费（与旧版余额可为负一致）。
+func (w *WalletFunding) overdraft(amount int) error {
+	ledger, err := model.DebitUserBalance(w.userId, w.group, amount)
+	if err != nil {
+		return err
 	}
-	w.consumed = amount
+	w.consumed += amount
+	w.ledger.Append(ledger)
+	return nil
+}
+
+// release 按账本尾部退还 amount，账本不足的部分按分组规则退还。
+func (w *WalletFunding) release(amount int) error {
+	remaining := w.ledger.Clone()
+	if err := model.RefundUserBalanceWithLedger(w.userId, w.group, &remaining, amount); err != nil {
+		return err
+	}
+	w.ledger = remaining
+	w.consumed -= amount
 	return nil
 }
 
@@ -59,18 +93,18 @@ func (w *WalletFunding) Settle(delta int) error {
 		return nil
 	}
 	if delta > 0 {
-		return model.DecreaseUserQuota(w.userId, delta, false)
+		return w.overdraft(delta)
 	}
-	return model.IncreaseUserQuota(w.userId, -delta, false)
+	return w.release(-delta)
 }
 
 func (w *WalletFunding) Refund() error {
 	if w.consumed <= 0 {
 		return nil
 	}
-	// IncreaseUserQuota 是 quota += N 的非幂等操作，不能重试，否则会多退额度。
+	// 退款是非幂等的入账操作，不能重试，否则会多退额度。
 	// 订阅的 RefundSubscriptionPreConsume 有 requestId 幂等保护所以可以重试。
-	return model.IncreaseUserQuota(w.userId, w.consumed, false)
+	return w.release(w.consumed)
 }
 
 // ---------------------------------------------------------------------------

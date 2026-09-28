@@ -437,11 +437,17 @@ func postConsumeQuotaWithResult(relayInfo *relaycommon.RelayInfo, quota int, pre
 			relayInfo.SubscriptionPostDelta += delta
 		}
 	} else {
-		// Wallet
+		// Wallet：按请求分组的可用余额扣减（不足记欠费），退还按扣费明细退回原余额桶。
+		group := relayInfo.UsingGroup
+		if group == "" {
+			group = relayInfo.UserGroup
+		}
 		if quota > 0 {
-			err = model.DecreaseUserQuota(relayInfo.UserId, quota, false)
-		} else {
-			err = model.IncreaseUserQuota(relayInfo.UserId, -quota, false)
+			var ledger common.BalanceLedger
+			ledger, err = model.DebitUserBalance(relayInfo.UserId, group, quota)
+			relayInfo.WalletBalanceLedger.Append(ledger)
+		} else if quota < 0 {
+			err = model.RefundUserBalanceWithLedger(relayInfo.UserId, group, &relayInfo.WalletBalanceLedger, -quota)
 		}
 		if err != nil {
 			return result, err
