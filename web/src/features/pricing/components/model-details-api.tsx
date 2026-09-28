@@ -36,18 +36,20 @@ import {
   StaticDataTable,
   staticDataTableClassNames as tableStyles,
 } from '@/components/data-table'
+import { GroupBadge } from '@/components/group-badge'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { BALANCE_BUCKET_OPTIONS } from '@/features/users/lib'
 import { useStatus } from '@/hooks/use-status'
+import { toIntlLocale } from '@/i18n/languages'
+import { formatNumber } from '@/lib/format'
 
 import {
-  buildRateLimits,
   buildSupportedParameters,
-  formatRateLimit,
   type SupportedParameter,
 } from '../lib/mock-stats'
-import { replaceModelInPath } from '../lib/model-helpers'
-import type { PricingModel } from '../types'
+import { getAvailableGroups, replaceModelInPath } from '../lib/model-helpers'
+import type { GroupRateLimit, PricingModel } from '../types'
 
 // ---------------------------------------------------------------------------
 // Code-sample registry
@@ -665,11 +667,23 @@ function ParamRangeCell(props: { param: SupportedParameter }) {
 // Rate-limits table
 // ---------------------------------------------------------------------------
 
-function RateLimitsSection(props: { model: PricingModel }) {
-  const { t } = useTranslation()
-  const limits = useMemo(() => buildRateLimits(props.model), [props.model])
+function RateLimitsSection(props: {
+  model: PricingModel
+  usableGroup: Record<string, { desc: string; ratio: number }>
+  groupRateLimits: Record<string, GroupRateLimit>
+  groupBalanceBuckets: Record<string, string[]>
+}) {
+  const { t, i18n } = useTranslation()
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
+  const groups = useMemo(
+    () => getAvailableGroups(props.model, props.usableGroup),
+    [props.model, props.usableGroup]
+  )
 
-  if (limits.length === 0) return null
+  if (groups.length === 0) return null
+
+  const formatCount = (count: number | undefined) =>
+    count && count > 0 ? formatNumber(count, locale) : t('Unlimited')
 
   return (
     <section>
@@ -677,46 +691,84 @@ function RateLimitsSection(props: { model: PricingModel }) {
       <StaticDataTable
         className={tableStyles.sectionContainer}
         headerRowClassName={tableStyles.mutedHeaderRow}
-        data={limits}
-        getRowKey={(limit) => limit.group}
+        data={groups}
+        getRowKey={(group) => group}
         getRowClassName={() => 'hover:bg-muted/20'}
         columns={[
           {
             id: 'group',
             header: t('Group'),
             className: 'h-9',
-            cellClassName: 'py-2 font-mono',
-            cell: (limit) => limit.group,
+            cellClassName: tableStyles.topCell,
+            cell: (group) => <GroupBadge group={group} size='sm' />,
           },
           {
-            id: 'rpm',
-            header: 'RPM',
-            className: 'h-9 text-right',
-            cellClassName: tableStyles.topNumericCell,
-            cell: (limit) => formatRateLimit(limit.rpm),
+            id: 'window',
+            header: t('Window'),
+            className: 'h-9',
+            cellClassName: tableStyles.topMutedCell,
+            cell: (group) => {
+              const limit = props.groupRateLimits[group]
+              if (!limit) return '—'
+              return t('{{duration}} min', {
+                duration: formatNumber(limit.duration, locale),
+              })
+            },
           },
           {
-            id: 'tpm',
-            header: 'TPM',
+            id: 'total',
+            header: t('Total requests'),
             className: 'h-9 text-right',
             cellClassName: tableStyles.topNumericCell,
-            cell: (limit) => formatRateLimit(limit.tpm),
+            cell: (group) => formatCount(props.groupRateLimits[group]?.total),
           },
           {
-            id: 'rpd',
-            header: 'RPD',
+            id: 'success',
+            header: t('Successful requests'),
             className: 'h-9 text-right',
             cellClassName: tableStyles.topNumericCell,
-            cell: (limit) => formatRateLimit(limit.rpd),
+            cell: (group) => formatCount(props.groupRateLimits[group]?.success),
+          },
+          {
+            id: 'balance',
+            header: t('Balance types'),
+            className: 'h-9',
+            cellClassName: tableStyles.topCell,
+            cell: (group) => (
+              <BalanceBucketBadges buckets={props.groupBalanceBuckets[group]} />
+            ),
           },
         ]}
       />
       <p className='text-muted-foreground mt-2 text-[11px] leading-relaxed'>
         {t(
-          'RPM = requests per minute, TPM = tokens per minute, RPD = requests per day. Limits apply per token group.'
+          'Limits apply per user within each window; total requests include failed ones. Only the listed balance types can pay for requests in a group.'
         )}
       </p>
     </section>
+  )
+}
+
+function BalanceBucketBadges(props: { buckets: string[] | undefined }) {
+  const { t } = useTranslation()
+  if (!props.buckets || props.buckets.length === 0) {
+    return (
+      <span className='text-muted-foreground text-sm'>
+        {t('All balance types')}
+      </span>
+    )
+  }
+  return (
+    <div className='flex flex-wrap gap-1'>
+      {props.buckets.map((bucket) => {
+        const option = BALANCE_BUCKET_OPTIONS.find((o) => o.key === bucket)
+        return (
+          <Badge key={bucket} variant='secondary' className='font-normal'>
+            {option ? t(option.labelKey) : bucket}
+          </Badge>
+        )
+      })}
+    </div>
   )
 }
 
@@ -761,13 +813,21 @@ function AuthSection() {
 export function ModelDetailsApi(props: {
   model: PricingModel
   endpointMap: Record<string, { path?: string; method?: string }>
+  usableGroup: Record<string, { desc: string; ratio: number }>
+  groupRateLimits: Record<string, GroupRateLimit>
+  groupBalanceBuckets: Record<string, string[]>
 }) {
   return (
     <div className='space-y-6'>
       <CodeSamplesSection model={props.model} endpointMap={props.endpointMap} />
       <AuthSection />
       <SupportedParametersSection model={props.model} />
-      <RateLimitsSection model={props.model} />
+      <RateLimitsSection
+        model={props.model}
+        usableGroup={props.usableGroup}
+        groupRateLimits={props.groupRateLimits}
+        groupBalanceBuckets={props.groupBalanceBuckets}
+      />
     </div>
   )
 }

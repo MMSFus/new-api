@@ -31,10 +31,12 @@ import {
   PricingToolbar,
   ModelCardGrid,
   ModelDetailsDrawer,
+  ConfigGroupSummary,
 } from './components'
 import { EXCLUDED_GROUPS, VIEW_MODES } from './constants'
 import { useFilters } from './hooks/use-filters'
 import { usePricingData } from './hooks/use-pricing-data'
+import { isModelInConfigGroup } from './lib/filters'
 
 export function Pricing() {
   const { t } = useTranslation()
@@ -49,6 +51,9 @@ export function Pricing() {
     usableGroup,
     endpointMap,
     autoGroups,
+    groupRateLimits,
+    configGroups,
+    groupBalanceBuckets,
     isLoading,
     priceRate,
     usdExchangeRate,
@@ -81,7 +86,7 @@ export function Pricing() {
     availableTags,
     clearFilters,
     clearSearch,
-  } = useFilters(models || [])
+  } = useFilters(models || [], configGroups)
 
   const handleModelClick = useCallback((modelName: string) => {
     setSelectedModelName(modelName)
@@ -103,6 +108,10 @@ export function Pricing() {
         (g) => !EXCLUDED_GROUPS.includes(g)
       ),
     [usableGroup]
+  )
+
+  const selectedConfigGroup = configGroups.find(
+    (cfg) => cfg.value === groupFilter
   )
 
   const handleClearAll = useCallback(() => {
@@ -217,6 +226,7 @@ export function Pricing() {
               vendors={vendors || []}
               groups={availableGroups}
               groupRatios={groupRatio}
+              configGroups={configGroups}
               tags={availableTags}
               models={models || []}
               hasActiveFilters={hasActiveFilters}
@@ -249,12 +259,24 @@ export function Pricing() {
                 vendors={vendors || []}
                 groups={availableGroups}
                 groupRatios={groupRatio}
+                configGroups={configGroups}
                 tags={availableTags}
                 models={models || []}
                 hasActiveFilters={hasActiveFilters}
                 activeFilterCount={activeFilterCount}
                 onClearFilters={clearFilters}
               />
+
+              {selectedConfigGroup && (
+                <ConfigGroupSummary
+                  configGroup={selectedConfigGroup}
+                  modelCount={
+                    (models || []).filter((m) =>
+                      isModelInConfigGroup(m, selectedConfigGroup)
+                    ).length
+                  }
+                />
+              )}
 
               {renderPricingContent()}
             </main>
@@ -276,6 +298,9 @@ export function Pricing() {
                 >) || {}
               }
               autoGroups={autoGroups || []}
+              groupRateLimits={groupRateLimits}
+              configGroups={configGroups}
+              groupBalanceBuckets={groupBalanceBuckets}
               priceRate={priceRate ?? 1}
               usdExchangeRate={usdExchangeRate ?? 1}
               tokenUnit={tokenUnit}

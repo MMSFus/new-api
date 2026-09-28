@@ -122,6 +122,14 @@ quota.insufficient: "Insufficient quota"
 quota.warning_invalid: "Invalid warning type"
 quota.threshold_gt_zero: "Warning threshold must be greater than 0"
 
+# Balance bucket messages
+balance.group_insufficient: "Insufficient balance for group {{.Group}} (usable balance types: {{.Buckets}}); available {{.Available}}, required {{.Required}}"
+balance.bucket_separator: ", "
+balance.bucket.topup: "Top-up Balance"
+balance.bucket.aff_rebate: "Referral Cashback"
+balance.bucket.invite_bonus: "Invite Reward"
+balance.bucket.gift: "Gift Balance"
+
 # Subscription messages
 subscription.not_enabled: "Subscription plan is not enabled"
 subscription.title_empty: "Subscription plan title cannot be empty"

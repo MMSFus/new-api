@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -239,9 +240,7 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 		// TODO: model 层应定义哨兵错误（如 ErrNoActiveSubscription），用 errors.Is 替代字符串匹配
 		if errors.Is(err, ErrInsufficientWalletQuota) {
 			if wallet, ok := s.funding.(*WalletFunding); ok && wallet.groupErr != nil {
-				return types.NewErrorWithStatusCode(wallet.groupErr,
-					types.ErrorCodeInsufficientUserQuota, http.StatusForbidden,
-					types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+				return NewGroupBalanceInsufficientAPIError(i18n.GetLangFromContext(c), wallet.groupErr)
 			}
 			userQuota, quotaErr := model.GetUserQuota(s.relayInfo.UserId, false)
 			if quotaErr != nil {
@@ -276,7 +275,13 @@ func (s *BillingSession) reserveFunding(delta int, requireAvailableQuota bool) e
 			if err := funding.PreConsume(delta); err != nil {
 				if errors.Is(err, ErrInsufficientWalletQuota) {
 					if funding.groupErr != nil {
-						err = funding.groupErr
+						// Reserve 没有请求上下文：中继的用户设置与 GetLangFromContext
+						// 读取的是同一份用户缓存，缺省时回退到请求的 Accept-Language。
+						lang := s.relayInfo.UserSetting.Language
+						if lang == "" {
+							lang = i18n.ParseAcceptLanguage(s.relayInfo.RequestHeaders["Accept-Language"])
+						}
+						return NewGroupBalanceInsufficientAPIError(lang, funding.groupErr)
 					}
 					return types.NewErrorWithStatusCode(err, types.ErrorCodeInsufficientUserQuota, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 				}
@@ -450,10 +455,8 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 			return nil, types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
 		}
 		if available <= 0 || available < preConsumedQuota {
-			return nil, types.NewErrorWithStatusCode(
-				&model.GroupBalanceInsufficientError{Group: group, Buckets: buckets, Available: available, Required: max(preConsumedQuota, 1)},
-				types.ErrorCodeInsufficientUserQuota, http.StatusForbidden,
-				types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+			return nil, NewGroupBalanceInsufficientAPIError(i18n.GetLangFromContext(c),
+				&model.GroupBalanceInsufficientError{Group: group, Buckets: buckets, Available: available, Required: max(preConsumedQuota, 1)})
 		}
 
 		session := &BillingSession{

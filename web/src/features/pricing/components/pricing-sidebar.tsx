@@ -38,8 +38,8 @@ import {
   getQuotaTypeLabels,
 } from '../constants'
 import { hasTaskUsageSchema } from '../lib/dynamic-price'
-import { parseTags } from '../lib/filters'
-import type { PricingModel, PricingVendor } from '../types'
+import { isModelInConfigGroup, parseTags } from '../lib/filters'
+import type { PricingConfigGroup, PricingModel, PricingVendor } from '../types'
 
 type FilterOption = {
   value: string
@@ -70,6 +70,7 @@ export interface PricingSidebarProps {
   vendors: PricingVendor[]
   groups: string[]
   groupRatios?: Record<string, number>
+  configGroups?: PricingConfigGroup[]
   tags: string[]
   models: PricingModel[]
   hasActiveFilters: boolean
@@ -213,6 +214,15 @@ export const PricingSidebar = memo(function PricingSidebar(
     })),
   ]
 
+  // Config groups share the group filter; their chips select "cfg:<key>".
+  const configGroupOptions: FilterOption[] = (props.configGroups ?? []).map(
+    (cfg) => ({
+      value: cfg.value,
+      label: cfg.name || cfg.key,
+      count: props.models.filter((m) => isModelInConfigGroup(m, cfg)).length,
+    })
+  )
+
   const quotaOptions: FilterOption[] = [
     {
       value: QUOTA_TYPES.ALL,
@@ -299,6 +309,14 @@ export const PricingSidebar = memo(function PricingSidebar(
           options={groupOptions}
           onChange={props.onGroupChange}
         />
+        {configGroupOptions.length > 0 && (
+          <FilterSection
+            title={t('Config Groups')}
+            value={props.groupFilter}
+            options={configGroupOptions}
+            onChange={props.onGroupChange}
+          />
+        )}
         <FilterSection
           title={t('All Vendors')}
           value={props.vendorFilter}

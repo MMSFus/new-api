@@ -2,12 +2,17 @@ package service
 
 import (
 	"errors"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -42,6 +47,44 @@ func isConcreteBillingGroup(group string) bool {
 	return group != "" && group != "auto"
 }
 
+// groupBalanceInsufficientError 是按用户语言渲染的分组余额不足错误。
+// Unwrap 保留原始明细，errors.Is(err, model.ErrInsufficientGroupBalance) 仍成立。
+type groupBalanceInsufficientError struct {
+	message string
+	detail  *model.GroupBalanceInsufficientError
+}
+
+func (e *groupBalanceInsufficientError) Error() string { return e.message }
+
+func (e *groupBalanceInsufficientError) Unwrap() error { return e.detail }
+
+// NewGroupBalanceInsufficientAPIError 以 lang 本地化分组余额不足错误（余额类型
+// 显示为本地化名称），并保持 403 + insufficient_user_quota + 不重试的语义。
+func NewGroupBalanceInsufficientAPIError(lang string, detail *model.GroupBalanceInsufficientError) *types.NewAPIError {
+	group := detail.Group
+	if group == "" {
+		group = "default"
+	}
+	names := make([]string, 0, len(detail.Buckets))
+	for _, bucket := range detail.Buckets {
+		key := i18n.MsgBalanceBucketPrefix + bucket
+		name := i18n.Translate(lang, key)
+		if name == key {
+			name = bucket
+		}
+		names = append(names, name)
+	}
+	message := i18n.Translate(lang, i18n.MsgBalanceGroupInsufficient, map[string]any{
+		"Group":     group,
+		"Buckets":   strings.Join(names, i18n.Translate(lang, i18n.MsgBalanceBucketSeparator)),
+		"Available": logger.FormatQuota(detail.Available),
+		"Required":  logger.FormatQuota(detail.Required),
+	})
+	return types.NewErrorWithStatusCode(&groupBalanceInsufficientError{message: message, detail: detail},
+		types.ErrorCodeInsufficientUserQuota, http.StatusForbidden,
+		types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+}
+
 // ---------------------------------------------------------------------------
 // FundingSource — 资金来源接口（钱包 or 订阅）
 // ---------------------------------------------------------------------------
@@ -72,10 +115,10 @@ var ErrInsufficientWalletQuota = errors.New("wallet quota insufficient")
 type WalletFunding struct {
 	userId    int
 	group     string
-	consumed  int                  // 实际预扣的用户额度
-	available int                  // 创建会话时分组可用余额（信任额度判断用）
-	ledger    common.BalanceLedger // 各余额桶扣减明细
-	groupErr  error                // 最近一次分组余额不足的明细
+	consumed  int                                  // 实际预扣的用户额度
+	available int                                  // 创建会话时分组可用余额（信任额度判断用）
+	ledger    common.BalanceLedger                 // 各余额桶扣减明细
+	groupErr  *model.GroupBalanceInsufficientError // 最近一次分组余额不足的明细
 }
 
 func (w *WalletFunding) Source() string { return BillingSourceWallet }
@@ -89,7 +132,7 @@ func (w *WalletFunding) PreConsume(amount int) error {
 	}
 	ledger, err := model.ReserveUserBalance(w.userId, w.group, amount)
 	if errors.Is(err, model.ErrInsufficientGroupBalance) {
-		w.groupErr = err
+		errors.As(err, &w.groupErr)
 		return ErrInsufficientWalletQuota
 	}
 	if err != nil {

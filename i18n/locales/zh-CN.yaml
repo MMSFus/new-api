@@ -123,6 +123,14 @@ quota.insufficient: "额度不足"
 quota.warning_invalid: "无效的预警类型"
 quota.threshold_gt_zero: "预警阈值必须大于0"
 
+# Balance bucket messages
+balance.group_insufficient: "分组 {{.Group}} 可用余额不足（可用余额类型：{{.Buckets}}），可用 {{.Available}}，需要 {{.Required}}"
+balance.bucket_separator: "、"
+balance.bucket.topup: "充值余额"
+balance.bucket.aff_rebate: "邀请返现余额"
+balance.bucket.invite_bonus: "邀请激励余额"
+balance.bucket.gift: "赠送余额"
+
 # Subscription messages
 subscription.not_enabled: "套餐未启用"
 subscription.title_empty: "套餐标题不能为空"

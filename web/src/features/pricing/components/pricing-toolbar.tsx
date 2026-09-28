@@ -46,7 +46,12 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { cn } from '@/lib/utils'
 
 import { getSortLabels, type SortOption, type ViewMode } from '../constants'
-import type { PricingModel, PricingVendor, TokenUnit } from '../types'
+import type {
+  PricingConfigGroup,
+  PricingModel,
+  PricingVendor,
+  TokenUnit,
+} from '../types'
 import { PricingSidebar } from './pricing-sidebar'
 
 export interface PricingToolbarProps {
@@ -73,6 +78,7 @@ export interface PricingToolbarProps {
   vendors: PricingVendor[]
   groups: string[]
   groupRatios?: Record<string, number>
+  configGroups?: PricingConfigGroup[]
   tags: string[]
   models: PricingModel[]
   hasActiveFilters: boolean
@@ -217,6 +223,7 @@ export function PricingToolbar(props: PricingToolbarProps) {
               vendors={props.vendors}
               groups={props.groups}
               groupRatios={props.groupRatios}
+              configGroups={props.configGroups}
               tags={props.tags}
               models={props.models}
               hasActiveFilters={props.hasActiveFilters}

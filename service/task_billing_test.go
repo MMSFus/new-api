@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
@@ -27,6 +28,10 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	// 余额不足等计费错误会按用户语言渲染，i18n 未初始化时 Translate 会空指针。
+	if err := i18n.Init(); err != nil {
+		panic("failed to init i18n: " + err.Error())
+	}
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
 		panic("failed to open test db: " + err.Error())
