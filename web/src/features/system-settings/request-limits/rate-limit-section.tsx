@@ -45,26 +45,21 @@ import {
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
+import {
+  isValidRateLimitJSON,
+  migrateLegacyRateLimits,
+  parseRateLimitEntries,
+  type RateLimitMode,
+} from './rate-limit-rules'
 import { RateLimitVisualEditor } from './rate-limit-visual-editor'
 
-const isValidJSON = (value: string | undefined) => {
-  if (!value || value.trim() === '') return true
-  try {
-    const parsed = JSON.parse(value)
-    if (typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return false
-    }
-    for (const [, val] of Object.entries(parsed)) {
-      if (!Array.isArray(val) || val.length !== 2) return false
-      if (typeof val[0] !== 'number' || typeof val[1] !== 'number') return false
-      if (val[0] < 0 || val[1] < 1) return false
-      if (val[0] > 2147483647 || val[1] > 2147483647) return false
-    }
-    return true
-  } catch {
-    return false
-  }
-}
+const groupRulesSchema = (t: (key: string) => string, mode: RateLimitMode) =>
+  z
+    .string()
+    .optional()
+    .refine((value) => isValidRateLimitJSON(mode, value), {
+      message: t('Invalid JSON format or values out of allowed range'),
+    })
 
 const createRateLimitSchema = (t: (key: string) => string) =>
   z.object({
@@ -72,15 +67,59 @@ const createRateLimitSchema = (t: (key: string) => string) =>
     ModelRequestRateLimitDurationMinutes: z.number().min(0),
     ModelRequestRateLimitCount: z.number().min(0).max(100000000),
     ModelRequestRateLimitSuccessCount: z.number().min(1).max(100000000),
-    ModelRequestRateLimitGroup: z
-      .string()
-      .optional()
-      .refine(isValidJSON, {
-        message: t('Invalid JSON format or values out of allowed range'),
-      }),
+    ModelRequestRateLimitGroup: groupRulesSchema(t, 'legacy'),
+    ModelRequestRateLimitGlobalGroup: groupRulesSchema(t, 'global'),
+    ModelRequestRateLimitPrivateGroup: groupRulesSchema(t, 'private'),
   })
 
 type RateLimitFormValues = z.infer<ReturnType<typeof createRateLimitSchema>>
+
+type GroupRuleFieldName =
+  | 'ModelRequestRateLimitGlobalGroup'
+  | 'ModelRequestRateLimitPrivateGroup'
+  | 'ModelRequestRateLimitGroup'
+
+type GroupRuleField = {
+  name: GroupRuleFieldName
+  mode: RateLimitMode
+  label: string
+  description: string
+  placeholder: string
+  format: string
+}
+
+const RULE_FORMAT = '{"total": n, "success": n, "duration"?: minutes}'
+
+const GROUP_RULE_FIELDS: GroupRuleField[] = [
+  {
+    name: 'ModelRequestRateLimitGlobalGroup',
+    mode: 'global',
+    label: 'Global group rate limits',
+    description:
+      'Applies to every user who calls the group. Counted per user and called group.',
+    placeholder: `{\n  "claude": {"total": 200, "success": 100},\n  "gpt": {"total": 0, "success": 1000, "duration": 5}\n}`,
+    format: `{"calledGroup": ${RULE_FORMAT}}`,
+  },
+  {
+    name: 'ModelRequestRateLimitPrivateGroup',
+    mode: 'private',
+    label: 'Private group rate limits',
+    description:
+      'Applies when users of a user group call a group. "*" matches any called group. Overrides global rules.',
+    placeholder: `{\n  "vip": {\n    "claude": {"total": 0, "success": 500},\n    "*": {"total": 0, "success": 2000}\n  }\n}`,
+    format: `{"userGroup": {"calledGroup" | "*": ${RULE_FORMAT}}}`,
+  },
+]
+
+const LEGACY_RULE_FIELD: GroupRuleField = {
+  name: 'ModelRequestRateLimitGroup',
+  mode: 'legacy',
+  label: 'Legacy group rate limits',
+  description:
+    'Deprecated. Looked up by the token group, falling back to the user group, and counted per user across all groups. Still applied when no global or private rule matches. Migrating copies each entry to a global rule for that group (existing global rules are kept) and clears this table.',
+  placeholder: `{\n  "default": [200, 100],\n  "vip": [0, 1000]\n}`,
+  format: '{"groupName": [maxRequests, maxSuccess]}',
+}
 
 type RateLimitSectionProps = {
   defaultValues: RateLimitFormValues
@@ -103,6 +142,32 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
     form.reset(defaultValues)
   }, [defaultValues, form])
 
+  const legacyValue = form.watch('ModelRequestRateLimitGroup') || ''
+  const hasLegacyRules = parseRateLimitEntries('legacy', legacyValue).length > 0
+  // Keep the legacy table visible while it was non-empty when loaded, so a
+  // migration can be reviewed before saving.
+  const showLegacy =
+    hasLegacyRules ||
+    parseRateLimitEntries(
+      'legacy',
+      defaultValues.ModelRequestRateLimitGroup || ''
+    ).length > 0
+
+  const migrateLegacy = () => {
+    const migrated = migrateLegacyRateLimits(
+      legacyValue,
+      form.getValues('ModelRequestRateLimitGlobalGroup') || ''
+    )
+    form.setValue('ModelRequestRateLimitGlobalGroup', migrated, {
+      shouldDirty: true,
+      shouldValidate: true,
+    })
+    form.setValue('ModelRequestRateLimitGroup', '{}', {
+      shouldDirty: true,
+      shouldValidate: true,
+    })
+  }
+
   const onSubmit = async (values: RateLimitFormValues) => {
     const updates = Object.entries(values).filter(
       ([key, value]) =>
@@ -113,6 +178,65 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
       await updateOption.mutateAsync({ key, value: value ?? '' })
     }
   }
+
+  const renderRuleField = (rule: GroupRuleField) => (
+    <FormField
+      key={rule.name}
+      control={form.control}
+      name={rule.name}
+      render={({ field }) => (
+        <FormItem>
+          <div className='flex items-center justify-between gap-4'>
+            <FormLabel>{t(rule.label)}</FormLabel>
+            {rule.mode === 'legacy' && hasLegacyRules && (
+              <Button
+                type='button'
+                variant='outline'
+                size='sm'
+                onClick={migrateLegacy}
+              >
+                {t('Migrate to global rules')}
+              </Button>
+            )}
+          </div>
+          <FormDescription>{t(rule.description)}</FormDescription>
+          <FormControl>
+            {useVisualEditor ? (
+              <RateLimitVisualEditor
+                mode={rule.mode}
+                value={field.value || ''}
+                onChange={field.onChange}
+              />
+            ) : (
+              <JsonCodeEditor
+                value={field.value || ''}
+                onChange={field.onChange}
+                name={field.name}
+                onBlur={field.onBlur}
+                textareaRef={field.ref}
+                placeholder={rule.placeholder}
+                aria-invalid={Boolean(form.formState.errors[rule.name])}
+              />
+            )}
+          </FormControl>
+          {!useVisualEditor && (
+            <FormDescription>
+              <span className='text-xs'>
+                {t('Format:')} {rule.format}
+                {rule.mode === 'legacy' && (
+                  <>
+                    {' · '}
+                    {t('maxRequests ≥ 0, maxSuccess ≥ 1, both ≤ 2,147,483,647')}
+                  </>
+                )}
+              </span>
+            </FormDescription>
+          )}
+          <FormMessage />
+        </FormItem>
+      )}
+    />
+  )
 
   return (
     <SettingsSection title={t('Rate Limiting')}>
@@ -161,7 +285,7 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                         step={1}
                         {...field}
                         onChange={(e) =>
-                          field.onChange(parseInt(e.target.value) || 0)
+                          field.onChange(Number.parseInt(e.target.value) || 0)
                         }
                       />
                       <span className='text-muted-foreground text-sm'>
@@ -192,7 +316,7 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                         step={1}
                         {...field}
                         onChange={(e) =>
-                          field.onChange(parseInt(e.target.value) || 0)
+                          field.onChange(Number.parseInt(e.target.value) || 0)
                         }
                       />
                       <span className='text-muted-foreground text-sm'>
@@ -223,7 +347,7 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                         step={1}
                         {...field}
                         onChange={(e) =>
-                          field.onChange(parseInt(e.target.value) || 1)
+                          field.onChange(Number.parseInt(e.target.value) || 1)
                         }
                       />
                       <span className='text-muted-foreground text-sm'>
@@ -240,83 +364,39 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
             />
           </div>
 
-          <FormField
-            control={form.control}
-            name='ModelRequestRateLimitGroup'
-            render={({ field }) => (
-              <FormItem>
-                <div className='flex items-center justify-between'>
-                  <FormLabel>{t('Group-based rate limits')}</FormLabel>
-                  <Button
-                    type='button'
-                    variant='outline'
-                    size='sm'
-                    onClick={() => setUseVisualEditor(!useVisualEditor)}
-                  >
-                    {useVisualEditor ? (
-                      <>
-                        <Code2 className='mr-2 h-4 w-4' />
-                        {t('JSON Mode')}
-                      </>
-                    ) : (
-                      <>
-                        <Palette className='mr-2 h-4 w-4' />
-                        {t('Visual Mode')}
-                      </>
-                    )}
-                  </Button>
-                </div>
-                <FormControl>
-                  {useVisualEditor ? (
-                    <RateLimitVisualEditor
-                      value={field.value || ''}
-                      onChange={field.onChange}
-                    />
-                  ) : (
-                    <JsonCodeEditor
-                      value={field.value || ''}
-                      onChange={field.onChange}
-                      name={field.name}
-                      onBlur={field.onBlur}
-                      textareaRef={field.ref}
-                      placeholder={`{\n  "default": [200, 100],\n  "vip": [0, 1000]\n}`}
-                      aria-invalid={Boolean(
-                        form.formState.errors.ModelRequestRateLimitGroup
-                      )}
-                    />
-                  )}
-                </FormControl>
-                {!useVisualEditor && (
-                  <FormDescription>
-                    <div className='space-y-1 text-xs'>
-                      <p className='font-semibold'>{t('Format:')}</p>
-                      <ul className='list-inside list-disc space-y-0.5 pl-2'>
-                        <li>
-                          {t('JSON object:')}{' '}
-                          {`{"groupName": [maxRequests, maxSuccess]}`}
-                        </li>
-                        <li>
-                          {t('Example:')}{' '}
-                          {`{"default": [200, 100], "vip": [0, 1000]}`}
-                        </li>
-                        <li>
-                          {t(
-                            'maxRequests ≥ 0, maxSuccess ≥ 1, both ≤ 2,147,483,647'
-                          )}
-                        </li>
-                        <li>
-                          {t(
-                            'Group config overrides global limits, shares the same period'
-                          )}
-                        </li>
-                      </ul>
-                    </div>
-                  </FormDescription>
+          <div className='flex items-start justify-between gap-4'>
+            <div className='space-y-1'>
+              <p className='text-sm font-medium'>
+                {t('Group-based rate limits')}
+              </p>
+              <p className='text-muted-foreground text-xs'>
+                {t(
+                  'Priority: private rule for the called group > private "*" rule > global rule > legacy group limit > default limits above.'
                 )}
-                <FormMessage />
-              </FormItem>
-            )}
-          />
+              </p>
+            </div>
+            <Button
+              type='button'
+              variant='outline'
+              size='sm'
+              onClick={() => setUseVisualEditor(!useVisualEditor)}
+            >
+              {useVisualEditor ? (
+                <>
+                  <Code2 className='mr-2 h-4 w-4' />
+                  {t('JSON Mode')}
+                </>
+              ) : (
+                <>
+                  <Palette className='mr-2 h-4 w-4' />
+                  {t('Visual Mode')}
+                </>
+              )}
+            </Button>
+          </div>
+
+          {GROUP_RULE_FIELDS.map(renderRuleField)}
+          {showLegacy && renderRuleField(LEGACY_RULE_FIELD)}
         </SettingsForm>
       </Form>
     </SettingsSection>
