@@ -13,12 +13,12 @@ const (
 	BalanceBucketDebt = "debt"
 )
 
-// defaultBalanceBucketOrder 是未配置分组的默认扣费顺序：先用赠送类余额，
-// 最后用充值余额，尽量保留可在受限分组使用的付费余额。
+// defaultBalanceBucketOrder 是未配置分组的默认扣费顺序：
+// 邀请激励 → 邀请返现 → 赠送 → 充值，最后才用付费充值余额。
 var defaultBalanceBucketOrder = []string{
-	BalanceBucketGift,
 	BalanceBucketInviteBonus,
 	BalanceBucketAffRebate,
+	BalanceBucketGift,
 	BalanceBucketTopup,
 }
 

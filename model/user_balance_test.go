@@ -220,10 +220,10 @@ func TestReserveRespectsGroupBucketsAndRefundsLIFO(t *testing.T) {
 	assert.Equal(t, common.BalanceLedger{{Bucket: "gift", Amount: 40}}, ledger)
 	assert.Equal(t, BalanceBuckets{Topup: 100, Gift: 10, InviteBonus: 20}, loadBalance(t, user.Id))
 
-	// 未配置分组使用默认顺序 gift → invite_bonus → aff_rebate → topup。
+	// 未配置分组使用默认顺序 invite_bonus → aff_rebate → gift → topup。
 	ledger, err = ReserveUserBalance(user.Id, "default", 40)
 	require.NoError(t, err)
-	assert.Equal(t, common.BalanceLedger{{Bucket: "gift", Amount: 10}, {Bucket: "invite_bonus", Amount: 20}, {Bucket: "topup", Amount: 10}}, ledger)
+	assert.Equal(t, common.BalanceLedger{{Bucket: "invite_bonus", Amount: 20}, {Bucket: "gift", Amount: 10}, {Bucket: "topup", Amount: 10}}, ledger)
 	require.NoError(t, RefundUserBalance(user.Id, ledger))
 	assert.Equal(t, BalanceBuckets{Topup: 100, Gift: 10, InviteBonus: 20}, loadBalance(t, user.Id))
 
