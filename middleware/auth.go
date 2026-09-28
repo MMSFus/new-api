@@ -454,6 +454,13 @@ func TokenAuth() func(c *gin.Context) {
 
 		userGroup := userCache.Group
 		tokenGroup := token.Group
+		configGroup, isConfigGroup, ok := resolveTokenConfigGroup(c, userGroup, tokenGroup)
+		if !ok {
+			return
+		}
+		if isConfigGroup {
+			tokenGroup = ""
+		}
 		if tokenGroup != "" {
 			// check common.UserUsableGroups[userGroup]
 			if _, ok := service.GetUserUsableGroups(userGroup)[tokenGroup]; !ok {
@@ -474,6 +481,9 @@ func TokenAuth() func(c *gin.Context) {
 		err = SetupContextForToken(c, token, parts...)
 		if err != nil {
 			return
+		}
+		if isConfigGroup {
+			service.ApplyConfigGroupContext(c, configGroup)
 		}
 		c.Next()
 	}

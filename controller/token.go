@@ -87,6 +87,21 @@ func getTokenRequestUserGroup(c *gin.Context) (string, error) {
 	return model.GetUserGroup(c.GetInt("id"), false)
 }
 
+// validateTokenConfigGroup checks that a "cfg:<key>" token group refers to a
+// config group the requesting user can currently use.
+func validateTokenConfigGroup(c *gin.Context, key string) bool {
+	userGroup, err := getTokenRequestUserGroup(c)
+	if err != nil {
+		common.ApiError(c, err)
+		return false
+	}
+	if _, err := service.ResolveUserConfigGroup(userGroup, key); err != nil {
+		common.ApiErrorI18n(c, service.ConfigGroupErrorMessageKey(err), map[string]any{"Group": key})
+		return false
+	}
+	return true
+}
+
 func setTokenAutoGroups(c *gin.Context, token *model.Token, groups []string) bool {
 	if len(groups) == 0 {
 		if err := token.SetAutoGroups(nil); err != nil {
@@ -180,8 +195,9 @@ func GetTokenAutoGroups(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, gin.H{
-		"groups":    service.GetUserAutoGroup(userGroup),
-		"max_count": setting.GetMaxTokenAutoGroups(),
+		"groups":        service.GetUserAutoGroup(userGroup),
+		"max_count":     setting.GetMaxTokenAutoGroups(),
+		"config_groups": service.GetUserConfigGroups(userGroup),
 	})
 }
 
@@ -315,7 +331,12 @@ func AddToken(c *gin.Context) {
 		})
 		return
 	}
-	if token.Group == "auto" {
+	if key, ok := setting.ParseConfigGroupRef(token.Group); ok {
+		if !validateTokenConfigGroup(c, key) {
+			return
+		}
+		_ = token.SetAutoGroups(nil)
+	} else if token.Group == "auto" {
 		if !setTokenAutoGroups(c, &token, request.AutoGroups.Groups) {
 			return
 		}
@@ -439,7 +460,12 @@ func UpdateToken(c *gin.Context) {
 		cleanToken.AllowIps = token.AllowIps
 		cleanToken.Group = token.Group
 		cleanToken.CrossGroupRetry = token.CrossGroupRetry
-		if token.Group != "auto" {
+		if key, ok := setting.ParseConfigGroupRef(token.Group); ok {
+			if !validateTokenConfigGroup(c, key) {
+				return
+			}
+			_ = cleanToken.SetAutoGroups(nil)
+		} else if token.Group != "auto" {
 			cleanToken.CrossGroupRetry = false
 			_ = cleanToken.SetAutoGroups(nil)
 		} else if request.AutoGroups.Set {

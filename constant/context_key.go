@@ -21,6 +21,10 @@ const (
 	ContextKeyTokenModelLimit        ContextKey = "token_model_limit"
 	ContextKeyTokenCrossGroupRetry   ContextKey = "token_cross_group_retry"
 	ContextKeyTokenAutoGroups        ContextKey = "token_auto_groups"
+	// ContextKeyTokenConfigGroup holds the config group key of the token.
+	ContextKeyTokenConfigGroup ContextKey = "token_config_group"
+	// ContextKeyTokenConfigGroupGroups holds the resolved ordered groups.
+	ContextKeyTokenConfigGroupGroups ContextKey = "token_config_group_groups"
 
 	/* channel related keys */
 	ContextKeyChannelId                ContextKey = "channel_id"
