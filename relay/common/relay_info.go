@@ -143,6 +143,9 @@ type RelayInfo struct {
 	// BillingSource indicates whether this request is billed from wallet quota or subscription.
 	// "" or "wallet" => wallet; "subscription" => subscription
 	BillingSource string
+	// WalletBalanceLedger 记录钱包计费从各余额桶扣减的明细（按扣费顺序），
+	// 异步任务据此持久化，保证后续退款退回原余额桶。
+	WalletBalanceLedger common.BalanceLedger
 	// SubscriptionId is the user_subscriptions.id used when BillingSource == "subscription"
 	SubscriptionId int
 	// SubscriptionPreConsumed is the amount pre-consumed on subscription item (quota units or 1)

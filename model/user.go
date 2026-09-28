@@ -112,6 +112,11 @@ type User struct {
 	LastLoginAt          int64                      `json:"last_login_at" gorm:"default:0;column:last_login_at"`
 	AuthVersion          int64                      `json:"-" gorm:"type:bigint;not null;default:1;column:auth_version"`
 	AdminPermissions     map[string]map[string]bool `json:"admin_permissions,omitempty" gorm:"-:all"`
+	QuotaTopup           int                        `json:"quota_topup" gorm:"type:bigint;not null;default:0;column:quota_topup"` // 余额分桶，仅由 user_balance.go 维护
+	QuotaAffRebate       int                        `json:"quota_aff_rebate" gorm:"type:bigint;not null;default:0;column:quota_aff_rebate"`
+	QuotaInviteBonus     int                        `json:"quota_invite_bonus" gorm:"type:bigint;not null;default:0;column:quota_invite_bonus"`
+	QuotaGift            int                        `json:"quota_gift" gorm:"type:bigint;not null;default:0;column:quota_gift"`
+	QuotaDebt            int                        `json:"quota_debt" gorm:"type:bigint;not null;default:0;column:quota_debt"` // quota = 各桶之和 + debt
 }
 
 func (user *User) ToBaseUser() *UserBase {
@@ -548,6 +553,7 @@ func GetSelfUserById(id int) (*User, error) {
 		"group", "quota", "used_quota", "request_count", "aff_code", "aff_count",
 		"aff_quota", "aff_history", "inviter_id", "linux_do_id", "setting",
 		"stripe_customer", "auth_version",
+		"quota_topup", "quota_aff_rebate", "quota_invite_bonus", "quota_gift", "quota_debt",
 		"CASE WHEN password <> '' THEN 1 ELSE 0 END AS has_password",
 	}).First(&profile, "id = ?", id).Error
 	profile.User.HasPassword = profile.HasPassword
@@ -600,35 +606,22 @@ func (user *User) TransferAffQuotaToQuota(quota int) error {
 		return fmt.Errorf("转移额度最小为%s！", logger.LogQuota(common.QuotaFromFloat(common.QuotaPerUnit)))
 	}
 
-	// 开始数据库事务
-	tx := DB.Begin()
-	if tx.Error != nil {
-		return tx.Error
-	}
-	defer tx.Rollback() // 确保在函数退出时事务能回滚
-
-	// 加锁查询用户以确保数据一致性
-	err := lockForUpdate(tx).First(user, user.Id).Error
+	// 邀请返利划转计入邀请返现余额；aff_quota 条件扣减与余额入账同一事务完成。
+	_, err := runBalanceTransaction(user.Id, func(tx *gorm.DB) (int, error) {
+		result := tx.Model(&User{}).Where("id = ? AND aff_quota >= ?", user.Id, quota).
+			Update("aff_quota", gorm.Expr("aff_quota - ?", quota))
+		if result.Error != nil {
+			return 0, result.Error
+		}
+		if result.RowsAffected != 1 {
+			return 0, errors.New("邀请额度不足！")
+		}
+		return mutateUserBalanceTx(tx, user.Id, creditMutation(common.BalanceBucketAffRebate, quota, ErrWalletQuotaLimitExceeded))
+	})
 	if err != nil {
 		return err
 	}
-
-	// 再次检查用户的AffQuota是否足够
-	if user.AffQuota < quota {
-		return errors.New("邀请额度不足！")
-	}
-
-	// 更新用户额度
-	user.AffQuota -= quota
-	user.Quota += quota
-
-	// 保存用户状态
-	if err := tx.Save(user).Error; err != nil {
-		return err
-	}
-
-	// 提交事务
-	return tx.Commit().Error
+	return DB.Where("id = ?", user.Id).Take(user).Error
 }
 
 func (user *User) prepareForInsert(tx *gorm.DB) error {
@@ -688,7 +681,7 @@ func (user *User) Insert(inviterId int) error {
 			if err := user.prepareForInsert(tx); err != nil {
 				return err
 			}
-			user.Quota = common.QuotaForNewUser
+			user.setInitialGiftQuota(common.QuotaForNewUser)
 			user.AffCode = common.GetRandomString(4)
 
 			// 初始化用户设置，包括默认的边栏配置
@@ -729,7 +722,7 @@ func (user *User) finishInsert(inviterId int) {
 	}
 	if inviterId != 0 && operation_setting.IsPaymentComplianceConfirmed() {
 		if common.QuotaForInvitee > 0 {
-			_ = IncreaseUserQuota(user.Id, common.QuotaForInvitee, true)
+			_ = CreditUserBalance(user.Id, common.BalanceBucketInviteBonus, common.QuotaForInvitee)
 			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(common.QuotaForInvitee)))
 		}
 		if common.QuotaForInviter > 0 {
@@ -752,7 +745,7 @@ func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
 		if err := user.prepareForInsert(tx); err != nil {
 			return err
 		}
-		user.Quota = common.QuotaForNewUser
+		user.setInitialGiftQuota(common.QuotaForNewUser)
 		user.AffCode = common.GetRandomString(4)
 
 		// 初始化用户设置
@@ -786,7 +779,7 @@ func (user *User) FinalizeOAuthUserCreation(inviterId int) {
 	}
 	if inviterId != 0 && operation_setting.IsPaymentComplianceConfirmed() {
 		if common.QuotaForInvitee > 0 {
-			_ = IncreaseUserQuota(user.Id, common.QuotaForInvitee, true)
+			_ = CreditUserBalance(user.Id, common.BalanceBucketInviteBonus, common.QuotaForInvitee)
 			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(common.QuotaForInvitee)))
 		}
 		if common.QuotaForInviter > 0 {
@@ -851,6 +844,11 @@ func (user *User) UpdateWithTx(tx *gorm.DB, updatePassword bool) error {
 		"aff_quota",
 		"aff_history",
 		"auth_version",
+		"quota_topup",
+		"quota_aff_rebate",
+		"quota_invite_bonus",
+		"quota_gift",
+		"quota_debt",
 	).Updates(newUser).Error; err != nil {
 		return err
 	}
@@ -1330,6 +1328,9 @@ func GetUserSetting(id int, fromDB bool) (settingMap dto.UserSetting, err error)
 	return userBase.GetSetting(), nil
 }
 
+// IncreaseUserQuota 退还来源未知的额度（无扣费账本的旧调用路径）。
+// 额度计入用户所在分组扣费顺序的第一个余额桶，详见 RefundUserBalanceForGroup。
+// 钱包写入总是直写数据库并在提交后同步缓存，db 参数仅为兼容保留。
 func IncreaseUserQuota(id int, quota int, db bool) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
@@ -1337,68 +1338,18 @@ func IncreaseUserQuota(id int, quota int, db bool) (err error) {
 	if err := common.ValidateWalletQuota(quota); err != nil {
 		return err
 	}
-	if !db && common.BatchUpdateEnabled {
-		addNewRecord(BatchUpdateTypeUserQuota, id, quota)
-		gopool.Go(func() {
-			if err := cacheIncrUserQuota(id, int64(quota)); err != nil {
-				common.SysLog("failed to increase user quota: " + err.Error())
-			}
-		})
+	if quota == 0 {
 		return nil
 	}
-	if err := increaseUserQuota(id, quota); err != nil {
-		return err
-	}
-	gopool.Go(func() {
-		if err := cacheIncrUserQuota(id, int64(quota)); err != nil {
-			common.SysLog("failed to increase user quota: " + err.Error())
-		}
-	})
-	return nil
+	return RefundUserBalanceForUserGroup(id, quota)
 }
 
-func increaseUserQuota(id int, quota int) (err error) {
-	result := DB.Model(&User{}).
-		Where("id = ? AND quota <= ?", id, common.MaxWalletQuota-quota).
-		Update("quota", gorm.Expr("quota + ?", quota))
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 1 {
-		return nil
-	}
-	var count int64
-	if err := DB.Model(&User{}).Where("id = ?", id).Count(&count).Error; err != nil {
-		return err
-	}
-	if count == 0 {
-		return gorm.ErrRecordNotFound
-	}
-	return ErrWalletQuotaLimitExceeded
-}
-
+// DecreaseUserQuota 按默认顺序扣减额度，余额不足时记为欠费（与旧版语义一致）。
 func DecreaseUserQuota(id int, quota int, db bool) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
 	}
-	gopool.Go(func() {
-		err := cacheDecrUserQuota(id, int64(quota))
-		if err != nil {
-			common.SysLog("failed to decrease user quota: " + err.Error())
-		}
-	})
-	if !db && common.BatchUpdateEnabled {
-		addNewRecord(BatchUpdateTypeUserQuota, id, -quota)
-		return nil
-	}
-	return decreaseUserQuota(id, quota)
-}
-
-func decreaseUserQuota(id int, quota int) (err error) {
-	err = DB.Model(&User{}).Where("id = ?", id).Update("quota", gorm.Expr("quota - ?", quota)).Error
-	if err != nil {
-		return err
-	}
+	_, err = DebitUserBalance(id, "", quota)
 	return err
 }
 
@@ -1408,9 +1359,8 @@ func DeltaUpdateUserQuota(id int, delta int) (err error) {
 	}
 	if delta > 0 {
 		return IncreaseUserQuota(id, delta, false)
-	} else {
-		return DecreaseUserQuota(id, -delta, false)
 	}
+	return DecreaseUserQuota(id, -delta, false)
 }
 
 //func GetRootUserEmail() (email string) {

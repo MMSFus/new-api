@@ -3,7 +3,6 @@ package model
 import (
 	"errors"
 	"fmt"
-	"maps"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
@@ -83,37 +82,20 @@ func ValidateTopUpQuotaCapacity(userId int, creditedQuota int) error {
 	return nil
 }
 
-// creditTopUpQuota atomically enforces the wallet ceiling while adding quota.
-// Keeping the predicate and increment in one UPDATE prevents two
-// concurrent callbacks from both passing a separate read/check.
+// creditTopUpQuota 在调用方事务中把充值额度计入充值余额（topup 桶），
+// 同时校验钱包上限并写入附加字段。余额行被锁定并以比较并交换方式写回，
+// 两个并发回调不会同时通过上限检查。调用方提交后须同步缓存。
 func creditTopUpQuota(tx *gorm.DB, userId int, creditedQuota int, updates map[string]any) error {
-	maxCurrentQuota, err := topUpQuotaMaxCurrent(creditedQuota)
-	if err != nil {
+	if _, err := topUpQuotaMaxCurrent(creditedQuota); err != nil {
 		return err
 	}
-
-	updateFields := make(map[string]any, len(updates)+1)
-	maps.Copy(updateFields, updates)
-	updateFields["quota"] = gorm.Expr("quota + ?", creditedQuota)
-
-	result := tx.Model(&User{}).
-		Where("id = ? AND quota <= ?", userId, maxCurrentQuota).
-		Updates(updateFields)
-	if result.Error != nil {
-		return result.Error
+	if err := CreditUserBalanceTx(tx, userId, common.BalanceBucketTopup, creditedQuota, ErrTopUpQuotaLimitExceeded); err != nil {
+		return err
 	}
-	if result.RowsAffected == 1 {
+	if len(updates) == 0 {
 		return nil
 	}
-
-	var count int64
-	if err := tx.Model(&User{}).Where("id = ?", userId).Count(&count).Error; err != nil {
-		return err
-	}
-	if count == 0 {
-		return gorm.ErrRecordNotFound
-	}
-	return ErrTopUpQuotaLimitExceeded
+	return tx.Model(&User{}).Where("id = ?", userId).Updates(updates).Error
 }
 
 func (topUp *TopUp) Update() error {

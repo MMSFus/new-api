@@ -782,18 +782,19 @@ func PurchaseSubscriptionWithBalance(userId int, planId int) error {
 			return err
 		}
 
-		var user User
-		if err := lockForUpdate(tx).Where("id = ?", userId).First(&user).Error; err != nil {
-			return err
-		}
-		if requiredQuota > 0 && user.Quota < requiredQuota {
-			return errors.New("余额不足")
-		}
+		// 余额购买订阅不属于某个分组的调用，可使用全部余额，按默认顺序扣减。
 		if requiredQuota > 0 {
-			if err := tx.Model(&User{}).Where("id = ?", userId).
-				Update("quota", gorm.Expr("quota - ?", requiredQuota)).Error; err != nil {
+			if _, err := mutateUserBalanceTx(tx, userId, func(b *BalanceBuckets) error {
+				ledger, remaining := b.debit(common.DefaultBalanceBucketOrder(), requiredQuota, false)
+				if remaining > 0 || ledger.Total() != requiredQuota {
+					return errors.New("余额不足")
+				}
+				return nil
+			}); err != nil {
 				return err
 			}
+		} else if err := lockForUpdate(tx).Select("id").Where("id = ?", userId).Take(&User{}).Error; err != nil {
+			return err
 		}
 
 		subscription, err := CreateUserSubscriptionFromPlanTx(tx, userId, plan, PaymentMethodBalance)
