@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"slices"
 	"strings"
 	"time"
 
@@ -421,12 +422,21 @@ func RefundUserBalance(userId int, entries common.BalanceLedger) error {
 	return err
 }
 
-// RefundUserBalanceForGroup 退还来源未知的额度（无扣费账本的旧路径）：
-// 计入该分组扣费顺序中的第一个余额桶，即最先被扣的那一类，避免把赠送类
-// 余额经退款"洗"成充值余额。
-func RefundUserBalanceForGroup(userId int, group string, amount int) error {
+// unknownRefundBucket 返回来源未知的退款应计入的余额桶：分组允许赠送余额时
+// 计入赠送，否则计入该分组扣费顺序中的第一个桶。来源未知的钱不能经退款
+// "洗"成权限更高的充值余额，同时要保证退款在该分组内仍可使用。
+func unknownRefundBucket(group string) string {
 	order := setting.GetGroupBalanceBuckets(group)
-	return CreditUserBalance(userId, order[0], amount)
+	if slices.Contains(order, common.BalanceBucketGift) {
+		return common.BalanceBucketGift
+	}
+	return order[0]
+}
+
+// RefundUserBalanceForGroup 退还来源未知的额度（无扣费账本的旧路径），
+// 计入 unknownRefundBucket 选出的余额桶。
+func RefundUserBalanceForGroup(userId int, group string, amount int) error {
+	return CreditUserBalance(userId, unknownRefundBucket(group), amount)
 }
 
 // RefundUserBalanceForUserGroup 与 RefundUserBalanceForGroup 相同，但在同一事务中
@@ -443,14 +453,13 @@ func RefundUserBalanceForUserGroup(userId int, amount int) error {
 		if err := tx.Where("id = ?", userId).Take(&user).Error; err != nil { // 读整行：group 在 MySQL/PG 上是保留字
 			return 0, err
 		}
-		order := setting.GetGroupBalanceBuckets(user.Group)
-		return mutateUserBalanceTx(tx, userId, creditMutation(order[0], amount, ErrWalletQuotaLimitExceeded))
+		return mutateUserBalanceTx(tx, userId, creditMutation(unknownRefundBucket(user.Group), amount, ErrWalletQuotaLimitExceeded))
 	})
 	return err
 }
 
 // RefundUserBalanceWithLedger 退还 amount：优先按账本尾部退回原桶，账本
-// 不足的部分按分组规则退还。ledger 会被原地消耗。
+// 不足的部分计入 unknownRefundBucket 选出的余额桶。ledger 会被原地消耗。
 func RefundUserBalanceWithLedger(userId int, group string, ledger *common.BalanceLedger, amount int) error {
 	if amount <= 0 {
 		return nil
@@ -461,8 +470,7 @@ func RefundUserBalanceWithLedger(userId int, group string, ledger *common.Balanc
 		entries, remaining = ledger.PopTail(amount)
 	}
 	if remaining > 0 {
-		order := setting.GetGroupBalanceBuckets(group)
-		entries = append(entries, common.BalanceLedgerEntry{Bucket: order[0], Amount: remaining})
+		entries = append(entries, common.BalanceLedgerEntry{Bucket: unknownRefundBucket(group), Amount: remaining})
 	}
 	return RefundUserBalance(userId, entries)
 }

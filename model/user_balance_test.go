@@ -56,7 +56,7 @@ func TestBalanceCreditPathsLandInCorrectBucket(t *testing.T) {
 		DB.Exec("DELETE FROM redemptions")
 		DB.Exec("DELETE FROM checkins")
 	})
-	useGroupBalanceBuckets(t, `{"vip":["topup","gift"]}`)
+	useGroupBalanceBuckets(t, `{"vip":["topup","gift"],"paid":["topup"]}`)
 
 	oldNewUser := common.QuotaForNewUser
 	common.QuotaForNewUser = 700
@@ -143,8 +143,16 @@ func TestBalanceCreditPathsLandInCorrectBucket(t *testing.T) {
 			want: BalanceBuckets{Topup: 5, Gift: 80},
 		},
 		{
-			name:  "unknown-origin refund credits first bucket of user group",
+			name:  "unknown-origin refund credits gift when user group allows it",
 			group: "vip",
+			run: func(t *testing.T, user *User) {
+				require.NoError(t, IncreaseUserQuota(user.Id, 33, true))
+			},
+			want: BalanceBuckets{Gift: 33},
+		},
+		{
+			name:  "unknown-origin refund credits first bucket when user group excludes gift",
+			group: "paid",
 			run: func(t *testing.T, user *User) {
 				require.NoError(t, IncreaseUserQuota(user.Id, 33, true))
 			},
@@ -227,10 +235,12 @@ func TestReserveRespectsGroupBucketsAndRefundsLIFO(t *testing.T) {
 	require.NoError(t, RefundUserBalance(user.Id, ledger))
 	assert.Equal(t, BalanceBuckets{Topup: 100, Gift: 10, InviteBonus: 20}, loadBalance(t, user.Id))
 
-	// 退款超过账本的部分计入分组首个桶。
+	// 退款超过账本的部分：分组允许赠送时计入赠送，否则计入分组首个桶。
 	empty := common.BalanceLedger{}
 	require.NoError(t, RefundUserBalanceWithLedger(user.Id, "promo", &empty, 5))
 	assert.Equal(t, BalanceBuckets{Topup: 100, Gift: 15, InviteBonus: 20}, loadBalance(t, user.Id))
+	require.NoError(t, RefundUserBalanceWithLedger(user.Id, "vip", &empty, 5))
+	assert.Equal(t, BalanceBuckets{Topup: 105, Gift: 15, InviteBonus: 20}, loadBalance(t, user.Id))
 }
 
 func TestDebitOverdraftStaysInsideGroupAndRollsBack(t *testing.T) {
