@@ -400,6 +400,7 @@ func GetUser(c *gin.Context) {
 		return
 	}
 	user.AdminPermissions = authz.Capabilities(user.Id, user.Role)
+	user.NormalizeBalanceBucketFields()
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -507,6 +508,7 @@ func buildSelfUserData(user *model.User) map[string]any {
 		"telegram_id":       user.TelegramId,
 		"group":             user.Group,
 		"quota":             user.Quota,
+		"balance_buckets":   user.NormalizedBalanceBuckets(),
 		"used_quota":        user.UsedQuota,
 		"request_count":     user.RequestCount,
 		"aff_code":          user.AffCode,
@@ -1052,6 +1054,8 @@ type ManageRequest struct {
 	Action string `json:"action"`
 	Value  int    `json:"value"`
 	Mode   string `json:"mode"`
+	// Bucket 非空时只调整该余额桶（topup/aff_rebate/invite_bonus/gift），总额随之变化。
+	Bucket string `json:"bucket,omitempty"`
 }
 
 // ManageUser Only admin user can do this
