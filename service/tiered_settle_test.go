@@ -3,15 +3,19 @@ package service
 import (
 	"math"
 	"math/rand"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	relaykittypes "github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -536,16 +540,38 @@ func loadServiceBuckets(t *testing.T, id int) model.BalanceBuckets {
 // auto 令牌路由到受限分组时，钱包计费必须按选中的真实分组限制余额桶，
 // 不能因 UsingGroup == "auto" 落到全部余额。
 func TestWalletBillingUsesSelectedGroupForAutoToken(t *testing.T) {
-	require.NoError(t, setting.UpdateGroupBalanceBucketsByJSONString(`{"vip":["topup"]}`))
+	require.NoError(t, i18n.Init())
+	require.NoError(t, setting.UpdateGroupBalanceBucketsByJSONString(`{"vip":["topup","invite_bonus"]}`))
 	t.Cleanup(func() { require.NoError(t, setting.UpdateGroupBalanceBucketsByJSONString("{}")) })
 
+	available, required := logger.FormatQuota(10), logger.FormatQuota(50)
 	tests := []struct {
-		name        string
-		preConsume  int
-		wantErr     bool
-		wantBuckets model.BalanceBuckets
+		name           string
+		preConsume     int
+		acceptLanguage string
+		wantErrMsg     string
+		wantBuckets    model.BalanceBuckets
 	}{
-		{name: "gift not usable by vip", preConsume: 50, wantErr: true, wantBuckets: model.BalanceBuckets{Topup: 10, Gift: 1000}},
+		{
+			name:        "gift not usable by vip (en)",
+			preConsume:  50,
+			wantErrMsg:  "Insufficient balance for group vip (usable balance types: Top-up Balance, Invite Reward); available " + available + ", required " + required,
+			wantBuckets: model.BalanceBuckets{Topup: 10, Gift: 1000},
+		},
+		{
+			name:           "gift not usable by vip (zh-CN)",
+			preConsume:     50,
+			acceptLanguage: "zh-CN,zh;q=0.9",
+			wantErrMsg:     "分组 vip 可用余额不足（可用余额类型：充值余额、邀请激励余额），可用 " + available + "，需要 " + required,
+			wantBuckets:    model.BalanceBuckets{Topup: 10, Gift: 1000},
+		},
+		{
+			name:           "gift not usable by vip (zh-TW)",
+			preConsume:     50,
+			acceptLanguage: "zh-TW",
+			wantErrMsg:     "分組 vip 可用餘額不足（可用餘額類型：儲值餘額、邀請激勵餘額），可用 " + available + "，需要 " + required,
+			wantBuckets:    model.BalanceBuckets{Topup: 10, Gift: 1000},
+		},
 		{name: "topup within vip allowance", preConsume: 8, wantBuckets: model.BalanceBuckets{Topup: 2, Gift: 1000}},
 	}
 	for i, tt := range tests {
@@ -555,6 +581,10 @@ func TestWalletBillingUsesSelectedGroupForAutoToken(t *testing.T) {
 			seedBucketUser(t, userID, "default", 10, 1000)
 
 			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			if tt.acceptLanguage != "" {
+				c.Request.Header.Set("Accept-Language", tt.acceptLanguage)
+			}
 			common.SetContextKey(c, constant.ContextKeyAutoGroup, "vip")
 			relayInfo := &relaycommon.RelayInfo{
 				UserId:          userID,
@@ -568,9 +598,13 @@ func TestWalletBillingUsesSelectedGroupForAutoToken(t *testing.T) {
 			assert.Equal(t, "vip", ResolveWalletBillingGroup(c, relayInfo))
 
 			session, apiErr := NewBillingSession(c, relayInfo, tt.preConsume)
-			if tt.wantErr {
+			if tt.wantErrMsg != "" {
 				require.NotNil(t, apiErr)
 				assert.ErrorIs(t, apiErr, model.ErrInsufficientGroupBalance)
+				assert.Equal(t, tt.wantErrMsg, apiErr.Error())
+				assert.Equal(t, http.StatusForbidden, apiErr.StatusCode)
+				assert.Equal(t, relaykittypes.ErrorCodeInsufficientUserQuota, apiErr.GetErrorCode())
+				assert.True(t, relaykittypes.IsSkipRetryError(apiErr))
 			} else {
 				require.Nil(t, apiErr)
 				assert.Equal(t, "vip", relayInfo.WalletBillingGroup)

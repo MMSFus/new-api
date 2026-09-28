@@ -136,6 +136,17 @@ const (
 	MsgQuotaThresholdGtZero = "quota.threshold_gt_zero"
 )
 
+// Balance bucket related messages
+const (
+	// MsgBalanceGroupInsufficient params: Group, Buckets, Available, Required
+	MsgBalanceGroupInsufficient = "balance.group_insufficient"
+	// MsgBalanceBucketSeparator joins localized bucket names in one message.
+	MsgBalanceBucketSeparator = "balance.bucket_separator"
+	// MsgBalanceBucketPrefix + bucket key (topup, aff_rebate, invite_bonus,
+	// gift) names a balance bucket.
+	MsgBalanceBucketPrefix = "balance.bucket."
+)
+
 // Subscription related messages
 const (
 	MsgSubscriptionNotEnabled       = "subscription.not_enabled"
