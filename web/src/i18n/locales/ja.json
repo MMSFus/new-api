@@ -7002,6 +7002,8 @@
     "Balance Breakdown": "残高内訳",
     "Total Balance": "合計残高",
     "Balance type": "残高タイプ",
-    "Adding to the total credits the gift balance; subtracting deducts gift, invite reward, referral cashback, then top-up.": "合計への加算はギフト残高に計上されます。減算はギフト、招待特典、紹介キャッシュバック、チャージの順に差し引きます。"
+    "Default order": "デフォルト順",
+    "Deducts invite reward, referral cashback, gift, then top-up. Any shortfall becomes debt.": "招待特典、紹介キャッシュバック、ギフト、チャージの順に差し引きます。不足分は負債になります。",
+    "Overriding the total credits the difference to the gift balance, or deducts it in the default order.": "合計を上書きすると、増加分はギフト残高に計上され、減少分はデフォルト順で差し引かれます。"
   }
 }

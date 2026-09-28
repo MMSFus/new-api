@@ -7002,6 +7002,8 @@
     "Balance Breakdown": "餘額明細",
     "Total Balance": "全部餘額",
     "Balance type": "餘額類型",
-    "Adding to the total credits the gift balance; subtracting deducts gift, invite reward, referral cashback, then top-up.": "在總額上增加會計入贈送餘額；扣減時依序扣除贈送、邀請激勵、邀請返現、儲值餘額。"
+    "Default order": "預設順序",
+    "Deducts invite reward, referral cashback, gift, then top-up. Any shortfall becomes debt.": "依序扣除邀請激勵、邀請返現、贈送、儲值餘額，不足部分記為欠款。",
+    "Overriding the total credits the difference to the gift balance, or deducts it in the default order.": "覆寫總額時，增加的差額計入贈送餘額，減少的差額依預設順序扣除。"
   }
 }

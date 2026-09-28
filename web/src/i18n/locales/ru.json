@@ -7002,6 +7002,8 @@
     "Balance Breakdown": "Структура баланса",
     "Total Balance": "Общий баланс",
     "Balance type": "Тип баланса",
-    "Adding to the total credits the gift balance; subtracting deducts gift, invite reward, referral cashback, then top-up.": "Добавление к общему балансу зачисляется на подарочный баланс; списание идёт с подарочного, бонуса за приглашение, реферального кэшбэка, затем пополнений."
+    "Default order": "Порядок по умолчанию",
+    "Deducts invite reward, referral cashback, gift, then top-up. Any shortfall becomes debt.": "Списывает бонус за приглашение, реферальный кэшбэк, подарочный баланс, затем пополнения. Недостача становится задолженностью.",
+    "Overriding the total credits the difference to the gift balance, or deducts it in the default order.": "При замене общего баланса разница зачисляется на подарочный баланс или списывается в порядке по умолчанию."
   }
 }

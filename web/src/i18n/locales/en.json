@@ -7002,6 +7002,8 @@
     "Balance Breakdown": "Balance Breakdown",
     "Total Balance": "Total Balance",
     "Balance type": "Balance type",
-    "Adding to the total credits the gift balance; subtracting deducts gift, invite reward, referral cashback, then top-up.": "Adding to the total credits the gift balance; subtracting deducts gift, invite reward, referral cashback, then top-up."
+    "Default order": "Default order",
+    "Deducts invite reward, referral cashback, gift, then top-up. Any shortfall becomes debt.": "Deducts invite reward, referral cashback, gift, then top-up. Any shortfall becomes debt.",
+    "Overriding the total credits the difference to the gift balance, or deducts it in the default order.": "Overriding the total credits the difference to the gift balance, or deducts it in the default order."
   }
 }

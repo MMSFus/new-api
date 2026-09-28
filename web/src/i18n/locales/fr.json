@@ -7002,6 +7002,8 @@
     "Balance Breakdown": "Détail du solde",
     "Total Balance": "Solde total",
     "Balance type": "Type de solde",
-    "Adding to the total credits the gift balance; subtracting deducts gift, invite reward, referral cashback, then top-up.": "Ajouter au total crédite le solde offert ; soustraire déduit le solde offert, le bonus d'invitation, le cashback de parrainage, puis la recharge."
+    "Default order": "Ordre par défaut",
+    "Deducts invite reward, referral cashback, gift, then top-up. Any shortfall becomes debt.": "Déduit le bonus d'invitation, le cashback de parrainage, le solde offert, puis la recharge. Tout manque devient une dette.",
+    "Overriding the total credits the difference to the gift balance, or deducts it in the default order.": "Remplacer le total crédite la différence sur le solde offert, ou la déduit dans l'ordre par défaut."
   }
 }

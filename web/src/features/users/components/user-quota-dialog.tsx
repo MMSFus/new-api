@@ -39,6 +39,8 @@ import type {
 
 type BucketTarget = 'total' | BalanceBucketKey
 
+const DEFAULT_TARGET: BucketTarget = 'gift'
+
 interface UserQuotaDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -52,13 +54,19 @@ interface UserQuotaDialogProps {
 export function UserQuotaDialog(props: UserQuotaDialogProps) {
   const { t } = useTranslation()
   const [mode, setMode] = useState<QuotaAdjustMode>('add')
-  const [target, setTarget] = useState<BucketTarget>('total')
+  const [target, setTarget] = useState<BucketTarget>(DEFAULT_TARGET)
   const [amount, setAmount] = useState('')
   const [loading, setLoading] = useState(false)
 
   const { meta: currencyMeta } = getCurrencyDisplay()
   const currencyLabel = getCurrencyLabel()
   const tokensOnly = currencyMeta.kind === 'tokens'
+
+  // 增加额度必须指定余额类型（默认赠送余额）；扣减与覆盖可选按默认顺序作用于总额。
+  const targets: BucketTarget[] =
+    mode === 'add'
+      ? BALANCE_BUCKET_OPTIONS.map((o) => o.key)
+      : ['total', ...BALANCE_BUCKET_OPTIONS.map((o) => o.key)]
 
   const amountValue = Number.parseFloat(amount) || 0
   const quotaValue = parseQuotaFromDollars(Math.abs(amountValue))
@@ -102,7 +110,7 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
         toast.success(t('Quota adjusted successfully'))
         setAmount('')
         setMode('add')
-        setTarget('total')
+        setTarget(DEFAULT_TARGET)
         props.onOpenChange(false)
         props.onSuccess()
       } else {
@@ -118,7 +126,7 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
   const handleCancel = () => {
     setAmount('')
     setMode('add')
-    setTarget('total')
+    setTarget(DEFAULT_TARGET)
     props.onOpenChange(false)
   }
 
@@ -174,45 +182,45 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
           </div>
         )}
 
-        {props.buckets && (
-          <div className='space-y-2'>
-            <Label>{t('Balance type')}</Label>
-            <div className='flex flex-wrap gap-1'>
-              {(
-                ['total', ...BALANCE_BUCKET_OPTIONS.map((o) => o.key)] as const
-              ).map((key) => (
-                <Button
-                  key={key}
-                  type='button'
-                  variant='outline'
-                  size='sm'
-                  className={cn(
-                    target === key &&
-                      'bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground'
-                  )}
-                  onClick={() => {
-                    setTarget(key)
-                    setAmount('')
-                  }}
-                >
-                  {key === 'total'
-                    ? t('Total Balance')
-                    : t(
-                        BALANCE_BUCKET_OPTIONS.find((o) => o.key === key)
-                          ?.labelKey ?? key
-                      )}
-                </Button>
-              ))}
-            </div>
-            {target === 'total' && (
-              <div className='text-muted-foreground text-xs'>
-                {t(
-                  'Adding to the total credits the gift balance; subtracting deducts gift, invite reward, referral cashback, then top-up.'
+        <div className='space-y-2'>
+          <Label>{t('Balance type')}</Label>
+          <div className='flex flex-wrap gap-1'>
+            {targets.map((key) => (
+              <Button
+                key={key}
+                type='button'
+                variant='outline'
+                size='sm'
+                className={cn(
+                  target === key &&
+                    'bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground'
                 )}
-              </div>
-            )}
+                onClick={() => {
+                  setTarget(key)
+                  setAmount('')
+                }}
+              >
+                {key === 'total'
+                  ? t(mode === 'subtract' ? 'Default order' : 'Total Balance')
+                  : t(
+                      BALANCE_BUCKET_OPTIONS.find((o) => o.key === key)
+                        ?.labelKey ?? key
+                    )}
+              </Button>
+            ))}
           </div>
-        )}
+          {target === 'total' && (
+            <div className='text-muted-foreground text-xs'>
+              {mode === 'subtract'
+                ? t(
+                    'Deducts invite reward, referral cashback, gift, then top-up. Any shortfall becomes debt.'
+                  )
+                : t(
+                    'Overriding the total credits the difference to the gift balance, or deducts it in the default order.'
+                  )}
+            </div>
+          )}
+        </div>
 
         <div className='text-muted-foreground text-sm'>{getPreviewText()}</div>
 
@@ -231,6 +239,9 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
                 )}
                 onClick={() => {
                   setMode(m)
+                  if (m === 'add' && target === 'total') {
+                    setTarget(DEFAULT_TARGET)
+                  }
                   setAmount('')
                 }}
               >
