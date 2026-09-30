@@ -22,6 +22,7 @@ var auditContentTemplates = map[string]string{
 	"user.update":               "Updated user ${username} (ID: ${id})",
 	"user.delete":               "Deleted user ${username} (ID: ${id})",
 	"user.account_delete":       "Account deletion",
+	"user.register":             "Registration attempt via ${provider}",
 	"user.manage":               "Performed ${action} on user ${username} (ID: ${id})",
 	"user.quota_add":            "Increased user quota by ${quota}",
 	"user.quota_subtract":       "Decreased user quota by ${quota}",

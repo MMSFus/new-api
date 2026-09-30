@@ -491,16 +491,7 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 	}
 
 	// Set up new user
-	user.Username = provider.GetProviderPrefix() + strconv.Itoa(model.GetMaxUserId()+1)
-
-	if oauthUser.Username != "" {
-		if exists, err := model.CheckUserExistOrDeleted(oauthUser.Username, ""); err == nil && !exists {
-			// 防止索引退化
-			if len(oauthUser.Username) <= model.UserNameMaxLength {
-				user.Username = oauthUser.Username
-			}
-		}
-	}
+	user.Username = allocateOAuthUsername(provider, oauthUser)
 
 	if oauthUser.DisplayName != "" {
 		user.DisplayName = oauthUser.DisplayName
@@ -511,6 +502,19 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 	}
 	if oauthUser.Email != "" {
 		user.Email = model.NormalizeEmail(oauthUser.Email)
+		// 站点邮箱策略（域名白名单 / 别名限制 / 长度）此前只在密码注册与邮箱绑定
+		// 路径生效，OAuth 注册只做了占用检查，等于绕过了管理员的邮箱规则。
+		// 观察模式下只写一条脱敏日志，便于管理员先评估影响范围再决定是否拦截。
+		if _, err := service.ValidateAccountEmail(user.Email); err != nil {
+			common.SysError(fmt.Sprintf("[OAuth] registration email rejected by policy: provider=%s email=%s enforced=%t", provider.GetName(), common.MaskEmail(user.Email), common.OIDCRegistrationEmailPolicyEnforced))
+			if common.OIDCRegistrationEmailPolicyEnforced {
+				params := map[string]any{"provider": provider.GetName(), "success": false, "reason": "email_policy_rejected"}
+				model.RecordOperationAuditLog(0, common.RoleCommonUser, auditContentEN("user.register", params), c.ClientIP(), "user.register", params, nil, &model.AuditRequestInfo{
+					Method: c.Request.Method, Route: c.FullPath(), Path: c.FullPath(), Status: http.StatusOK, Success: false,
+				}, c)
+				return nil, nil, err
+			}
+		}
 		if err := model.EnsureEmailAvailable(user.Email, 0); err != nil {
 			if errors.Is(err, model.ErrEmailAlreadyTaken) {
 				return nil, nil, &OAuthEmailAlreadyTakenError{}
@@ -586,6 +590,109 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 	}
 
 	return user, nil, nil
+}
+
+// allocateOAuthUsername 为新建的 OAuth 用户挑选用户名。
+//
+// 身份源给出的 preferred_username 未必是合法用户名：Casdoor 一类实现直接把它设成
+// 邮箱地址，含 "@" 且常常超过 model.UserNameMaxLength。此前的实现只在长度合法时
+// 采用它，否则退回 "<前缀><GetMaxUserId()+1>"——既引入并发竞态，也让用户看到
+// 形如 oidc_134 的账号名。这里改为：优先采用合法且未被占用的 provider 用户名，
+// 否则由邮箱本地部分派生，仍冲突时才退回前缀方案。
+func allocateOAuthUsername(provider oauth.Provider, oauthUser *oauth.OAuthUser) string {
+	candidates := make([]string, 0, 3+usernameConflictRetries)
+	if candidate := normalizeOAuthUsername(oauthUser.Username); candidate != "" {
+		candidates = append(candidates, candidate)
+	}
+	derived := deriveUsernameFromEmail(oauthUser.Email)
+	for attempt := range usernameConflictRetries {
+		if derived == "" {
+			break
+		}
+		candidates = append(candidates, usernameCandidateWithIndex(derived, attempt))
+	}
+	for _, candidate := range candidates {
+		// 查询出错时保守跳过该候选，避免把可能已占用的名字写进唯一索引。
+		exists, err := model.CheckUserExistOrDeleted(candidate, "")
+		if err == nil && !exists {
+			return candidate
+		}
+	}
+	// 兜底：保留既有前缀行为，保证注册流程不会因命名失败而中断。
+	return provider.GetProviderPrefix() + strconv.Itoa(model.GetMaxUserId()+1)
+}
+
+// usernameConflictRetries 是派生用户名发生冲突时追加 "<name>_<n>" 后缀的尝试次数。
+const usernameConflictRetries = 5
+
+// normalizeOAuthUsername 判断身份源提供的用户名能否直接入库：
+// 首字符必须是英文字母，其余仅允许字母、数字和下划线，且长度不超过上限
+// （按字符数计算，不能用 len() 的字节数——UserNameMaxLength 是字符限制）。
+func normalizeOAuthUsername(raw string) string {
+	username := strings.TrimSpace(raw)
+	if username == "" {
+		return ""
+	}
+	runes := []rune(username)
+	if len(runes) > model.UserNameMaxLength {
+		return ""
+	}
+	for i, r := range runes {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
+		case i > 0 && (r >= '0' && r <= '9' || r == '_'):
+		default:
+			return ""
+		}
+	}
+	return username
+}
+
+// deriveUsernameFromEmail 由邮箱本地部分派生候选用户名：保留字母数字，其余字符
+// 折叠为下划线，再按用户名规则裁剪。邮箱本身（含 "@"）不能作为用户名。
+func deriveUsernameFromEmail(email string) string {
+	local, _, found := strings.Cut(model.NormalizeEmail(email), "@")
+	if !found {
+		return ""
+	}
+	var builder strings.Builder
+	for _, r := range local {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			builder.WriteRune(r)
+		default:
+			builder.WriteRune('_')
+		}
+	}
+	runes := []rune(strings.Trim(builder.String(), "_"))
+	// 首字符必须是字母，否则整体左移或前面丢弃直到出现字母。
+	for len(runes) > 0 {
+		if first := runes[0]; first >= 'a' && first <= 'z' {
+			break
+		}
+		runes = runes[1:]
+	}
+	if len(runes) > model.UserNameMaxLength {
+		runes = runes[:model.UserNameMaxLength]
+	}
+	if len(runes) == 0 {
+		return ""
+	}
+	return string(runes)
+}
+
+// usernameCandidateWithIndex 在第 attempt 次冲突时给派生名追加序号后缀，
+// 追加后仍超长则截断主体，保证结果始终符合用户名规则。
+func usernameCandidateWithIndex(base string, attempt int) string {
+	if attempt == 0 {
+		return base
+	}
+	suffix := "_" + strconv.Itoa(attempt+1)
+	runes := []rune(base)
+	if limit := model.UserNameMaxLength - len(suffix); len(runes) > limit {
+		runes = runes[:limit]
+	}
+	return string(runes) + suffix
 }
 
 // recordLegacyGitHubBindingAudit records the outcome of a legacy GitHub binding

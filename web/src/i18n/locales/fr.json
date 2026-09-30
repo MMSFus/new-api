@@ -4809,6 +4809,7 @@
     "Register Passkey": "Enregistrer un Passkey",
     "Registered": "Enregistré",
     "Registered a passkey": "Passkey enregistré",
+    "Registration attempt via {{provider}}": "Tentative d'inscription via {{provider}}",
     "Registration Enabled": "Inscription activée",
     "Registration flow expired. Please try again.": "Le processus d’inscription a expiré. Veuillez réessayer.",
     "Registry (optional)": "Registre (optionnel)",
