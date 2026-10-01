@@ -4809,6 +4809,7 @@
     "Register Passkey": "Đăng ký Passkey",
     "Registered": "Đã đăng ký",
     "Registered a passkey": "Đã đăng ký một passkey",
+    "Registration attempt via {{provider}}": "Nỗ lực đăng ký qua {{provider}}",
     "Registration Enabled": "Đăng ký đã bật",
     "Registration flow expired. Please try again.": "Quy trình đăng ký đã hết hạn. Vui lòng thử lại.",
     "Registry (optional)": "Registry (tùy chọn)",

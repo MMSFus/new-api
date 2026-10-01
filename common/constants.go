@@ -88,6 +88,11 @@ var EmailLoginAuthServerList = []string{
 	"smtp.azurecomm.net",
 }
 
+// OIDCRegistrationEmailPolicyEnforced 控制 OAuth/OIDC 注册是否强制执行站点邮箱策略
+// （域名白名单、别名限制、长度）。默认关闭：此前该路径只检查邮箱占用，从未校验
+// 域名规则，直接开启会拦下已经在用的非白名单邮箱。关闭时只记录脱敏日志。
+var OIDCRegistrationEmailPolicyEnforced = false
+
 var DebugEnabled bool
 var MemoryCacheEnabled bool
 

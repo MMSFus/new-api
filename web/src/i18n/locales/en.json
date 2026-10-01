@@ -4809,6 +4809,7 @@
     "Register Passkey": "Register Passkey",
     "Registered": "Registered",
     "Registered a passkey": "Registered a passkey",
+    "Registration attempt via {{provider}}": "Registration attempt via {{provider}}",
     "Registration Enabled": "Registration Enabled",
     "Registration flow expired. Please try again.": "Registration flow expired. Please try again.",
     "Registry (optional)": "Registry (optional)",

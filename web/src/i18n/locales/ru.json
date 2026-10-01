@@ -4809,6 +4809,7 @@
     "Register Passkey": "Регистрация Passkey",
     "Registered": "Зарегистрирован",
     "Registered a passkey": "Ключ доступа зарегистрирован",
+    "Registration attempt via {{provider}}": "Попытка регистрации через {{provider}}",
     "Registration Enabled": "Регистрация включена",
     "Registration flow expired. Please try again.": "Процесс регистрации истёк. Повторите попытку.",
     "Registry (optional)": "Реестр (необязательно)",

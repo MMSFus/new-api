@@ -1123,3 +1123,179 @@ func TestOAuthBindIgnoresLegacyGitHubUsernames(t *testing.T) {
 		})
 	}
 }
+
+// oauthUsernameOAuthProvider serves the identity a provider would return so the
+// new-account path can be exercised end to end through findOrCreateOAuthUser.
+type oauthUsernameOAuthProvider struct {
+	authFlowTestOAuthProvider
+	identity *oauth.OAuthUser
+}
+
+func (provider *oauthUsernameOAuthProvider) GetName() string { return "Casdoor" }
+func (provider *oauthUsernameOAuthProvider) GetUserInfo(context.Context, *oauth.OAuthToken) (*oauth.OAuthUser, error) {
+	provider.userInfoCalls++
+	return provider.identity, nil
+}
+func (*oauthUsernameOAuthProvider) GetProviderPrefix() string { return "oidc_" }
+
+// TestAllocateOAuthUsernameUsesProviderIdentity covers providers whose
+// preferred_username is usable as-is and identity sources (Casdoor) that put the
+// whole email address there.
+func TestAllocateOAuthUsernameUsesProviderIdentity(t *testing.T) {
+	setupAuthFlowControllerTest(t)
+	provider := &oauthUsernameOAuthProvider{}
+	tests := []struct {
+		name     string
+		identity *oauth.OAuthUser
+		expected string
+	}{
+		{name: "provider username is used as-is", identity: &oauth.OAuthUser{ProviderUserID: "u1", Username: "octocat"}, expected: "octocat"},
+		{name: "provider username is trimmed", identity: &oauth.OAuthUser{ProviderUserID: "u2", Username: "  octo_cat90  "}, expected: "octo_cat90"},
+		{name: "provider username with invalid characters falls back to the email", identity: &oauth.OAuthUser{ProviderUserID: "u3", Username: "octo cat!", Email: "octo-cat@example.com"}, expected: "octo_cat"},
+		{name: "provider username starting with a digit falls back to the email", identity: &oauth.OAuthUser{ProviderUserID: "u4", Username: "9octocat", Email: "octo.cat@example.com"}, expected: "octo_cat"},
+		{name: "over-long provider username falls back to the email", identity: &oauth.OAuthUser{ProviderUserID: "u5", Username: strings.Repeat("a", model.UserNameMaxLength+1), Email: "octocat2026@example.com"}, expected: "octocat2026"},
+		{name: "email as provider username becomes the local part", identity: &oauth.OAuthUser{ProviderUserID: "u6", Username: "l1447990903@gmail.com", Email: "l1447990903@gmail.com"}, expected: "l1447990903"},
+		{name: "email-only identity derives from the local part", identity: &oauth.OAuthUser{ProviderUserID: "u7", Email: "Suyu.Bai-1970@example.com"}, expected: "suyu_bai_1970"},
+		{name: "email local part is truncated to the username limit", identity: &oauth.OAuthUser{ProviderUserID: "u8", Email: "c17685930382abcdefg@example.com"}, expected: "c17685930382abcdefg"},
+		{name: "unusable identity falls back to the provider prefix", identity: &oauth.OAuthUser{ProviderUserID: "u9"}, expected: "oidc_"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			username := allocateOAuthUsername(provider, test.identity)
+			if test.expected == "oidc_" {
+				assert.True(t, strings.HasPrefix(username, "oidc_"), username)
+				assert.Equal(t, username, normalizeOAuthUsername(username))
+				return
+			}
+			assert.Equal(t, test.expected, username)
+			assert.Equal(t, username, normalizeOAuthUsername(username), "the result must satisfy the username rules")
+		})
+	}
+}
+
+func TestAllocateOAuthUsernameRetriesOnConflict(t *testing.T) {
+	setupAuthFlowControllerTest(t)
+	provider := &oauthUsernameOAuthProvider{}
+	for _, taken := range []string{"casdoor_user", "casdoor_user_2"} {
+		require.NoError(t, model.DB.Create(&model.User{
+			Username: taken, AffCode: taken, Role: common.RoleCommonUser, Status: common.UserStatusEnabled,
+		}).Error)
+	}
+	username := allocateOAuthUsername(provider, &oauth.OAuthUser{ProviderUserID: "u1", Email: "casdoor.user@example.com"})
+	assert.Equal(t, "casdoor_user_3", username)
+	assert.Equal(t, username, normalizeOAuthUsername(username))
+}
+
+// usernames close to the length limit must stay legal once the conflict suffix
+// is appended: the suffix replaces characters instead of extending the name.
+func TestUsernameCandidateWithIndexStaysWithinLimit(t *testing.T) {
+	base := strings.Repeat("a", model.UserNameMaxLength)
+	assert.Len(t, []rune(usernameCandidateWithIndex(base, 0)), model.UserNameMaxLength)
+	suffixed := usernameCandidateWithIndex(base, 1)
+	assert.Equal(t, model.UserNameMaxLength, len([]rune(suffixed)))
+	assert.True(t, strings.HasSuffix(suffixed, "_2"))
+	assert.Equal(t, suffixed, normalizeOAuthUsername(suffixed))
+}
+
+// oauthRegistrationResponse is the callback payload the registration tests read.
+type oauthRegistrationResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+	Data    struct {
+		User struct {
+			Id       int    `json:"id"`
+			Username string `json:"username"`
+		} `json:"user"`
+		AccessToken string `json:"access_token"`
+	} `json:"data"`
+}
+
+// oauthRegistrationLogin registers provider under a fresh slug and completes a
+// login callback.
+func oauthRegistrationLogin(t *testing.T, provider oauth.Provider, slug string) (oauthRegistrationResponse, *httptest.ResponseRecorder) {
+	t.Helper()
+	oauth.Register(slug, provider)
+	t.Cleanup(func() { oauth.Unregister(slug) })
+	token, _, err := model.CreateAuthFlow(model.AuthFlowCreate{
+		Purpose: model.AuthFlowPurposeOAuth, Provider: slug, Intent: model.AuthFlowIntentLogin,
+		Payload: `{}`, ExpiresAt: time.Now().Add(time.Minute),
+	})
+	require.NoError(t, err)
+	router := gin.New()
+	router.GET("/api/oauth/:provider", HandleOAuth)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/oauth/"+slug+"?state="+token+"&code=provider-code", nil))
+	var result oauthRegistrationResponse
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result), response.Body.String())
+	return result, response
+}
+
+// TestOAuthRegistrationPersistsDerivedUsername walks the real callback so the
+// username written to the database is asserted, not only the helper's return.
+func TestOAuthRegistrationPersistsDerivedUsername(t *testing.T) {
+	setupSecurityEnrollmentTest(t)
+	previousRegister := common.RegisterEnabled
+	common.RegisterEnabled = true
+	t.Cleanup(func() { common.RegisterEnabled = previousRegister })
+	provider := &oauthUsernameOAuthProvider{identity: &oauth.OAuthUser{
+		ProviderUserID: "casdoor-1", Username: "l1447990903@gmail.com", DisplayName: "李铭轩", Email: "l1447990903@gmail.com",
+	}}
+	result, response := oauthRegistrationLogin(t, provider, "casdoor-username-registration")
+	require.True(t, result.Success, response.Body.String())
+	var stored model.User
+	require.NoError(t, model.DB.First(&stored, result.Data.User.Id).Error)
+	assert.Equal(t, "l1447990903", stored.Username)
+	assert.Equal(t, "李铭轩", stored.DisplayName)
+	assert.Equal(t, "l1447990903@gmail.com", stored.Email)
+}
+
+// TestOAuthRegistrationEmailPolicyGate drives the same callback with the site's
+// domain whitelist enabled: the attempt is always logged, and only the
+// enforcement switch turns the log into a rejection.
+func TestOAuthRegistrationEmailPolicyGate(t *testing.T) {
+	tests := []struct {
+		name       string
+		enforced   bool
+		expectUser bool
+	}{
+		{name: "observation mode still registers", expectUser: true},
+		{name: "enforcement rejects the registration", enforced: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setupSecurityEnrollmentTest(t)
+			previousRegister := common.RegisterEnabled
+			previousDomain, previousWhitelist := common.EmailDomainRestrictionEnabled, common.EmailDomainWhitelist
+			common.RegisterEnabled = true
+			common.EmailDomainRestrictionEnabled = true
+			common.EmailDomainWhitelist = []string{"gmail.com"}
+			t.Cleanup(func() {
+				common.RegisterEnabled = previousRegister
+				common.EmailDomainRestrictionEnabled, common.EmailDomainWhitelist = previousDomain, previousWhitelist
+			})
+			common.OIDCRegistrationEmailPolicyEnforced = test.enforced
+			t.Cleanup(func() { common.OIDCRegistrationEmailPolicyEnforced = false })
+			provider := &oauthUsernameOAuthProvider{identity: &oauth.OAuthUser{
+				ProviderUserID: "casdoor-2", Email: "outsider@example.com",
+			}}
+			result, response := oauthRegistrationLogin(t, provider, "casdoor-email-policy")
+			assert.Equal(t, test.expectUser, result.Success, response.Body.String())
+			// Observation mode only logs, so no audit event is written; enforcement
+			// is what records the rejected attempt.
+			var audits []model.AuditLog
+			require.NoError(t, model.LOG_DB.Where("action = ?", "user.register").Find(&audits).Error)
+			if test.expectUser {
+				assert.Equal(t, "outsider", result.Data.User.Username)
+				assert.Empty(t, audits)
+				return
+			}
+			assert.Equal(t, "This email address is not allowed by the administrator's email policy.", result.Message)
+			require.Len(t, audits, 1)
+			// Audit parameters stay structured and address-free.
+			encoded, err := common.Marshal(audits[0].Other.Op.Params)
+			require.NoError(t, err)
+			assert.Equal(t, `{"provider":"Casdoor","reason":"email_policy_rejected","success":false}`, string(encoded))
+			assert.Equal(t, "Registration attempt via Casdoor", audits[0].Content)
+		})
+	}
+}

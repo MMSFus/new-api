@@ -4809,6 +4809,7 @@
     "Register Passkey": "註冊 Passkey",
     "Registered": "已注册",
     "Registered a passkey": "註冊了一個 Passkey",
+    "Registration attempt via {{provider}}": "經 {{provider}} 的註冊嘗試",
     "Registration Enabled": "註冊已啟用",
     "Registration flow expired. Please try again.": "註冊流程已過期，請再試一次。",
     "Registry (optional)": "註冊表 (可選)",
