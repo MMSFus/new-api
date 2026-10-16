@@ -22,9 +22,9 @@ import { useTranslation } from 'react-i18next'
 
 import { GroupBadge } from '@/components/group-badge'
 import { StatusBadgeTypeContext } from '@/components/status-badge'
+import { cn } from '@/lib/utils'
 
-import { CHANNEL_STATUS } from '../constants'
-import { isTagAggregateRow, parseGroupsList } from '../lib'
+import { getUpstreamHost, isTagAggregateRow, parseGroupsList } from '../lib'
 import type { Channel } from '../types'
 import { ChannelRowActionsLayoutContext } from './channel-row-actions-context'
 import { useChannels } from './channels-provider'
@@ -65,22 +65,22 @@ function ChannelCardComponent({
   const typeCell = renderCell('type')
   const nameCell = renderCell('name')
   const statusCell = renderCell('status')
+  const tagCell = isTagRow ? null : renderCell('tag')
   const actionsCell = renderCell('actions')
   const priorityCell = renderCell('priority')
   const weightCell = renderCell('weight')
+  const modelsCell = renderCell('models')
   const balanceCell = renderCell('balance')
   const responseCell = renderCell('response_time')
   const testCell = renderCell('test_time')
 
   const labelClass = 'text-muted-foreground text-[11px] font-medium select-none'
 
-  // In card view the enable/disable state is already conveyed by the inline
-  // power toggle, so the plain "Enabled"/"Disabled" badge is redundant. Keep
-  // only the informative states (e.g. auto-disabled, unknown) and tag rows.
-  const showStatusBadge =
-    isTagRow ||
-    (row.original.status !== CHANNEL_STATUS.ENABLED &&
-      row.original.status !== CHANNEL_STATUS.MANUAL_DISABLED)
+  // The power toggle shows the action it will perform, not the current state,
+  // so the status badge is always rendered to make the state readable.
+  // Weight only matters when set; zero-weight channels hide the spinner.
+  const showWeight = isTagRow || (row.original.weight ?? 0) > 0
+  const upstreamHost = getUpstreamHost(row.original.base_url)
 
   return (
     <ChannelRowActionsLayoutContext.Provider value='card'>
@@ -97,19 +97,32 @@ function ChannelCardComponent({
             <div className='min-w-0 overflow-hidden'>{typeCell}</div>
           </div>
           <div className='flex shrink-0 items-center gap-1.5'>
-            {showStatusBadge && statusCell}
+            {tagCell}
+            {statusCell}
             {actionsCell}
           </div>
         </div>
 
-        {/* Both rows share their columns: identity/balance on the left,
-          priority/response and weight/last tested on the right. */}
+        {/* Identity on the left, priority (and weight when set) on the right;
+          the stats row below spans the same columns. */}
         <StatusBadgeTypeContext.Provider value='text'>
-          <div className='grid grid-cols-[minmax(0,1fr)_auto_auto] items-start gap-3'>
+          <div
+            className={cn(
+              'grid items-start gap-3',
+              showWeight
+                ? 'grid-cols-[minmax(0,1fr)_auto_auto]'
+                : 'grid-cols-[minmax(0,1fr)_auto]'
+            )}
+          >
             <div className='min-w-0 overflow-hidden text-sm'>
               {!isTagRow && (
-                <div className={labelClass}>
+                <div className={cn(labelClass, 'truncate')}>
                   #{sensitiveVisible ? row.original.id : SENSITIVE_MASK}
+                  {upstreamHost && (
+                    <span className='ml-2 font-mono'>
+                      {sensitiveVisible ? upstreamHost : SENSITIVE_MASK}
+                    </span>
+                  )}
                 </div>
               )}
               {nameCell}
@@ -118,11 +131,13 @@ function ChannelCardComponent({
               <span className={labelClass}>{t('Priority')}</span>
               {priorityCell}
             </div>
-            <div className='flex min-w-0 flex-col gap-1'>
-              <span className={labelClass}>{t('Weight')}</span>
-              {weightCell}
-            </div>
-            <dl className='col-span-3 grid grid-cols-subgrid gap-y-1'>
+            {showWeight && (
+              <div className='flex min-w-0 flex-col gap-1'>
+                <span className={labelClass}>{t('Weight')}</span>
+                {weightCell}
+              </div>
+            )}
+            <dl className='col-span-full grid grid-cols-3 gap-x-3 gap-y-1'>
               <div className='row-span-2 grid min-w-0 grid-rows-subgrid'>
                 <dt className={labelClass}>{t('Used / Remaining')}</dt>
                 <dd className='min-w-0 text-sm tabular-nums [&_[data-slot=status-badge]]:!ml-0 [&>div]:ml-0 [&>div]:flex-wrap [&>div]:gap-x-3'>
@@ -148,6 +163,8 @@ function ChannelCardComponent({
             </dl>
           </div>
         </StatusBadgeTypeContext.Provider>
+
+        {!isTagRow && <div className='-ml-1.5 min-w-0'>{modelsCell}</div>}
 
         {/* Groups retain their compact, full-width footer. */}
         <div className='min-w-0'>
