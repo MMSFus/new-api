@@ -163,6 +163,24 @@ export function isMultiKeyChannel(channel: Channel): boolean {
   return channel.channel_info?.is_multi_key || false
 }
 
+/**
+ * Hostname of a channel's upstream base URL, or null when unset or unparsable.
+ * Used to tell otherwise identical channels apart at a glance.
+ */
+export function getUpstreamHost(
+  baseUrl: string | null | undefined
+): string | null {
+  const trimmed = baseUrl?.trim()
+  if (!trimmed) {
+    return null
+  }
+  try {
+    return new URL(trimmed).host
+  } catch {
+    return null
+  }
+}
+
 // ============================================================================
 // Key Formatting
 // ============================================================================

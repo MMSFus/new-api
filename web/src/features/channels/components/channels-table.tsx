@@ -45,6 +45,7 @@ import {
 import { useMediaQuery } from '@/hooks'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
 import { requireServerSuccess } from '@/lib/server-error-message'
+import { cn } from '@/lib/utils'
 
 import { getChannels, searchChannels, getGroups } from '../api'
 import {
@@ -85,6 +86,24 @@ function isDisabledChannelRow(channel: Channel) {
   return (
     !isTagAggregateRow(channel) && channel.status !== CHANNEL_STATUS.ENABLED
   )
+}
+
+// Card view only (scoped by the card's data-slot): a left accent bar so the
+// three channel states can be told apart without reading the badge.
+const CARD_STATUS_ACCENT = {
+  [CHANNEL_STATUS.ENABLED]:
+    'data-[slot=data-table-card]:border-l-4 data-[slot=data-table-card]:border-l-success',
+  [CHANNEL_STATUS.MANUAL_DISABLED]:
+    'data-[slot=data-table-card]:border-l-4 data-[slot=data-table-card]:border-l-muted-foreground/40 data-[slot=data-table-card]:opacity-70',
+  [CHANNEL_STATUS.AUTO_DISABLED]:
+    'data-[slot=data-table-card]:border-l-4 data-[slot=data-table-card]:border-l-warning data-[slot=data-table-card]:opacity-80',
+} as Record<number, string>
+
+function getChannelCardAccent(channel: Channel) {
+  if (isTagAggregateRow(channel)) {
+    return undefined
+  }
+  return CARD_STATUS_ACCENT[channel.status]
 }
 
 export function ChannelsTable() {
@@ -426,7 +445,7 @@ export function ChannelsTable() {
       renderCard={(row, { isSelected }) => (
         <ChannelCard row={row} isSelected={isSelected} />
       )}
-      cardGridClassName='grid grid-cols-1 gap-3 sm:gap-4 lg:grid-cols-3'
+      cardGridClassName='grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4'
       applyHeaderSize
       toolbarProps={{
         collapsibleOnMobile: true,
@@ -490,13 +509,14 @@ export function ChannelsTable() {
         ),
       }}
       getRowClassName={(row, { isMobile }) => {
+        const accent = getChannelCardAccent(row.original)
         if (!isDisabledChannelRow(row.original)) {
-          return undefined
+          return accent
         }
         if (isMobile) {
-          return DISABLED_ROW_MOBILE
+          return cn(DISABLED_ROW_MOBILE, accent)
         }
-        return DISABLED_ROW_DESKTOP
+        return cn(DISABLED_ROW_DESKTOP, accent)
       }}
       bulkActions={batchMode ? <DataTableBulkActions table={table} /> : null}
     />
