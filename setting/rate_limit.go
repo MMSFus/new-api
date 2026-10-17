@@ -76,8 +76,9 @@ type ModelRateLimitRule struct {
 	Success         int
 	DurationMinutes int
 	// Scope isolates counters. It is the called group for exact rules,
-	// ModelRateLimitAnyGroup for private wildcard rules, and empty for the
-	// legacy table and the default limit, which keep the per-user counters.
+	// ModelRateLimitAnyGroup for private wildcard rules, the legacy group for
+	// the legacy table, and empty for the default limit, which keeps the
+	// per-user counters.
 	Scope  string
 	Source string
 }
@@ -88,7 +89,7 @@ func ModelRequestRateLimitGroup2JSONString() string {
 
 	jsonBytes, err := common.Marshal(ModelRequestRateLimitGroup)
 	if err != nil {
-		common.SysLog("error marshalling model request rate limit group: " + err.Error())
+		common.SysLog(common.LogText("error marshalling model request rate limit group: %s", err.Error()))
 	}
 	return string(jsonBytes)
 }
@@ -199,6 +200,7 @@ func ResolveModelRequestRateLimit(userGroup, calledGroup, legacyGroup string) Mo
 			Total:           limits[0],
 			Success:         limits[1],
 			DurationMinutes: ModelRequestRateLimitDurationMinutes,
+			Scope:           legacyGroup,
 			Source:          ModelRateLimitSourceLegacy,
 		}
 	}

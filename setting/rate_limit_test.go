@@ -44,8 +44,8 @@ func TestResolveModelRequestRateLimitPriority(t *testing.T) {
 		{"private wildcard beats global", "vip", "gpt", "vip", 2, 20, 10, ModelRateLimitAnyGroup, ModelRateLimitSourcePrivateWildcard},
 		{"global applies to any user", "default", "claude", "default", 3, 30, 5, "claude", ModelRateLimitSourceGlobal},
 		{"global without duration uses default window", "svip", "gpt", "svip", 4, 40, 1, "gpt", ModelRateLimitSourceGlobal},
-		{"legacy table keyed by legacy group", "default", "other", "default", 6, 60, 1, "", ModelRateLimitSourceLegacy},
-		{"legacy follows token group", "default", "vip", "vip", 5, 50, 1, "", ModelRateLimitSourceLegacy},
+		{"legacy table keyed by legacy group", "default", "other", "default", 6, 60, 1, "default", ModelRateLimitSourceLegacy},
+		{"legacy follows token group", "default", "vip", "vip", 5, 50, 1, "vip", ModelRateLimitSourceLegacy},
 		{"default when nothing matches", "free", "other", "free", 7, 70, 1, "", ModelRateLimitSourceDefault},
 		{"empty user group skips private", "", "claude", "", 3, 30, 5, "claude", ModelRateLimitSourceGlobal},
 	}
