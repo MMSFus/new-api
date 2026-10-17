@@ -32,6 +32,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/fxamacker/cbor/v2"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/pquerna/otp/totp"
 	"github.com/stretchr/testify/assert"
@@ -54,7 +55,17 @@ func setupSecurityEnrollmentTest(t *testing.T) (*model.User, service.AuthIdentit
 		dialect = "sqlite"
 	}
 	dsn := os.Getenv("TEST_" + strings.ToUpper(dialect) + "_DSN")
-	db, _ := newAuditTestDatabase(t, dialect, dsn)
+	var db *gorm.DB
+	if dialect == "sqlite" {
+		// Match common.SQLitePath: take the writer lock before transaction reads.
+		// Deferred transactions can fail to upgrade their read lock when concurrent
+		// proof consumption overlaps account deletion or session revocation.
+		var err error
+		db, err = gorm.Open(sqlite.Open(t.TempDir()+"/security.db?_pragma=busy_timeout(30000)&_pragma=journal_mode(WAL)&_txlock=immediate"), &gorm.Config{})
+		require.NoError(t, err)
+	} else {
+		db, _ = newAuditTestDatabase(t, dialect, dsn)
+	}
 	logDB, _ := newAuditTestDatabase(t, dialect, dsn)
 	db.Logger = logger.Default.LogMode(logger.Silent)
 	logDB.Logger = logger.Default.LogMode(logger.Silent)
@@ -148,19 +159,22 @@ type accessTokenEndpoint struct {
 func accessTokenMutationEndpoints(tokenID int) []accessTokenEndpoint {
 	return []accessTokenEndpoint{
 		{"create", "POST", "/api/user/access_tokens", `{"name":"ci","scopes":["profile:read"],"expires_at":0}`, service.VerificationScopeAccessTokenGenerate, []byte(`{"scopes":["profile:read"],"expires_at":0}`), CreateAccessToken},
+		{"update", "PATCH", fmt.Sprintf("/api/user/access_tokens/%d", tokenID), `{"name":"ci","scopes":["usage:read"]}`, service.VerificationScopeAccessTokenUpdate, []byte(fmt.Sprintf(`{"token_id":%d,"scopes":["usage:read"]}`, tokenID)), withAccessTokenID(UpdateAccessToken, tokenID)},
 		{"delete", "DELETE", fmt.Sprintf("/api/user/access_tokens/%d", tokenID), "", service.VerificationScopeAccessTokenRevoke, []byte(fmt.Sprintf(`{"token_id":%d}`, tokenID)), withAccessTokenID(DeleteAccessToken, tokenID)},
 		{"legacy", "DELETE", "/api/user/access_tokens/legacy", "", service.VerificationScopeAccessTokenRevoke, []byte(`{"legacy":true}`), RevokeLegacyAccessToken},
 	}
 }
 
-// assertAccessTokensUnchanged checks that the seeded scoped token and legacy
-// token both still authenticate.
+// assertAccessTokensUnchanged checks that the seeded scoped token keeps its
+// name and grant and that the legacy token still authenticates.
 func assertAccessTokensUnchanged(t *testing.T, userID int, scopedID int, legacy string) {
 	t.Helper()
 	tokens, err := model.ListUserAccessTokens(userID)
 	require.NoError(t, err)
 	require.Len(t, tokens, 1)
 	assert.Equal(t, scopedID, tokens[0].Id)
+	assert.Equal(t, "test token", tokens[0].Name)
+	assert.Equal(t, []string{"profile:read"}, tokens[0].GetScopes())
 	stored, err := model.ValidateAccessToken(legacy)
 	require.NoError(t, err)
 	require.NotNil(t, stored)
@@ -229,7 +243,7 @@ func TestSecurityEnrollmentAccessTokenMethodPolicy(t *testing.T) {
 			if !test.password {
 				passwordScope = service.VerificationScopePasswordSet
 			}
-			for _, scope := range []string{service.VerificationScopeAccessTokenGenerate, service.VerificationScopeAccessTokenRevoke,
+			for _, scope := range []string{service.VerificationScopeAccessTokenGenerate, service.VerificationScopeAccessTokenUpdate, service.VerificationScopeAccessTokenRevoke,
 				service.VerificationScopeAccountBind, service.VerificationScopeAccountUnbind, passwordScope} {
 				requirements, err := service.GetVerificationRequirements(identity, scope)
 				require.NoError(t, err)
@@ -252,6 +266,8 @@ func TestSecurityEnrollmentAccessTokenMethodPolicy(t *testing.T) {
 						input.Context = []byte(`{"provider_id":1}`)
 					case service.VerificationScopeAccessTokenGenerate:
 						input.Context = []byte(`{"scopes":["profile:read"],"expires_at":0}`)
+					case service.VerificationScopeAccessTokenUpdate:
+						input.Context = []byte(`{"token_id":1,"scopes":["profile:read"]}`)
 					case service.VerificationScopeAccessTokenRevoke:
 						input.Context = []byte(`{"token_id":1}`)
 					}
@@ -380,6 +396,7 @@ func TestSecurityEnrollmentAccessTokenFailureDoesNotRestoreProof(t *testing.T) {
 	require.NoError(t, model.DB.Callback().Create().Before("gorm:create").Register("access_token_create_failure", failWrite("user_access_tokens")))
 	require.NoError(t, model.DB.Callback().Delete().Before("gorm:delete").Register("access_token_delete_failure", failWrite("user_access_tokens")))
 	require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register("legacy_token_update_failure", failWrite("users")))
+	require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register("access_token_update_failure", failWrite("user_access_tokens")))
 	for _, endpoint := range accessTokenMutationEndpoints(scoped.Id) {
 		t.Run(endpoint.name, func(t *testing.T) {
 			proof := issueSecurityEnrollmentProof(t, identity, service.VerificationOperation{Scope: endpoint.scope, Context: endpoint.context}, "password")
@@ -467,6 +484,7 @@ func TestSecurityEnrollmentAccessTokenStepUpBoundaries(t *testing.T) {
 			{"methods without account security", readOnly, "/api/verify/methods?scope=2fa.setup", ""},
 			{"verify without account security", readOnly, "/api/verify", `{"scope":"2fa.setup","method":"password","password":"enrollment-password"}`},
 			{"token creation", full, "/api/verify", `{"scope":"access_token.generate","method":"password","password":"enrollment-password","context":{"scopes":["profile:read"],"expires_at":0}}`},
+			{"token grant change", full, "/api/verify", `{"scope":"access_token.update","method":"password","password":"enrollment-password","context":{"token_id":1,"scopes":["profile:read"]}}`},
 			{"token revocation", full, "/api/verify", `{"scope":"access_token.revoke","method":"password","password":"enrollment-password","context":{"legacy":true}}`},
 		} {
 			method := http.MethodPost
@@ -628,10 +646,11 @@ func TestSecurityEnrollmentRejectsMissingProofBeforeCreatingCredentials(t *testi
 }
 
 type securityEnrollmentResponse struct {
-	Success bool            `json:"success"`
-	Message string          `json:"message"`
-	Code    string          `json:"code"`
-	Data    json.RawMessage `json:"data"`
+	Success    bool            `json:"success"`
+	Message    string          `json:"message"`
+	MessageKey string          `json:"message_key"`
+	Code       string          `json:"code"`
+	Data       json.RawMessage `json:"data"`
 }
 
 func TestSecurityEnrollmentMethodPolicy(t *testing.T) {
@@ -752,6 +771,11 @@ func TestSecurityEnrollmentOperationContext(t *testing.T) {
 		{"generate access token without grant", "access_token.generate", `{}`, service.ErrVerificationContextInvalid},
 		{"generate access token empty grant", "access_token.generate", `{"scopes":[],"expires_at":0}`, service.ErrVerificationContextInvalid},
 		{"generate access token negative expiry", "access_token.generate", `{"scopes":["profile:read"],"expires_at":-1}`, service.ErrVerificationContextInvalid},
+		{"update access token", "access_token.update", `{"token_id":3,"scopes":["profile:read"]}`, nil},
+		{"update access token without target", "access_token.update", `{"scopes":["profile:read"]}`, service.ErrVerificationContextInvalid},
+		{"update access token without grant", "access_token.update", `{"token_id":3}`, service.ErrVerificationContextInvalid},
+		{"update access token empty grant", "access_token.update", `{"token_id":3,"scopes":[]}`, service.ErrVerificationContextInvalid},
+		{"update access token target injection", "access_token.update", `{"token_id":3,"scopes":["profile:read"],"user_id":42}`, service.ErrVerificationContextInvalid},
 		{"revoke access token", "access_token.revoke", `{"token_id":3}`, nil},
 		{"revoke legacy access token", "access_token.revoke", `{"legacy":true}`, nil},
 		{"revoke access token without target", "access_token.revoke", ``, service.ErrVerificationContextInvalid},
@@ -1387,7 +1411,7 @@ func TestSecurityEnrollmentTwoFAFailureAccountingAndStorageErrors(t *testing.T) 
 		require.NoError(t, common.Unmarshal(response.Body.Bytes(), &body))
 		assert.False(t, body.Success, endpoint.path)
 		if endpoint.path == "/api/user/login/2fa" {
-			assert.Equal(t, "参数错误", body.Message, endpoint.path)
+			assert.Equal(t, "Invalid parameters", body.Message, endpoint.path)
 		} else {
 			assert.Equal(t, "SECURITY_PROOF_REQUIRED", body.Code, endpoint.path)
 		}
@@ -1754,23 +1778,21 @@ func TestSecurityEnrollmentMissingTargetsAreBusinessErrors(t *testing.T) {
 	_, identity := setupSecurityEnrollmentTest(t)
 	require.NoError(t, model.DB.AutoMigrate(&model.Channel{}))
 	for _, target := range []struct {
-		path, key string
-		handler   gin.HandlerFunc
+		path, message string
+		handler       gin.HandlerFunc
 	}{
-		{"/api/channel/999/key", i18n.MsgChannelNotExists, GetChannelKey},
-		{"/api/user/999/2fa", i18n.MsgUserNotExists, AdminDisable2FA},
+		{"/api/channel/999/key", "Channel does not exist", GetChannelKey},
+		{"/api/user/999/2fa", "User does not exist", AdminDisable2FA},
 	} {
-		var expectedMessage string
 		response := securityEnrollmentRequest("POST", target.path, "", "", identity, func(c *gin.Context) {
 			c.Params = gin.Params{{Key: "id", Value: "999"}}
-			expectedMessage = i18n.T(c, target.key)
 			target.handler(c)
 		})
 		assert.Equal(t, http.StatusOK, response.Code)
 		var body securityEnrollmentResponse
 		require.NoError(t, common.Unmarshal(response.Body.Bytes(), &body))
 		assert.False(t, body.Success)
-		assert.Equal(t, expectedMessage, body.Message)
+		assert.Equal(t, target.message, body.Message)
 		assert.NotEqual(t, "AUTH_UNAUTHORIZED", body.Code)
 		for _, id := range []string{"invalid", "0", "-1"} {
 			invalid := securityEnrollmentRequest("POST", target.path, "", "", identity, func(c *gin.Context) {

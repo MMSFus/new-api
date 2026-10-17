@@ -312,7 +312,7 @@ func validateCredit(bucket string, amount int) error {
 		return ErrInvalidBalanceBucket
 	}
 	if amount < 0 {
-		return errors.New("quota 不能为负数！")
+		return errors.New("quota cannot be negative")
 	}
 	return common.ValidateWalletQuota(amount)
 }
@@ -348,7 +348,7 @@ func CreditUserBalanceTx(tx *gorm.DB, userId int, bucket string, amount int, lim
 // 可用余额不足时不做任何扣减，返回 *GroupBalanceInsufficientError。
 func ReserveUserBalance(userId int, group string, amount int) (common.BalanceLedger, error) {
 	if amount < 0 {
-		return nil, errors.New("quota 不能为负数！")
+		return nil, errors.New("quota cannot be negative")
 	}
 	if amount == 0 {
 		return nil, nil
@@ -373,7 +373,7 @@ func ReserveUserBalance(userId int, group string, amount int) (common.BalanceLed
 // （与旧版"余额可为负"的欠费语义一致），总是全额扣减。
 func DebitUserBalance(userId int, group string, amount int) (common.BalanceLedger, error) {
 	if amount < 0 {
-		return nil, errors.New("quota 不能为负数！")
+		return nil, errors.New("quota cannot be negative")
 	}
 	if amount == 0 {
 		return nil, nil

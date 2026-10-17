@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/common/limiter"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting"
@@ -105,9 +106,8 @@ func (p modelRateLimitPlan) durationMinutes() int64 {
 	return p.durationSeconds / 60
 }
 
-// modelRateLimitScopeSuffix isolates counters per called group. The legacy
-// table and the default limit keep the historic per-user keys, so upgrading
-// neither resets nor splits counters of existing deployments.
+// scopeSuffix isolates counters per rule scope. The default limit keeps the
+// historic per-user keys; a group with its own limit counts on its own.
 func (p modelRateLimitPlan) scopeSuffix() string {
 	if p.scope == "" {
 		return ""
@@ -131,26 +131,36 @@ func (p modelRateLimitPlan) memorySuccessKey() string {
 	return ModelRequestRateLimitSuccessCountMark + p.userID + p.scopeSuffix()
 }
 
-// modelRateLimitDenial is a rejected admission. An empty message keeps the
-// bare status response the in-memory limiter has always returned.
+// modelRateLimitDenial is a rejected admission. messageKey is an i18n key
+// translated in the caller's language; a plain message is sent as is.
 type modelRateLimitDenial struct {
-	status  int
-	message string
+	status     int
+	message    string
+	messageKey string
+	params     map[string]any
+}
+
+func newModelRateLimitExceeded(key string, plan modelRateLimitPlan, max int) *modelRateLimitDenial {
+	return &modelRateLimitDenial{
+		status:     http.StatusTooManyRequests,
+		messageKey: key,
+		params:     map[string]any{"Minutes": plan.durationMinutes(), "Max": max},
+	}
+}
+
+func (d *modelRateLimitDenial) text(c *gin.Context) string {
+	if d.messageKey != "" {
+		return i18n.T(c, d.messageKey, d.params)
+	}
+	return d.message
 }
 
 func (d *modelRateLimitDenial) abort(c *gin.Context) {
-	if d.message == "" {
-		c.AbortWithStatus(d.status)
-		return
-	}
-	abortWithOpenAiMessage(c, d.status, d.message)
+	abortWithOpenAiMessage(c, d.status, d.text(c))
 }
 
-func (d *modelRateLimitDenial) apiError() *types.NewAPIError {
-	message := d.message
-	if message == "" {
-		message = http.StatusText(d.status)
-	}
+func (d *modelRateLimitDenial) apiError(c *gin.Context) *types.NewAPIError {
+	message := common.MessageWithRequestId(d.text(c), c.GetString(common.RequestIdKey))
 	return types.NewErrorWithStatusCode(errors.New(message), types.ErrorCodeInvalidRequest, d.status, types.ErrOptionWithSkipRetry())
 }
 
@@ -164,11 +174,11 @@ func admitRedis(plan modelRateLimitPlan) (*modelRateLimitDenial, func(bool)) {
 	successKey := plan.redisSuccessKey()
 	allowed, err := checkRedisRateLimit(ctx, rdb, successKey, plan.successMaxCount, plan.durationSeconds)
 	if err != nil {
-		fmt.Println("检查成功请求数限制失败:", err.Error())
+		fmt.Println(common.LogText("failed to check the successful request limit: %s", err.Error()))
 		return &modelRateLimitDenial{status: http.StatusInternalServerError, message: "rate_limit_check_failed"}, nil
 	}
 	if !allowed {
-		return &modelRateLimitDenial{status: http.StatusTooManyRequests, message: fmt.Sprintf("您已达到请求数限制：%d分钟内最多请求%d次", plan.durationMinutes(), plan.successMaxCount)}, nil
+		return newModelRateLimitExceeded(i18n.MsgRateLimitReached, plan, plan.successMaxCount), nil
 	}
 
 	//2.检查总请求数限制并记录总请求（当totalMaxCount为0时会自动跳过，使用令牌桶限流器
@@ -182,11 +192,11 @@ func admitRedis(plan modelRateLimitPlan) (*modelRateLimitDenial, func(bool)) {
 			limiter.WithRequested(plan.durationSeconds),
 		)
 		if err != nil {
-			fmt.Println("检查总请求数限制失败:", err.Error())
+			fmt.Println(common.LogText("failed to check the total request limit: %s", err.Error()))
 			return &modelRateLimitDenial{status: http.StatusInternalServerError, message: "rate_limit_check_failed"}, nil
 		}
 		if !allowed {
-			return &modelRateLimitDenial{status: http.StatusTooManyRequests, message: fmt.Sprintf("您已达到总请求数限制：%d分钟内最多请求%d次，包括失败次数，请检查您的请求是否正确", plan.durationMinutes(), plan.totalMaxCount)}, nil
+			return newModelRateLimitExceeded(i18n.MsgRateLimitTotalReached, plan, plan.totalMaxCount), nil
 		}
 	}
 
@@ -204,14 +214,14 @@ func admitMemory(plan modelRateLimitPlan) (*modelRateLimitDenial, func(bool)) {
 
 	// 1. 检查总请求数限制（当totalMaxCount为0时跳过）
 	if plan.totalMaxCount > 0 && !inMemoryRateLimiter.Request(plan.memoryTotalKey(), plan.totalMaxCount, plan.durationSeconds) {
-		return &modelRateLimitDenial{status: http.StatusTooManyRequests}, nil
+		return newModelRateLimitExceeded(i18n.MsgRateLimitTotalReached, plan, plan.totalMaxCount), nil
 	}
 
 	var reservation *common.RateLimitReservation
 	if plan.successMaxCount > 0 {
 		reservation = inMemoryRateLimiter.Reserve(plan.memorySuccessKey(), plan.successMaxCount, plan.durationSeconds)
 		if reservation == nil {
-			return &modelRateLimitDenial{status: http.StatusTooManyRequests}, nil
+			return newModelRateLimitExceeded(i18n.MsgRateLimitReached, plan, plan.successMaxCount), nil
 		}
 	}
 	return nil, reservation.Complete
@@ -240,9 +250,11 @@ func runModelRateLimitPlan(c *gin.Context, plan modelRateLimitPlan, useRedis boo
 	}
 }
 
-func legacyModelRateLimitPlan(c *gin.Context, duration int64, totalMaxCount, successMaxCount int) modelRateLimitPlan {
+// legacyModelRateLimitPlan counts subject (a user id) against one limit
+// without a group scope.
+func legacyModelRateLimitPlan(subject string, duration int64, totalMaxCount, successMaxCount int) modelRateLimitPlan {
 	return modelRateLimitPlan{
-		userID:          strconv.Itoa(c.GetInt("id")),
+		userID:          subject,
 		durationSeconds: duration,
 		totalMaxCount:   totalMaxCount,
 		successMaxCount: successMaxCount,
@@ -250,16 +262,16 @@ func legacyModelRateLimitPlan(c *gin.Context, duration int64, totalMaxCount, suc
 }
 
 // Redis限流处理器
-func redisRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) gin.HandlerFunc {
+func redisRateLimitHandler(subject string, duration int64, totalMaxCount, successMaxCount int) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		runModelRateLimitPlan(c, legacyModelRateLimitPlan(c, duration, totalMaxCount, successMaxCount), true)
+		runModelRateLimitPlan(c, legacyModelRateLimitPlan(subject, duration, totalMaxCount, successMaxCount), true)
 	}
 }
 
 // 内存限流处理器
-func memoryRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) gin.HandlerFunc {
+func memoryRateLimitHandler(subject string, duration int64, totalMaxCount, successMaxCount int) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		runModelRateLimitPlan(c, legacyModelRateLimitPlan(c, duration, totalMaxCount, successMaxCount), false)
+		runModelRateLimitPlan(c, legacyModelRateLimitPlan(subject, duration, totalMaxCount, successMaxCount), false)
 	}
 }
 
@@ -369,7 +381,7 @@ func CheckModelRequestRateLimit(c *gin.Context) *types.NewAPIError {
 		return nil
 	}
 	if denial := gate.enforce(c); denial != nil {
-		return denial.apiError()
+		return denial.apiError(c)
 	}
 	return nil
 }

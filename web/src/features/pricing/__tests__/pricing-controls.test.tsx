@@ -192,9 +192,9 @@ describe('pricing controls', () => {
     render(<PricingToolbar {...props} />)
     await user.click(screen.getByRole('button', { name: 'Name' }))
     await user.click(
-      screen.getByRole('menuitem', { name: 'Price: Low to High' })
+      screen.getByRole('menuitem', { name: 'Input Price: Low to High' })
     )
-    expect(props.onSortChange).toHaveBeenCalledWith('price-low')
+    expect(props.onSortChange).toHaveBeenCalledWith('input-price-low')
   })
 
   it('selects a config group through the group filter and counts its reachable models', async () => {

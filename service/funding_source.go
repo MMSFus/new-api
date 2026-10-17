@@ -58,6 +58,13 @@ func (e *groupBalanceInsufficientError) Error() string { return e.message }
 
 func (e *groupBalanceInsufficientError) Unwrap() error { return e.detail }
 
+var balanceBucketMessageKeys = map[string]string{
+	common.BalanceBucketTopup:       i18n.MsgBalanceBucketTopup,
+	common.BalanceBucketAffRebate:   i18n.MsgBalanceBucketAffRebate,
+	common.BalanceBucketInviteBonus: i18n.MsgBalanceBucketInviteBonus,
+	common.BalanceBucketGift:        i18n.MsgBalanceBucketGift,
+}
+
 // NewGroupBalanceInsufficientAPIError 以 lang 本地化分组余额不足错误（余额类型
 // 显示为本地化名称），并保持 403 + insufficient_user_quota + 不重试的语义。
 func NewGroupBalanceInsufficientAPIError(lang string, detail *model.GroupBalanceInsufficientError) *types.NewAPIError {
@@ -67,10 +74,9 @@ func NewGroupBalanceInsufficientAPIError(lang string, detail *model.GroupBalance
 	}
 	names := make([]string, 0, len(detail.Buckets))
 	for _, bucket := range detail.Buckets {
-		key := i18n.MsgBalanceBucketPrefix + bucket
-		name := i18n.Translate(lang, key)
-		if name == key {
-			name = bucket
+		name := bucket
+		if key, ok := balanceBucketMessageKeys[bucket]; ok {
+			name = i18n.Translate(lang, key)
 		}
 		names = append(names, name)
 	}

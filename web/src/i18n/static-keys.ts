@@ -213,8 +213,12 @@ export const STATIC_I18N_KEYS = [
 
   // Pricing constants
   'Name',
-  'Price: Low to High',
-  'Price: High to Low',
+  'Input Price: Low to High',
+  'Input Price: High to Low',
+  'Output Price: Low to High',
+  'Output Price: High to Low',
+  'Per-request Price: Low to High',
+  'Per-request Price: High to Low',
   'All Models',
   'Token-based',
   'Per Request',
@@ -897,7 +901,7 @@ export const STATIC_I18N_KEYS = [
   'Choose a time at least one hour from now',
   'Select at least one permission',
   'Failed to load access tokens',
-  'Failed to rename access token',
+  'Failed to save',
   'Created an access token',
   'Revoked an access token',
   'Renamed an access token',

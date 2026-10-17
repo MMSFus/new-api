@@ -114,6 +114,8 @@ export function auditFieldLabel(key: string, t: TFunction): string {
       return t('Model Limits')
     case 'allow_ips':
       return t('IP Whitelist (supports CIDR)')
+    case 'allow_user_quota_query':
+      return t('Allow querying user quota')
     case 'auto_groups':
       return t('Auto Group Chain')
     case 'cross_group_retry':
@@ -172,6 +174,8 @@ export function auditFieldLabel(key: string, t: TFunction): string {
       return t('Token identifier')
     case 'scopes':
       return t('Permissions')
+    case 'previous_scopes':
+      return t('Previous permissions')
     case 'expires_at':
       return t('Expiration')
     case 'required_scope':
@@ -528,19 +532,19 @@ export function buildAuditDetails(
   if (typeof params.verification_method === 'string') {
     params.verification_method = loginMethodLabel(params.verification_method, t)
   }
-  if (
-    Array.isArray(params.scopes) &&
-    params.scopes.every((scope) => typeof scope === 'string')
-  ) {
+  for (const key of ['scopes', 'previous_scopes']) {
+    const scopes = params[key]
+    if (
+      !Array.isArray(scopes) ||
+      !scopes.every((scope) => typeof scope === 'string')
+    ) {
+      continue
+    }
     fields.push({
-      label: t('Permissions'),
-      value: describeAccessTokenScopes(
-        params.scopes,
-        options.scopeResources,
-        t
-      ),
+      label: auditFieldLabel(key, t),
+      value: describeAccessTokenScopes(scopes, options.scopeResources, t),
     })
-    delete params.scopes
+    delete params[key]
   }
   if (typeof params.expires_at === 'number') {
     fields.push({

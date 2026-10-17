@@ -1,22 +1,24 @@
 // Seedance capabilities from the Ark model list, not prices: the output
-// resolutions each model offers, whether it accepts reference video input
-// (Seedance 2.x prices video-to-video tokens separately) and whether audio
-// output is priced separately (Seedance 1.5 pro; generate_audio defaults to
-// true). Seedance 1.0 lite is no longer listed and keeps the 1.0 pro tiers.
+// resolutions each model offers, the longest output duration in seconds
+// (duration -1 lets Seedance 1.5 pro and 2.x pick a length up to it), whether
+// it accepts reference video input (Seedance 2.x prices video-to-video tokens
+// separately) and whether audio output is priced separately (Seedance 1.5 pro;
+// generate_audio defaults to true). Seedance 1.0 lite is no longer listed and
+// keeps the 1.0 pro tiers.
 const VIDEO_MODELS = {
-  "doubao-seedance-1-0-pro-250528": { resolutions: ["480p", "720p", "1080p"] },
-  "doubao-seedance-1-0-lite-t2v": { resolutions: ["480p", "720p", "1080p"] },
-  "doubao-seedance-1-0-lite-i2v": { resolutions: ["480p", "720p", "1080p"] },
-  "doubao-seedance-1-5-pro-251215": { resolutions: ["480p", "720p", "1080p"], audio: true },
-  "doubao-seedance-2-0-260128": { resolutions: ["480p", "720p", "1080p", "4k"], videoInput: true },
-  "doubao-seedance-2-0-fast-260128": { resolutions: ["480p", "720p"], videoInput: true },
-  "doubao-seedance-2-0-mini-260615": { resolutions: ["480p", "720p"], videoInput: true },
-  "doubao-seedance-2-5-260628": { resolutions: ["480p", "720p", "1080p"], videoInput: true },
+  "doubao-seedance-1-0-pro-250528": { resolutions: ["480p", "720p", "1080p"], maxDuration: 12 },
+  "doubao-seedance-1-0-lite-t2v": { resolutions: ["480p", "720p", "1080p"], maxDuration: 12 },
+  "doubao-seedance-1-0-lite-i2v": { resolutions: ["480p", "720p", "1080p"], maxDuration: 12 },
+  "doubao-seedance-1-5-pro-251215": { resolutions: ["480p", "720p", "1080p"], maxDuration: 12, audio: true },
+  "doubao-seedance-2-0-260128": { resolutions: ["480p", "720p", "1080p", "4k"], maxDuration: 15, videoInput: true },
+  "doubao-seedance-2-0-fast-260128": { resolutions: ["480p", "720p"], maxDuration: 15, videoInput: true },
+  "doubao-seedance-2-0-mini-260615": { resolutions: ["480p", "720p"], maxDuration: 15, videoInput: true },
+  "doubao-seedance-2-5-260628": { resolutions: ["480p", "720p", "1080p"], maxDuration: 30, videoInput: true },
 };
 // Every Ark resolution tier; an endpoint ID reached through channel mapping
-// without a declared profile keeps them all.
+// without a declared profile keeps them all and the longest Seedance duration.
 const SEEDANCE_RESOLUTIONS = ["480p", "720p", "1080p", "4k"];
-const DEFAULT_VIDEO_PROFILE = { resolutions: SEEDANCE_RESOLUTIONS, videoInput: true };
+const DEFAULT_VIDEO_PROFILE = { resolutions: SEEDANCE_RESOLUTIONS, maxDuration: 30, videoInput: true };
 
 // Protocol capabilities from the Ark image generation API reference, not prices.
 // presets: accepted `size` resolution tiers; minPixels/maxPixels bound `WxH` sizes.
@@ -35,6 +37,18 @@ const IMAGE_MODELS = {
     background: true,
     tools: false,
     fastPromptMode: true,
+  },
+  "doubao-seedream-5-0-flash-260915": {
+    presets: ["1K", "1.5K", "2K"],
+    minPixels: 921600,
+    maxPixels: 4624220,
+    maxReferenceImages: 10,
+    sequential: false,
+    layers: true,
+    outputFormat: true,
+    background: true,
+    tools: false,
+    fastPromptMode: false,
   },
   "doubao-seedream-5-0-lite-260128": {
     presets: ["2K", "3K", "4K"],
@@ -166,6 +180,45 @@ const IMAGE_USAGE_SCHEMA = {
   },
 };
 
+// Models whose smallest output exceeds IMAGE_TIER_MAX_PIXELS only ever produce
+// images above 1.5K, so their pricing has a single output tier.
+function hasLowerImageTier(profile) {
+  return profile.minPixels <= IMAGE_TIER_MAX_PIXELS;
+}
+
+// Usage facts for one Seedream capability profile: the pricing table then
+// lists the lower tier and layer decomposition only for models that offer them.
+// Remaining fields keep their released keys.
+function seedreamUsageSchema(profile) {
+  const schema = {};
+  if (hasLowerImageTier(profile)) {
+    schema.images_up_to_1_5k = IMAGE_USAGE_SCHEMA.images_up_to_1_5k;
+    schema.images_above_1_5k = IMAGE_USAGE_SCHEMA.images_above_1_5k;
+  } else {
+    schema.images_above_1_5k = { ...IMAGE_USAGE_SCHEMA.images_above_1_5k, description: { en: "Image generation unit price", zh: "图片生成单价" } };
+  }
+  schema.input_images = IMAGE_USAGE_SCHEMA.input_images;
+  if (profile.layers) schema.layer_decomposition = IMAGE_USAGE_SCHEMA.layer_decomposition;
+  return schema;
+}
+
+// Image facts always carry all four released keys, so expressions saved
+// before the per-model profiles keep their charge.
+function seedreamUsageFacts(lower, higher, inputImages, layered) {
+  return { images_up_to_1_5k: lower, images_above_1_5k: higher, input_images: inputImages, layer_decomposition: layered };
+}
+
+function seedreamUsageExamples(profile) {
+  const examples = [{ label: "2K · 1 张", facts: seedreamUsageFacts(0, 1, 0, false) }];
+  if (hasLowerImageTier(profile)) examples.push({ label: "1K · 1 张 · 2 张参考图", facts: seedreamUsageFacts(1, 0, 2, false) });
+  else examples.push({ label: "2K · 1 张 · 2 张参考图", facts: seedreamUsageFacts(0, 1, 2, false) });
+  if (profile.sequential) examples.push({ label: "2K · 4 张组图", facts: seedreamUsageFacts(0, 4, 0, false) });
+  if (profile.layers) examples.push({ label: "图层拆分 · 2K 底图 + 4 层 1.5K", facts: seedreamUsageFacts(4, 1, 1, true) });
+  // Examples are complete vectors over the profile schema alone.
+  const keys = Object.keys(seedreamUsageSchema(profile));
+  return examples.map((example) => ({ label: example.label, facts: Object.fromEntries(keys.map((key) => [key, example.facts[key]])) }));
+}
+
 // Usage facts for one Seedance capability profile: the pricing table then
 // lists only the resolutions and input kinds the model offers.
 function seedanceUsageSchema(profile) {
@@ -223,15 +276,17 @@ function seedanceUsageExamples(profile) {
   });
 }
 
-// One usage profile per distinct capability shape.
-function seedanceUsageProfiles() {
+// One usage profile per distinct pricing shape of a capability table: models
+// whose schema and examples are identical share a profile.
+function capabilityUsageProfiles(models, usageSchema, usageExamples) {
   const profiles = [];
-  for (const model of Object.keys(VIDEO_MODELS)) {
-    const capability = VIDEO_MODELS[model];
-    const shape = capability.resolutions.join("/") + (capability.videoInput ? "+video" : "") + (capability.audio ? "+audio" : "");
+  for (const model of Object.keys(models)) {
+    const schema = usageSchema(models[model]);
+    const examples = usageExamples(models[model]);
+    const shape = JSON.stringify([schema, examples]);
     let profile = profiles.find((entry) => entry.shape === shape);
     if (!profile) {
-      profile = { shape: shape, models: [], schema: seedanceUsageSchema(capability), examples: seedanceUsageExamples(capability) };
+      profile = { shape: shape, models: [], schema: schema, examples: examples };
       profiles.push(profile);
     }
     profile.models.push(model);
@@ -248,26 +303,18 @@ export const meta = {
     en: "Volcengine Doubao Seedance video generation and Seedream image generation",
     zh: "火山引擎豆包 Seedance 视频生成与 Seedream 图片生成",
   },
-  version: "1.2.0",
+  version: "1.3.0",
   author: { name: "QuantumNous" },
   channelTypes: [54, 45], // VolcEngine-type channels serve Ark video models with the same wire format
   models: Object.keys(VIDEO_MODELS).concat(Object.keys(IMAGE_MODELS)),
   fetchMode: "per_task",
   upstreams: ["vendor", "new_api"],
+  requiredCapabilities: ["duration-auto@1"],
   usageSchema: seedanceUsageSchema(DEFAULT_VIDEO_PROFILE),
   usageExamples: seedanceUsageExamples(DEFAULT_VIDEO_PROFILE),
-  usageProfiles: seedanceUsageProfiles().concat([
-    {
-      models: Object.keys(IMAGE_MODELS),
-      schema: IMAGE_USAGE_SCHEMA,
-      examples: [
-        { label: "2K · 1 张", facts: { images_up_to_1_5k: 0, images_above_1_5k: 1, input_images: 0, layer_decomposition: false } },
-        { label: "1K · 1 张 · 2 张参考图", facts: { images_up_to_1_5k: 1, images_above_1_5k: 0, input_images: 2, layer_decomposition: false } },
-        { label: "2K · 4 张组图", facts: { images_up_to_1_5k: 0, images_above_1_5k: 4, input_images: 0, layer_decomposition: false } },
-        { label: "图层拆分 · 2K 底图 + 4 层 1.5K", facts: { images_up_to_1_5k: 4, images_above_1_5k: 1, input_images: 1, layer_decomposition: true } },
-      ],
-    },
-  ]),
+  usageProfiles: capabilityUsageProfiles(VIDEO_MODELS, seedanceUsageSchema, seedanceUsageExamples).concat(
+    capabilityUsageProfiles(IMAGE_MODELS, seedreamUsageSchema, seedreamUsageExamples)
+  ),
   routes: [
     { method: "POST", path: "/doubao/api/v3/contents/generations/tasks", type: "submit", decode: "createTask", render: "taskCreated" },
     { method: "GET", path: "/doubao/api/v3/contents/generations/tasks/:task_id", type: "query", render: "taskStatus" },
@@ -511,9 +558,9 @@ function convertImage(ctx) {
     if (body.output_format !== "png" && body.output_format !== "jpeg") throw new Error("output_format must be png or jpeg");
     if (!profile.outputFormat) throw new Error("output_format is not supported by this model");
   }
-  // The API reference lists `background` for 5.0 pro only, but a live probe
-  // showed lite accepting and ignoring it, so other models forward the value
-  // and only pro's documented combination rules are enforced locally.
+  // The API reference lists `background` for 5.0 pro and flash only, but a live
+  // probe showed lite accepting and ignoring it, so other models forward the
+  // value and only pro and flash's documented combination rules are enforced locally.
   if (body.background !== undefined) {
     if (body.background !== "opaque" && body.background !== "transparent") throw new Error("background must be opaque or transparent");
     if (profile.background && body.background === "transparent" && images.length !== 1)
@@ -554,12 +601,7 @@ function convertImage(ctx) {
   return {
     body: body,
     action: images.length ? "image_to_image" : "text_to_image",
-    facts: {
-      images_up_to_1_5k: higherTier ? 0 : imageCount,
-      images_above_1_5k: higherTier ? imageCount : 0,
-      input_images: images.length,
-      layer_decomposition: layered,
-    },
+    facts: seedreamUsageFacts(higherTier ? 0 : imageCount, higherTier ? imageCount : 0, images.length, layered),
   };
 }
 
@@ -592,27 +634,32 @@ function imagePayloads(body) {
 
 // Completion facts. Each successful image is counted at its own pixel tier from
 // data[].size (official pricing bills layers individually). Payloads without a
-// parseable size keep the submit-time tier estimate; usage.input_images
-// replaces the estimated reference count only when it is a bounded integer.
-function imageUsage(body) {
+// parseable size keep the submit-time tier estimate, except on single-tier
+// models where every payload is the upper tier; usage.input_images replaces
+// the estimated reference count only when it is a bounded integer.
+function imageUsage(body, profile) {
   const usage = body.usage || {};
   const payloads = imagePayloads(body);
   const facts = {};
-  let lower = 0,
-    higher = 0,
-    sized = true;
-  for (const item of payloads) {
-    const dims = imageSizePixels(item.size);
-    if (!dims) {
-      sized = false;
-      break;
+  if (hasLowerImageTier(profile)) {
+    let lower = 0,
+      higher = 0,
+      sized = true;
+    for (const item of payloads) {
+      const dims = imageSizePixels(item.size);
+      if (!dims) {
+        sized = false;
+        break;
+      }
+      if (dims.pixels > IMAGE_TIER_MAX_PIXELS) higher += 1;
+      else lower += 1;
     }
-    if (dims.pixels > IMAGE_TIER_MAX_PIXELS) higher += 1;
-    else lower += 1;
-  }
-  if (sized) {
-    facts.images_up_to_1_5k = lower;
-    facts.images_above_1_5k = higher;
+    if (sized) {
+      facts.images_up_to_1_5k = lower;
+      facts.images_above_1_5k = higher;
+    }
+  } else {
+    facts.images_above_1_5k = payloads.length;
   }
   if (Number.isInteger(usage.input_images) && usage.input_images >= 0 && usage.input_images <= MAX_REFERENCE_IMAGES) facts.input_images = usage.input_images;
   return facts;
@@ -767,8 +814,9 @@ export function buildSubmitRequest(ctx) {
   const hasReference = body.content.length > 0;
   if (trimmed(req.prompt) || !hasReference) body.content.push({ type: "text", text: req.prompt || "" });
   if (Array.isArray(body.content)) body.content = rewriteDraftTaskContent(body.content, ctx.originTasks);
+  // -1 lets the model pick the length; extractUsage reserves the longest one.
   const seconds = Number.parseInt(req.seconds || "", 10);
-  if (seconds > 0) body.duration = seconds;
+  if (seconds > 0 || seconds === -1) body.duration = seconds;
   body.model = ctx.upstreamModel || body.model;
   return {
     url: apiRoot(ctx) + "/api/v3/contents/generations/tasks",
@@ -812,17 +860,22 @@ export function extractUsage(ctx) {
     const ratio = videoInputRatio(ctx.upstreamModel || ctx.model, metadata.resolution, metadata.content);
     return ratio === 1 ? null : { video_input_ratio: ratio };
   }
+  const profile = videoProfile(ctx);
+  // A missing duration or -1 (the model picks the length; Seedance 2.5
+  // defaults to it) reserves the longest duration the model can produce.
   let seconds = Number(req.seconds || req.duration || metadata.duration || 0);
   if (!Number.isFinite(seconds) || seconds <= 0) {
     const frames = Number(metadata.frames);
-    seconds = Number.isFinite(frames) && frames > 0 ? Math.floor(frames / 24) : 15;
+    seconds = Number.isFinite(frames) && frames > 0 ? Math.floor(frames / 24) : profile.maxDuration;
   }
   if (seconds <= 0) seconds = 5;
   seconds = Math.min(seconds, 3600);
-  const profile = videoProfile(ctx);
   const resolution = videoResolution(ctx);
   const facts = { tokens: estimateTokens(seconds, resolution), resolution: resolution };
-  if (profile.videoInput) facts.video_input = hasVideo(metadata.content) ? "video" : "none";
+  // Every model reports video_input, including those whose profile omits it:
+  // expressions saved when all Seedance models declared the field then keep
+  // matching their no-video tier.
+  facts.video_input = hasVideo(metadata.content) ? "video" : "none";
   if (profile.audio) facts.generate_audio = metadata.generate_audio !== false;
   return facts;
 }
@@ -907,7 +960,7 @@ export function buildContentRequest(ctx) {
 }
 
 export function extractUsageOnComplete(task, taskResult, body) {
-  if (imageTask(task)) return imageUsage(body || {});
+  if (imageTask(task)) return imageUsage(body || {}, imageProfile(task));
   if (!body || body.status !== "succeeded") return {};
   const facts = {};
   const usage = body.usage || {};
@@ -1107,13 +1160,16 @@ protocols.openai_video = {
       if (!ctx.body.value || Array.isArray(ctx.body.value)) throw new Error("JSON object required");
       const req = ctx.body.value;
       const seconds = req.seconds === undefined ? req.duration : req.seconds;
-      if (seconds !== undefined && (!Number.isFinite(Number(seconds)) || Number(seconds) <= 0 || Number(seconds) > 3600))
-        throw new Error("seconds must be between 1 and 3600");
+      if (seconds !== undefined && Number(seconds) !== -1 && (!Number.isFinite(Number(seconds)) || Number(seconds) <= 0 || Number(seconds) > 3600))
+        throw new Error("seconds must be -1 or between 1 and 3600");
+      const requestBody = Object.assign({}, req, { model: ctx.model });
+      // buildSubmitRequest reads seconds; duration is accepted as its alias.
+      if (seconds !== undefined) requestBody.seconds = seconds;
       return {
         kind: "submit",
         model: ctx.model,
         action: req.input_reference || req.image ? "image_to_video" : "text_to_video",
-        requestBody: Object.assign({}, req, { model: ctx.model }),
+        requestBody: requestBody,
       };
     }
     const first = function (name) {
@@ -1140,8 +1196,8 @@ protocols.openai_video = {
     if (req.seconds !== undefined) req.seconds = Number(req.seconds);
     else if (req.duration !== undefined) req.seconds = Number(req.duration);
     const seconds = req.seconds === undefined ? req.duration : req.seconds;
-    if (seconds !== undefined && (!Number.isFinite(Number(seconds)) || Number(seconds) <= 0 || Number(seconds) > 3600))
-      throw new Error("seconds must be between 1 and 3600");
+    if (seconds !== undefined && Number(seconds) !== -1 && (!Number.isFinite(Number(seconds)) || Number(seconds) <= 0 || Number(seconds) > 3600))
+      throw new Error("seconds must be -1 or between 1 and 3600");
     return {
       kind: "submit",
       model: ctx.model,

@@ -52,6 +52,7 @@ const baseApiKey: ApiKey = {
   model_limits_enabled: false,
   model_limits: '',
   allow_ips: '',
+  allow_user_quota_query: false,
 }
 
 describe('API key Auto group form mapping', () => {
@@ -228,4 +229,32 @@ describe('API key config group form mapping', () => {
     expect(defaults.auto_groups_mode).toBe('inherit')
     expect(defaults.cross_group_retry).toBe(false)
   })
+})
+
+describe('API key user quota query form mapping', () => {
+  test('lets a new key query the user quota by default', () => {
+    for (const defaultUseAutoGroup of [true, false]) {
+      const defaults = getApiKeyFormDefaultValues(defaultUseAutoGroup)
+
+      expect(defaults.allow_user_quota_query).toBe(true)
+      expect(transformFormDataToPayload(defaults).allow_user_quota_query).toBe(
+        true
+      )
+    }
+  })
+
+  test.each([true, false])(
+    'keeps the stored value %s when an existing key is edited and saved',
+    (stored) => {
+      const defaults = transformApiKeyToFormDefaults({
+        ...baseApiKey,
+        allow_user_quota_query: stored,
+      })
+
+      expect(defaults.allow_user_quota_query).toBe(stored)
+      expect(transformFormDataToPayload(defaults).allow_user_quota_query).toBe(
+        stored
+      )
+    }
+  )
 })
