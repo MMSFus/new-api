@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/cachex"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -103,6 +105,61 @@ type SimulatedCachePlan struct {
 	// numbers are fixed on the first usage frame with a positive prompt so
 	// every later frame (message_delta, cumulative Gemini chunks) agrees.
 	numbers *simulatedCacheNumbers
+	// audit records what upstream reported and what replaced it; the consume
+	// log reads it back from the gin context.
+	audit *SimulatedCacheAudit
+}
+
+// SimulatedCacheTokens is one side (upstream or simulated) of a rewritten
+// usage, in the shared cache vocabulary of every relay format.
+type SimulatedCacheTokens struct {
+	PromptTokens          int `json:"prompt_tokens"`
+	CompletionTokens      int `json:"completion_tokens"`
+	CacheReadTokens       int `json:"cache_read_tokens"`
+	CacheCreationTokens   int `json:"cache_creation_tokens"`
+	CacheCreation5mTokens int `json:"cache_creation_5m_tokens"`
+	CacheCreation1hTokens int `json:"cache_creation_1h_tokens"`
+	Quota                 int `json:"quota"`
+}
+
+// SimulatedCacheAudit is persisted under admin_info.simulated_cache of the
+// consume log. Fields are only ever added; Version changes only on a breaking
+// change, and readers ignore unknown keys.
+type SimulatedCacheAudit struct {
+	Version         int                  `json:"version"`
+	HitRate         int                  `json:"hit_rate"`
+	ClientFormat    string               `json:"client_format"`
+	UpstreamSchema  string               `json:"upstream_schema"`
+	MatchedSegments int                  `json:"matched_segments"`
+	TotalSegments   int                  `json:"total_segments"`
+	Original        SimulatedCacheTokens `json:"original"`
+	Simulated       SimulatedCacheTokens `json:"simulated"`
+	QuotaDelta      int                  `json:"quota_delta"`
+}
+
+const simulatedCacheAuditVersion = 1
+
+// recordAudit captures the first usage frame of a response: the upstream
+// numbers before the rewrite and the simulated numbers after it.
+func (p *SimulatedCachePlan) recordAudit(schema string, original SimulatedCacheTokens, n simulatedCacheNumbers) {
+	if p.audit == nil || p.audit.UpstreamSchema != "" || n.prompt <= 0 {
+		return
+	}
+	p.audit.UpstreamSchema = schema
+	p.audit.Original = original
+	p.audit.Simulated = SimulatedCacheTokens{
+		PromptTokens:          original.PromptTokens,
+		CompletionTokens:      original.CompletionTokens,
+		CacheReadTokens:       n.read,
+		CacheCreationTokens:   n.creation,
+		CacheCreation5mTokens: n.c5m,
+		CacheCreation1hTokens: n.c1h,
+	}
+}
+
+// boundedTokens reads a non-negative token count bounded by MaxQuota.
+func boundedTokens(r gjson.Result) int {
+	return int(max(0, min(r.Int(), int64(common.MaxQuota))))
 }
 
 // simulatedCacheFailedReader replays a read error after the bytes read so far.
@@ -123,7 +180,13 @@ type simulatedCacheNumbers struct {
 // client request body. It returns nil when the channel does not enable
 // simulated caching or the request carries nothing cacheable.
 func PrepareSimulatedCache(c *gin.Context, info *relaycommon.RelayInfo) *SimulatedCachePlan {
-	if c == nil || info == nil || info.ChannelMeta == nil {
+	if c == nil {
+		return nil
+	}
+	// Each attempt starts clean so a retry on another channel never logs the
+	// previous attempt's audit.
+	common.SetContextKey(c, constant.ContextKeySimulatedCache, (*SimulatedCacheAudit)(nil))
+	if info == nil || info.ChannelMeta == nil {
 		return nil
 	}
 	setting := info.ChannelSetting
@@ -145,6 +208,11 @@ func PrepareSimulatedCache(c *gin.Context, info *relaycommon.RelayInfo) *Simulat
 	}
 
 	plan := &SimulatedCachePlan{
+		audit: &SimulatedCacheAudit{
+			Version:      simulatedCacheAuditVersion,
+			HitRate:      min(setting.SimulatedCacheHitRate, 100),
+			ClientFormat: string(info.RelayFormat),
+		},
 		claudeClient:     info.RelayFormat == types.RelayFormatClaude,
 		clientFormat:     info.RelayFormat,
 		hitRate:          min(setting.SimulatedCacheHitRate, 100),
@@ -189,6 +257,9 @@ func PrepareSimulatedCache(c *gin.Context, info *relaycommon.RelayInfo) *Simulat
 	}
 
 	plan.lookupLongestPrefix()
+	plan.audit.MatchedSegments = plan.matched + 1
+	plan.audit.TotalSegments = len(plan.boundaries)
+	common.SetContextKey(c, constant.ContextKeySimulatedCache, plan.audit)
 	return plan
 }
 
@@ -701,6 +772,18 @@ func (p *SimulatedCachePlan) patchOpenAIChatUsage(doc []byte, path string, usage
 		return doc
 	}
 	n := p.numbersForFrame(int(min(prompt, int64(common.MaxQuota))))
+	originalRead := boundedTokens(usage.Get("prompt_tokens_details.cached_tokens"))
+	if originalRead == 0 {
+		originalRead = max(boundedTokens(usage.Get("prompt_cache_hit_tokens")), boundedTokens(usage.Get("cached_tokens")),
+			boundedTokens(usage.Get("input_tokens_details.cached_tokens")))
+	}
+	p.recordAudit("openai_chat", SimulatedCacheTokens{
+		PromptTokens:     n.prompt,
+		CompletionTokens: boundedTokens(usage.Get("completion_tokens")),
+		CacheReadTokens:  originalRead,
+		CacheCreationTokens: max(boundedTokens(usage.Get("prompt_tokens_details.cache_write_tokens")),
+			boundedTokens(usage.Get("prompt_tokens_details.cached_creation_tokens"))),
+	}, n)
 	doc = setJSON(doc, path+".prompt_tokens_details.cached_tokens", n.read)
 	doc = setJSON(doc, path+".prompt_tokens_details.cached_creation_tokens", zeroToNil(n.creation))
 	doc = setJSON(doc, path+".prompt_tokens_details.cache_write_tokens", zeroToNil(n.creation))
@@ -731,6 +814,13 @@ func (p *SimulatedCachePlan) patchResponsesUsage(doc []byte, path string, usage 
 		return doc
 	}
 	n := p.numbersForFrame(int(min(prompt, int64(common.MaxQuota))))
+	p.recordAudit("openai_responses", SimulatedCacheTokens{
+		PromptTokens:     n.prompt,
+		CompletionTokens: boundedTokens(usage.Get("output_tokens")),
+		CacheReadTokens:  boundedTokens(usage.Get("input_tokens_details.cached_tokens")),
+		CacheCreationTokens: max(boundedTokens(usage.Get("input_tokens_details.cache_write_tokens")),
+			boundedTokens(usage.Get("input_tokens_details.cached_creation_tokens"))),
+	}, n)
 	doc = setJSON(doc, path+".input_tokens_details.cached_tokens", n.read)
 	doc = setJSON(doc, path+".input_tokens_details.cached_creation_tokens", zeroToNil(n.creation))
 	doc = setJSON(doc, path+".input_tokens_details.cache_write_tokens", zeroToNil(n.creation))
@@ -748,6 +838,11 @@ func (p *SimulatedCachePlan) patchGeminiUsage(doc []byte, path string, usage gjs
 		return setJSON(doc, path+".cachedContentTokenCount", nil)
 	}
 	n := p.numbersForFrame(int(min(prompt, int64(common.MaxQuota))))
+	p.recordAudit("gemini", SimulatedCacheTokens{
+		PromptTokens:     n.prompt,
+		CompletionTokens: min(boundedTokens(usage.Get("candidatesTokenCount"))+boundedTokens(usage.Get("thoughtsTokenCount")), common.MaxQuota),
+		CacheReadTokens:  boundedTokens(usage.Get("cachedContentTokenCount")),
+	}, n)
 	doc = setJSON(doc, path+".cachedContentTokenCount", zeroToNil(n.read))
 	if p.claudeClient && n.creation > 0 {
 		output := usage.Get("candidatesTokenCount").Int() + usage.Get("thoughtsTokenCount").Int()
@@ -768,6 +863,15 @@ func (p *SimulatedCachePlan) patchClaudeUsage(doc []byte, path string, usage gjs
 			prompt += max(0, min(usage.Get(key).Int(), int64(common.MaxQuota)))
 		}
 		n = p.numbersForFrame(int(min(prompt, int64(common.MaxQuota))))
+		original := SimulatedCacheTokens{
+			PromptTokens:          n.prompt,
+			CompletionTokens:      boundedTokens(usage.Get("output_tokens")),
+			CacheReadTokens:       boundedTokens(usage.Get("cache_read_input_tokens")),
+			CacheCreationTokens:   boundedTokens(usage.Get("cache_creation_input_tokens")),
+			CacheCreation5mTokens: boundedTokens(usage.Get("cache_creation.ephemeral_5m_input_tokens")),
+			CacheCreation1hTokens: boundedTokens(usage.Get("cache_creation.ephemeral_1h_input_tokens")),
+		}
+		p.recordAudit("claude", original, n)
 		doc = setJSON(doc, path+".input_tokens", n.prompt-n.read-n.creation)
 	case p.numbers != nil:
 		// message_delta without input_tokens: keep the message_start split.
@@ -786,4 +890,47 @@ func (p *SimulatedCachePlan) patchClaudeUsage(doc []byte, path string, usage gjs
 		"ephemeral_5m_input_tokens": n.c5m,
 		"ephemeral_1h_input_tokens": n.c1h,
 	})
+}
+
+// originalUsageForAudit rebuilds the settled usage with upstream's real cache
+// numbers, so the audit can price the request as if nothing was rewritten.
+func originalUsageForAudit(billingUsage *dto.Usage, original SimulatedCacheTokens, anthropic bool) *dto.Usage {
+	usage := *billingUsage
+	usage.BillingUsage = nil
+	usage.PromptTokensDetails.CachedTokens = original.CacheReadTokens
+	usage.PromptTokensDetails.CachedCreationTokens = original.CacheCreationTokens
+	usage.PromptTokensDetails.CacheWriteTokens = 0
+	usage.ClaudeCacheCreation5mTokens = 0
+	usage.ClaudeCacheCreation1hTokens = 0
+	if anthropic {
+		// Claude semantic prompt tokens exclude both cache parts.
+		usage.PromptTokens = max(0, original.PromptTokens-original.CacheReadTokens-original.CacheCreationTokens)
+		usage.ClaudeCacheCreation5mTokens = original.CacheCreation5mTokens
+		usage.ClaudeCacheCreation1hTokens = original.CacheCreation1hTokens
+	}
+	return &usage
+}
+
+// attachSimulatedCacheAudit records, for administrators, the upstream usage
+// that the simulated cache replaced and what that usage would have cost.
+// Pricing is re-run without side effects on the request's billing state.
+func attachSimulatedCacheAudit(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, billingUsage *dto.Usage,
+	summary textQuotaSummary, other *model.LogOther) {
+	audit, ok := common.GetContextKeyType[*SimulatedCacheAudit](ctx, constant.ContextKeySimulatedCache)
+	if !ok || audit == nil || audit.UpstreamSchema == "" || billingUsage == nil || other == nil {
+		return
+	}
+	record := *audit
+	record.Original.CompletionTokens = summary.CompletionTokens
+	record.Simulated.CompletionTokens = summary.CompletionTokens
+	record.Simulated.Quota = summary.Quota
+
+	savedClamp := relayInfo.QuotaClamp
+	originalUsage := originalUsageForAudit(billingUsage, record.Original, summary.IsClaudeUsageSemantic)
+	originalSummary := calculateTextQuotaSummary(ctx, relayInfo, originalUsage)
+	record.Original.Quota = settleTextQuota(relayInfo, &originalSummary, originalUsage)
+	relayInfo.QuotaClamp = savedClamp
+
+	record.QuotaDelta = record.Simulated.Quota - record.Original.Quota
+	other.SetAdmin("simulated_cache", record)
 }

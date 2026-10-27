@@ -1,12 +1,17 @@
 package model
 
 import (
+	"os"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 )
 
 // TestFormatUserLogsStripsQuotaSaturation verifies the admin-only quota
@@ -241,4 +246,96 @@ func TestLogFormattingPreservesLargeIntegerLexemes(t *testing.T) {
 		FormatAdminLogs(adminLogs)
 		assert.Equal(t, unprivileged, adminLogs[0].Other)
 	})
+}
+
+// TestSimulatedCacheLogSearchAcrossDatabases covers the audit list filter, the
+// streamed stat sums and the admin-only projection on every log dialect.
+func TestSimulatedCacheLogSearchAcrossDatabases(t *testing.T) {
+	for _, dialect := range []struct {
+		name common.DatabaseType
+		env  string
+	}{
+		{common.DatabaseTypeSQLite, ""},
+		{common.DatabaseTypeMySQL, "TEST_MYSQL_DSN"},
+		{common.DatabaseTypePostgreSQL, "TEST_POSTGRES_DSN"},
+	} {
+		t.Run(string(dialect.name), func(t *testing.T) {
+			var driver gorm.Dialector = sqlite.Open(":memory:")
+			if dialect.env != "" {
+				dsn := os.Getenv(dialect.env)
+				if dsn == "" {
+					t.Skip(dialect.env + " is not configured")
+				}
+				if dialect.name == common.DatabaseTypeMySQL {
+					driver = mysql.Open(dsn)
+				} else {
+					driver = postgres.Open(dsn)
+				}
+			}
+			db, err := gorm.Open(driver, &gorm.Config{})
+			require.NoError(t, err)
+			sqlDB, err := db.DB()
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+
+			oldDB, oldLogDB := DB, LOG_DB
+			oldMain, oldLog := common.MainDatabaseType(), common.LogDatabaseType()
+			DB, LOG_DB = db, db
+			common.SetDatabaseTypes(dialect.name, dialect.name)
+			initCol()
+			t.Cleanup(func() {
+				DB, LOG_DB = oldDB, oldLogDB
+				common.SetDatabaseTypes(oldMain, oldLog)
+				initCol()
+			})
+			require.NoError(t, db.Migrator().DropTable(&Log{}, &Channel{}))
+			require.NoError(t, db.AutoMigrate(&Log{}, &Channel{}))
+			t.Cleanup(func() { _ = db.Migrator().DropTable(&Log{}, &Channel{}) })
+
+			audit := func(original, simulated int) string {
+				return common.MapToJsonStr(map[string]any{
+					"cache_tokens": 0,
+					"admin_info": map[string]any{"simulated_cache": map[string]any{
+						"version":     1,
+						"original":    map[string]any{"quota": original, "cache_read_tokens": 100},
+						"simulated":   map[string]any{"quota": simulated, "cache_read_tokens": 800, "cache_creation_tokens": 50},
+						"quota_delta": simulated - original,
+						"future_key":  "ignored",
+					}},
+				})
+			}
+			now := common.GetTimestamp()
+			rows := []*Log{
+				{Type: LogTypeConsume, CreatedAt: now - 10, ChannelId: 1, ModelName: "m", Other: audit(1000, 400)},
+				{Type: LogTypeConsume, CreatedAt: now - 20, ChannelId: 2, ModelName: "m", Other: audit(500, 300)},
+				{Type: LogTypeConsume, CreatedAt: now - 30, ChannelId: 1, ModelName: "m", Other: `{"cache_tokens":5}`},
+				// The marker inside a non-consume log never counts.
+				{Type: LogTypeError, CreatedAt: now - 40, ChannelId: 1, Other: audit(1, 1)},
+				{Type: LogTypeConsume, CreatedAt: now - 9*24*3600, ChannelId: 1, Other: audit(9, 9)},
+			}
+			require.NoError(t, db.Create(&rows).Error)
+
+			filter := LogFilter{StartTimestamp: now - 3600, EndTimestamp: now, SimulatedCacheOnly: true}
+			logs, total, err := GetAllLogs(filter, 0, 10)
+			require.NoError(t, err)
+			require.EqualValues(t, 2, total)
+			require.Len(t, logs, 2)
+
+			stat, err := SumSimulatedCacheLogs(filter)
+			require.NoError(t, err)
+			assert.Equal(t, SimulatedCacheStat{Count: 2, OriginalQuota: 1500, SimulatedQuota: 700, QuotaDelta: -800,
+				OriginalCacheReadTokens: 200, SimulatedCacheReadTokens: 1600, SimulatedCacheCreationTokens: 100}, stat)
+
+			filter.Channel = 2
+			stat, err = SumSimulatedCacheLogs(filter)
+			require.NoError(t, err)
+			assert.EqualValues(t, 1, stat.Count)
+
+			// Admins see the audit; users never do.
+			FormatAdminLogs(logs)
+			assert.Contains(t, logs[0].Other, `"simulated_cache"`)
+			formatUserLogs(logs, 0)
+			assert.NotContains(t, logs[0].Other, "simulated_cache")
+		})
+	}
 }

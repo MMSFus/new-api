@@ -114,6 +114,38 @@ export interface ToolSurchargeItem {
   price: number
 }
 
+/**
+ * Usage as reported by upstream (`original`) or as rewritten for the client
+ * and billing (`simulated`). Every field is optional: newer versions only add
+ * keys and older rows may omit some.
+ */
+export interface SimulatedCacheUsage {
+  prompt_tokens?: number
+  completion_tokens?: number
+  cache_read_tokens?: number
+  cache_creation_tokens?: number
+  cache_creation_5m_tokens?: number
+  cache_creation_1h_tokens?: number
+  quota?: number
+}
+
+/** `other.admin_info.simulated_cache`, versioned by the backend. */
+export interface SimulatedCacheInfo {
+  version?: number
+  /** Channel setting, percent 0-100. */
+  hit_rate?: number
+  /** openai | openai_responses | claude | gemini */
+  client_format?: string
+  /** openai_chat | openai_responses | claude | gemini */
+  upstream_schema?: string
+  matched_segments?: number
+  total_segments?: number
+  original?: SimulatedCacheUsage
+  simulated?: SimulatedCacheUsage
+  /** simulated.quota - original.quota */
+  quota_delta?: number
+}
+
 export interface LogOtherData {
   admin_info?: {
     request_policy?: PolicyEvent[]
@@ -147,6 +179,10 @@ export interface LogOtherData {
     // Reject / intercept reason (admin only)
     reject_reason?: string
     task_plugin?: TaskPluginInfo
+    // Simulated prompt cache audit (consume logs, admin only). Presence marks a
+    // request whose upstream cache usage was rewritten. Read through
+    // getSimulatedCache, which tolerates missing and unknown keys.
+    simulated_cache?: SimulatedCacheInfo
   }
   root_info?: {
     task_plugin?: TaskPluginRuntimeInfo

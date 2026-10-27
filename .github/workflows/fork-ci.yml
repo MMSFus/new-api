@@ -190,6 +190,68 @@ jobs:
             ~/go/pkg/mod
           key: go-${{ runner.os }}-${{ hashFiles('go.sum', 'relaykit/go.sum', 'tokenkit/go.sum') }}-${{ github.sha }}
 
+  # Database-dependent tests against real MySQL and PostgreSQL. Runs beside
+  # the backend job so it never delays the required check.
+  backend-databases:
+    name: Backend database tests
+    needs: changes
+    if: >-
+      always() && github.ref != 'refs/heads/main' && needs.changes.result != 'cancelled' &&
+      (needs.changes.result != 'success' || needs.changes.outputs.backend == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GOWORK: 'off'
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: new_api_test
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: new_api_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Restore Go cache
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-${{ hashFiles('go.sum', 'relaykit/go.sum', 'tokenkit/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ hashFiles('go.sum', 'relaykit/go.sum', 'tokenkit/go.sum') }}-
+            go-${{ runner.os }}-
+
+      - name: Test log search on SQLite, MySQL, and PostgreSQL
+        env:
+          TEST_MYSQL_DSN: root:root@tcp(127.0.0.1:3306)/new_api_test?charset=utf8mb4
+          TEST_POSTGRES_DSN: postgres://postgres:postgres@127.0.0.1:5432/new_api_test?sslmode=disable
+        run: |
+          mkdir -p web/dist
+          touch web/dist/index.html
+          go test ./model/ -run 'TestSimulatedCacheLogSearchAcrossDatabases' -count=1 -v
+
   frontend:
     name: Frontend test (${{ matrix.shard }})
     needs: changes
