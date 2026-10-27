@@ -1661,6 +1661,95 @@ test('turning on the upstream TLS verification skip saves it in the channel sett
   })
 })
 
+test('enabling the simulated prompt cache reveals the hit rate and saves both in the channel setting', async () => {
+  const put = vi
+    .spyOn(api, 'put')
+    .mockResolvedValue({ data: { success: true } })
+  const user = userEvent.setup()
+  render(<ConfigurationHarness currentRow={editingChannel} />)
+  await screen.findByDisplayValue('Existing channel')
+  await user.click(screen.getByRole('tab', { name: /Request & Response/ }))
+  expect(
+    screen.queryByRole('spinbutton', { name: 'Simulated cache hit rate (%)' })
+  ).not.toBeInTheDocument()
+  await user.click(
+    screen.getByRole('switch', { name: 'Simulated prompt cache' })
+  )
+  const hitRate = screen.getByRole('spinbutton', {
+    name: 'Simulated cache hit rate (%)',
+  })
+  expect(hitRate).toHaveValue(80)
+  await user.clear(hitRate)
+  await user.type(hitRate, '65')
+  await user.click(screen.getByRole('button', { name: 'Update Channel' }))
+  await waitFor(() => expect(put).toHaveBeenCalled())
+  const payload = put.mock.calls[0]?.[1] as { setting: string }
+  expect(JSON.parse(payload.setting)).toMatchObject({
+    simulated_cache_enabled: true,
+    simulated_cache_hit_rate: 65,
+  })
+})
+
+test('a saved simulated prompt cache marks Request & Response and turning it off saves the setting without it', async () => {
+  editingChannel = {
+    ...editingChannel,
+    setting: '{"simulated_cache_enabled":true,"simulated_cache_hit_rate":40}',
+  }
+  const put = vi
+    .spyOn(api, 'put')
+    .mockResolvedValue({ data: { success: true } })
+  const user = userEvent.setup()
+  render(<ConfigurationHarness currentRow={editingChannel} />)
+  await screen.findByDisplayValue('Existing channel')
+  const requestTab = screen.getByRole('tab', { name: /Request & Response/ })
+  expect(requestTab).toHaveAccessibleName(/Configured/)
+  await user.click(requestTab)
+  expect(
+    screen.getByRole('spinbutton', { name: 'Simulated cache hit rate (%)' })
+  ).toHaveValue(40)
+  await user.click(
+    screen.getByRole('switch', { name: 'Simulated prompt cache' })
+  )
+  expect(
+    screen.queryByRole('spinbutton', { name: 'Simulated cache hit rate (%)' })
+  ).not.toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: 'Update Channel' }))
+  await waitFor(() => expect(put).toHaveBeenCalled())
+  const payload = put.mock.calls[0]?.[1] as { setting: string }
+  const setting = JSON.parse(payload.setting)
+  expect(setting).not.toHaveProperty('simulated_cache_enabled')
+  expect(setting).not.toHaveProperty('simulated_cache_hit_rate')
+})
+
+test('a simulated cache hit rate above 100 blocks saving with a field error', async () => {
+  const put = vi.spyOn(api, 'put')
+  const user = userEvent.setup()
+  render(<ConfigurationHarness currentRow={editingChannel} />)
+  await screen.findByDisplayValue('Existing channel')
+  await user.click(screen.getByRole('tab', { name: /Request & Response/ }))
+  await user.click(
+    screen.getByRole('switch', { name: 'Simulated prompt cache' })
+  )
+  const hitRate = screen.getByRole('spinbutton', {
+    name: 'Simulated cache hit rate (%)',
+  })
+  await user.clear(hitRate)
+  await user.type(hitRate, '150')
+  await user.click(screen.getByRole('tab', { name: /Connection & Models/ }))
+  await user.click(screen.getByRole('button', { name: 'Update Channel' }))
+  await waitFor(() =>
+    expect(
+      screen.getByRole('spinbutton', { name: 'Simulated cache hit rate (%)' })
+    ).toHaveFocus()
+  )
+  expect(
+    screen.getByText(
+      'Simulated cache hit rate must be an integer between 0 and 100'
+    )
+  ).toBeVisible()
+  expect(put).not.toHaveBeenCalled()
+})
+
 test('an invalid edit switches categories and replaces configured styling with the field error', async () => {
   const user = userEvent.setup()
   render(<ConfigurationHarness currentRow={editingChannel} />)

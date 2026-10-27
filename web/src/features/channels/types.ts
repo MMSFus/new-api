@@ -84,6 +84,8 @@ export interface ChannelSettings {
   task_extend_plugin_keys?: string[]
   force_format?: boolean
   thinking_to_content?: boolean
+  simulated_cache_enabled?: boolean
+  simulated_cache_hit_rate?: number
   proxy?: string
   pass_through_body_enabled?: boolean
   responses_websocket_enabled?: boolean

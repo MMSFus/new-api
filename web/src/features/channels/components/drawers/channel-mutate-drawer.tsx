@@ -298,6 +298,8 @@ const SENSITIVE_FORM_FIELDS = [
   'azure_responses_version',
   'force_format',
   'thinking_to_content',
+  'simulated_cache_enabled',
+  'simulated_cache_hit_rate',
   'proxy',
   'http_protocol',
   'http2_connection_shards',
@@ -1923,6 +1925,60 @@ export function ChannelMutateDrawer({
         </FormItem>
       )}
     />
+  )
+
+  const simulatedCacheFields = (
+    <>
+      <FormField
+        control={form.control}
+        name='simulated_cache_enabled'
+        render={({ field }) => (
+          <FormItem className='flex items-center justify-between px-4 py-3'>
+            <div className='space-y-0.5'>
+              <FormLabel>{t('Simulated prompt cache')}</FormLabel>
+              <FormDescription>
+                {t(
+                  "Hide upstream cache usage and report a simulated prefix cache hit; hit tokens are billed at the model's cache price"
+                )}
+              </FormDescription>
+            </div>
+            <FormControl>
+              <Switch
+                disabled={sensitiveLocked}
+                checked={field.value === true}
+                onCheckedChange={field.onChange}
+              />
+            </FormControl>
+          </FormItem>
+        )}
+      />
+      {formValues.simulated_cache_enabled && (
+        <FormField
+          control={form.control}
+          name='simulated_cache_hit_rate'
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>{t('Simulated cache hit rate (%)')}</FormLabel>
+              <FormControl>
+                <Input
+                  type='number'
+                  inputMode='numeric'
+                  placeholder='80'
+                  {...field}
+                  onChange={(e) => field.onChange(Number(e.target.value))}
+                />
+              </FormControl>
+              <FormDescription>
+                {t(
+                  'Upper bound on the share of prompt tokens reported as cache hits (0-100)'
+                )}
+              </FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+      )}
+    </>
   )
 
   const taskPollingFields = (
@@ -4758,6 +4814,7 @@ export function ChannelMutateDrawer({
                 {formatFields}
                 {ollamaOpenAIChatFields}
                 {thinkingFields}
+                {simulatedCacheFields}
                 {currentType !== CHANNEL_TYPE_ADVANCED_CUSTOM &&
                   passthroughFields}
                 {systemPromptFields}

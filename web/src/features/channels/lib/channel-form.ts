@@ -82,6 +82,7 @@ function isOptionalProxyURL(value: string | undefined): boolean {
 export const HTTP_PROTOCOL_AUTO = 'auto'
 export const HTTP_PROTOCOL_HTTP1 = 'http1'
 export const MAX_HTTP2_CONNECTION_SHARDS = 8
+export const DEFAULT_SIMULATED_CACHE_HIT_RATE = 80
 
 export function normalizeHttpProtocol(
   value: string | undefined | null
@@ -263,6 +264,8 @@ export const channelFormSchema = z
     // Channel extra settings (stored in setting JSON, not sent directly)
     force_format: z.boolean().optional(),
     thinking_to_content: z.boolean().optional(),
+    simulated_cache_enabled: z.boolean().optional(),
+    simulated_cache_hit_rate: z.number().optional(),
     proxy: z
       .string()
       .optional()
@@ -421,6 +424,21 @@ export const channelFormSchema = z
         ERROR_MESSAGES.INVALID_HTTP1_WITH_SHARDS
       )
     }
+
+    const hitRate = data.simulated_cache_hit_rate
+    if (
+      data.simulated_cache_enabled === true &&
+      (hitRate == null ||
+        !Number.isInteger(hitRate) ||
+        hitRate < 0 ||
+        hitRate > 100)
+    ) {
+      addRequiredIssue(
+        ctx,
+        'simulated_cache_hit_rate',
+        ERROR_MESSAGES.INVALID_SIMULATED_CACHE_HIT_RATE
+      )
+    }
   })
 
 export type ChannelFormValues = z.infer<typeof channelFormSchema>
@@ -460,6 +478,8 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   // Channel extra settings
   force_format: false,
   thinking_to_content: false,
+  simulated_cache_enabled: false,
+  simulated_cache_hit_rate: DEFAULT_SIMULATED_CACHE_HIT_RATE,
   proxy: '',
   http_protocol: HTTP_PROTOCOL_AUTO,
   http2_connection_shards: 1,
@@ -507,6 +527,8 @@ export function transformChannelToFormDefaults(
     task_extend_plugin_keys: [] as string[],
     force_format: false,
     thinking_to_content: false,
+    simulated_cache_enabled: false,
+    simulated_cache_hit_rate: DEFAULT_SIMULATED_CACHE_HIT_RATE,
     proxy: '',
     http_protocol: HTTP_PROTOCOL_AUTO as 'auto' | 'http1',
     http2_connection_shards: 1,
@@ -524,11 +546,21 @@ export function transformChannelToFormDefaults(
       const shards = normalizeHttp2ConnectionShards(
         parsed.http2_connection_shards
       )
+      const simulatedCacheEnabled = parsed.simulated_cache_enabled === true
+      // The backend omits a zero hit rate, so an enabled channel without one is at 0%.
+      let simulatedCacheHitRate = DEFAULT_SIMULATED_CACHE_HIT_RATE
+      if (typeof parsed.simulated_cache_hit_rate === 'number') {
+        simulatedCacheHitRate = parsed.simulated_cache_hit_rate
+      } else if (simulatedCacheEnabled) {
+        simulatedCacheHitRate = 0
+      }
       extraSettings = {
         task_plugin_key: parsed.task_plugin_key || '',
         task_extend_plugin_keys: readTaskExtendPluginKeys(channel.type, parsed),
         force_format: parsed.force_format || false,
         thinking_to_content: parsed.thinking_to_content || false,
+        simulated_cache_enabled: simulatedCacheEnabled,
+        simulated_cache_hit_rate: simulatedCacheHitRate,
         proxy: parsed.proxy || '',
         http_protocol: protocol,
         http2_connection_shards: protocol === HTTP_PROTOCOL_HTTP1 ? 1 : shards,
@@ -694,6 +726,10 @@ export function buildSettingJSON(formData: ChannelFormValues): string {
   }
   if (formData.tls_insecure_skip_verify === true) {
     settingObj.tls_insecure_skip_verify = true
+  }
+  if (formData.simulated_cache_enabled === true) {
+    settingObj.simulated_cache_enabled = true
+    settingObj.simulated_cache_hit_rate = formData.simulated_cache_hit_rate ?? 0
   }
 
   return JSON.stringify(settingObj)

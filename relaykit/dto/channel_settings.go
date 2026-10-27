@@ -35,6 +35,12 @@ type ChannelSettings struct {
 	// TLSInsecureSkipVerify accepts upstream certificates that fail
 	// verification, such as self-signed ones, for this channel only.
 	TLSInsecureSkipVerify bool `json:"tls_insecure_skip_verify,omitempty"`
+	// SimulatedCacheEnabled replaces upstream prompt-cache usage with a
+	// simulated, prefix-aware cache hit for this channel.
+	SimulatedCacheEnabled bool `json:"simulated_cache_enabled,omitempty"`
+	// SimulatedCacheHitRate caps the simulated cached share of prompt tokens,
+	// in percent (0-100).
+	SimulatedCacheHitRate int `json:"simulated_cache_hit_rate,omitempty"`
 }
 
 // BindsTaskPlugin reports whether the channel is bound to the task plugin,
