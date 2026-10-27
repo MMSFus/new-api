@@ -1002,6 +1002,9 @@ func (channel *Channel) ValidateSettings() error {
 	if err := channelParams.ValidateHTTPTransport(); err != nil {
 		return err
 	}
+	if channelParams.SimulatedCacheHitRate < 0 || channelParams.SimulatedCacheHitRate > 100 {
+		return fmt.Errorf("invalid simulated_cache_hit_rate: %d", channelParams.SimulatedCacheHitRate)
+	}
 	channelOtherSettings := &dto.ChannelOtherSettings{}
 	if channel.OtherSettings != "" {
 		err := common.UnmarshalJsonStr(channel.OtherSettings, channelOtherSettings)

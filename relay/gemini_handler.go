@@ -126,6 +126,7 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		requestBody = body
 	}
 
+	simulatedCache := service.PrepareSimulatedCache(c, info)
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
 		logger.LogError(c, common.LogText("Do gemini request failed: %s", err.Error()))
@@ -145,6 +146,7 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 			return newAPIError
 		}
 	}
+	simulatedCache.WrapResponse(httpResp)
 
 	usage, openaiErr := adaptor.DoResponse(c, resp.(*http.Response), info)
 	if openaiErr != nil {
