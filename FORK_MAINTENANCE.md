@@ -25,7 +25,9 @@ Merge sync pull requests with **Create a merge commit**. Squash or rebase merges
 
 ## Image publishing
 
-Merges to `main` run `.github/workflows/publish-custom-image.yml` and publish two GHCR tags:
+CI (`.github/workflows/fork-ci.yml`) runs on every push. The upstream `ci.yml` is kept unmodified so upstream syncs do not conflict, and is disabled in the fork's Actions settings. Branch pushes check only what changed since the merge base with `main`: backend jobs run when Go code changed, frontend jobs run the tests related to changed `web/` files, and the pull request reuses those check runs. Pushes to `main` wait 30 seconds, run the full suite (frontend tests in 3 parallel shards), and only then build the image; a newer merge within that window or during the run cancels the older run, so only the latest merge is published. Images are built only from `main`.
+
+Merges to `main` publish two GHCR tags:
 
 ```text
 ghcr.io/mmsfus/new-api:main
