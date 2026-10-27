@@ -85,6 +85,7 @@ import {
   renderLogContent,
 } from '../../lib/format'
 import { buildQuotaAuditOperation } from '../../lib/quota-audit-operation'
+import { getSimulatedCache } from '../../lib/simulated-cache'
 import {
   getLogTypeConfig,
   isPerCallBilling,
@@ -93,6 +94,7 @@ import {
 import { USAGE_BILLING_PATH, type LogOtherData } from '../../types'
 import { ResponseModelDetails } from '../model-badge'
 import { PluginAuthorLink } from '../plugin-author-link'
+import { SimulatedCacheComparison } from '../simulated-cache-comparison'
 import { DetailRow, DetailSection } from './log-detail-layout'
 
 // Maps a channel-update changed-field token (as recorded by the backend audit)
@@ -506,6 +508,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const showAdminIp =
     !!props.log.ip && (showTiming || (props.isAdmin && isTopup))
   const adminInfo = other?.admin_info
+  const simulatedCache = props.isAdmin ? getSimulatedCache(other) : null
   const topupAuditFields =
     isTopup && props.isAdmin && adminInfo
       ? ([
@@ -1177,6 +1180,13 @@ export function DetailsDialog(props: DetailsDialogProps) {
             other={other}
             isAdmin={props.isAdmin}
           />
+        )}
+
+        {/* Simulated prompt cache audit (admin only) */}
+        {simulatedCache && (
+          <DetailSection label={t('Simulated cache')}>
+            <SimulatedCacheComparison audit={simulatedCache} />
+          </DetailSection>
         )}
 
         {/* Tiered pricing breakdown (when billing_mode is tiered_expr) */}

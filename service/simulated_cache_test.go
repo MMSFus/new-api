@@ -10,10 +10,13 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/cachex"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/samber/hot"
 	"github.com/stretchr/testify/assert"
@@ -516,4 +519,87 @@ func TestSimulatedCacheWrapResponsePassthrough(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, body, string(out))
 	}
+}
+
+func TestSimulatedCacheAuditRecordsOriginalAndPricesBoth(t *testing.T) {
+	channel := useMemorySimulatedCache(t)
+	gin.SetMode(gin.TestMode)
+	newContext := func(body string) (*gin.Context, *relaycommon.RelayInfo) {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+		t.Cleanup(func() { common.CleanupBodyStorage(c) })
+		info := &relaycommon.RelayInfo{
+			RelayFormat:             types.RelayFormatClaude,
+			FinalRequestRelayFormat: types.RelayFormatClaude,
+			OriginModelName:         "claude-test",
+			StartTime:               time.Now(),
+			PriceData: hosttypes.PriceData{
+				ModelRatio: 1, CompletionRatio: 5, CacheRatio: 0.1, CacheCreationRatio: 1.25,
+				CacheCreation5mRatio: 1.25, CacheCreation1hRatio: 2,
+				GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: 1},
+			},
+			ChannelMeta: &relaycommon.ChannelMeta{
+				ChannelId:         channel,
+				UpstreamModelName: "test-model",
+				ChannelSetting:    dto.ChannelSettings{SimulatedCacheEnabled: true, SimulatedCacheHitRate: 100},
+			},
+		}
+		return c, info
+	}
+	req := claudeRequestForTest(`,"ttl":"1h"`, false)
+	// Upstream really read 7000 of the 8000 prompt tokens from its cache.
+	upstream := `{"type":"message","usage":{"input_tokens":1000,"cache_read_input_tokens":7000,"cache_creation_input_tokens":0,"output_tokens":100}}`
+
+	c, info := newContext(req)
+	plan := PrepareSimulatedCache(c, info)
+	require.NotNil(t, plan)
+	var parsed dto.ClaudeResponse
+	require.NoError(t, common.UnmarshalJsonStr(wrapSimulatedCacheBody(t, plan, "application/json", upstream), &parsed))
+
+	audit, ok := common.GetContextKeyType[*SimulatedCacheAudit](c, constant.ContextKeySimulatedCache)
+	require.True(t, ok)
+	require.NotNil(t, audit)
+	assert.Equal(t, simulatedCacheAuditVersion, audit.Version)
+	assert.Equal(t, "claude", audit.UpstreamSchema)
+	assert.Equal(t, string(types.RelayFormatClaude), audit.ClientFormat)
+	assert.Equal(t, 100, audit.HitRate)
+	assert.Zero(t, audit.MatchedSegments)
+	assert.Equal(t, SimulatedCacheTokens{PromptTokens: 8000, CompletionTokens: 100, CacheReadTokens: 7000}, audit.Original)
+	assert.Zero(t, audit.Simulated.CacheReadTokens)
+	assert.Equal(t, parsed.Usage.CacheCreationInputTokens, audit.Simulated.CacheCreationTokens)
+	assert.Equal(t, audit.Simulated.CacheCreationTokens, audit.Simulated.CacheCreation1hTokens)
+
+	// Price both sides the way settlement does.
+	billingUsage := &dto.Usage{
+		PromptTokens:     parsed.Usage.InputTokens,
+		CompletionTokens: parsed.Usage.OutputTokens,
+		UsageSemantic:    "anthropic",
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens:         parsed.Usage.CacheReadInputTokens,
+			CachedCreationTokens: parsed.Usage.CacheCreationInputTokens,
+		},
+		ClaudeCacheCreation5mTokens: parsed.Usage.CacheCreation.Ephemeral5mInputTokens,
+		ClaudeCacheCreation1hTokens: parsed.Usage.CacheCreation.Ephemeral1hInputTokens,
+	}
+	summary := calculateTextQuotaSummary(c, info, billingUsage)
+	summary.Quota = settleTextQuota(info, &summary, billingUsage)
+	other := model.NewLogOther()
+	attachSimulatedCacheAudit(c, info, billingUsage, summary, other)
+
+	record := gjson.Get(other.JSONString(), "admin_info.simulated_cache")
+	require.True(t, record.IsObject())
+	assert.False(t, gjson.Get(other.JSONString(), "simulated_cache").Exists(), "audit must stay admin-only")
+	// Original: 1000 input + 7000 read at 0.1 + 100 output at 5 = 2200.
+	assert.Equal(t, int64(2200), record.Get("original.quota").Int())
+	assert.Equal(t, int64(summary.Quota), record.Get("simulated.quota").Int())
+	assert.Equal(t, int64(summary.Quota-2200), record.Get("quota_delta").Int())
+	assert.Nil(t, info.QuotaClamp)
+
+	// A later attempt that does not simulate clears the previous audit.
+	c2, info2 := newContext(req)
+	info2.ChannelSetting.SimulatedCacheEnabled = false
+	common.SetContextKey(c2, constant.ContextKeySimulatedCache, audit)
+	require.Nil(t, PrepareSimulatedCache(c2, info2))
+	stale, _ := common.GetContextKeyType[*SimulatedCacheAudit](c2, constant.ContextKeySimulatedCache)
+	assert.Nil(t, stale)
 }

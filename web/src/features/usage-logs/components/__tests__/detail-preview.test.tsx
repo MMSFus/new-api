@@ -22,7 +22,14 @@ import {
   getCoreRowModel,
   useReactTable,
 } from '@tanstack/react-table'
-import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from '@testing-library/react'
 import { createInstance } from 'i18next'
 import { I18nextProvider } from 'react-i18next'
 import { afterAll, afterEach, beforeEach, expect, test, vi } from 'vitest'
@@ -78,17 +85,20 @@ function DetailPreview(props: {
   other: LogOtherData
   isAdmin: boolean
   type?: number
+  columnId?: string
+  log?: Partial<UsageLog>
 }) {
+  const columnId = props.columnId ?? 'content'
   const table = useReactTable({
-    data: [makeLog(props.other, props.type)],
+    data: [{ ...makeLog(props.other, props.type), ...props.log }],
     columns: useCommonLogsColumns(props.isAdmin, false),
     getCoreRowModel: getCoreRowModel(),
   })
   const cell = table
     .getRowModel()
     .rows[0].getAllCells()
-    .find((item) => item.column.id === 'content')
-  if (!cell) throw new Error('The log must have a content column')
+    .find((item) => item.column.id === columnId)
+  if (!cell) throw new Error(`The log must have a ${columnId} column`)
   return flexRender(cell.column.columnDef.cell, cell.getContext())
 }
 const plugin = {
@@ -501,3 +511,130 @@ test.each(['missing schema', 'unsupported expression', 'unknown tier'])(
     )
   }
 )
+
+// Contract fixture from .agent-notes/10-audit-contract.md (quota units:
+// 500000 per USD with the default currency config).
+const simulatedCacheOther: LogOtherData = {
+  cache_tokens: 8000,
+  admin_info: {
+    simulated_cache: {
+      version: 1,
+      hit_rate: 80,
+      client_format: 'claude',
+      upstream_schema: 'claude',
+      matched_segments: 5,
+      total_segments: 7,
+      original: {
+        prompt_tokens: 12000,
+        completion_tokens: 300,
+        cache_read_tokens: 0,
+        cache_creation_tokens: 0,
+        cache_creation_5m_tokens: 0,
+        cache_creation_1h_tokens: 0,
+        quota: 4200,
+      },
+      simulated: {
+        prompt_tokens: 12000,
+        completion_tokens: 300,
+        cache_read_tokens: 8000,
+        cache_creation_tokens: 2000,
+        cache_creation_5m_tokens: 2000,
+        cache_creation_1h_tokens: 0,
+        quota: 2600,
+      },
+      quota_delta: -1600,
+    },
+  },
+}
+
+function comparisonRow(dialog: ReturnType<typeof within>, label: string) {
+  const cells = within(
+    dialog.getByRole('cell', { name: label }).closest('tr') as HTMLElement
+  ).getAllByRole('cell')
+  return cells.slice(1).map((cell) => cell.textContent)
+}
+
+test('admin log details compare original and simulated cache usage', async () => {
+  const preview = renderPreview(simulatedCacheOther)
+  fireEvent.click(preview)
+  const dialog = within(await screen.findByRole('dialog'))
+
+  expect(dialog.getByText('Simulated cache')).toBeVisible()
+  expect(comparisonRow(dialog, 'Input Tokens')).toEqual(['12,000', '12,000'])
+  expect(comparisonRow(dialog, 'Cache Read')).toEqual(['0', '8,000'])
+  expect(comparisonRow(dialog, 'Cache Write (5m)')).toEqual(['0', '2,000'])
+  expect(comparisonRow(dialog, 'Cache Write (1h)')).toEqual(['0', '0'])
+  expect(comparisonRow(dialog, 'Cache hit ratio')).toEqual(['0%', '66.67%'])
+  expect(comparisonRow(dialog, 'Cost')).toEqual(['$0.0084', '$0.0052'])
+  expect(
+    dialog.getByText('Cost difference').nextElementSibling
+  ).toHaveTextContent('-$0.0032')
+  expect(
+    dialog.getByText('Configured hit rate').nextElementSibling
+  ).toHaveTextContent('80%')
+  expect(
+    dialog.getByText('Matched segments').nextElementSibling
+  ).toHaveTextContent('5 / 7')
+})
+
+test('simulated cache details tolerate a future version with missing and unknown keys', async () => {
+  const preview = renderPreview({
+    admin_info: {
+      simulated_cache: {
+        version: 2,
+        future_field: { nested: true },
+        simulated: { cache_read_tokens: 1024, quota: 1000 },
+      } as never,
+    },
+  })
+  fireEvent.click(preview)
+  const dialog = within(await screen.findByRole('dialog'))
+
+  expect(comparisonRow(dialog, 'Cache Read')).toEqual(['0', '1,024'])
+  expect(comparisonRow(dialog, 'Cost')).toEqual(['-', '$0.002'])
+  expect(
+    dialog.getByText('Cost difference').nextElementSibling
+  ).toHaveTextContent('-')
+  expect(
+    dialog.getByText('Client format').nextElementSibling
+  ).toHaveTextContent('-')
+})
+
+test('simulated cache details and row badge stay hidden outside the admin view', async () => {
+  render(
+    <I18nextProvider i18n={i18n}>
+      <QueryClientProvider client={client}>
+        <DetailPreview
+          other={simulatedCacheOther}
+          isAdmin={false}
+          columnId='prompt_tokens'
+          log={{ prompt_tokens: 12000, completion_tokens: 300 }}
+        />
+      </QueryClientProvider>
+    </I18nextProvider>
+  )
+  expect(screen.getByText(/12,000/)).toBeVisible()
+  expect(screen.queryByText('Simulated cache')).not.toBeInTheDocument()
+  cleanup()
+
+  const preview = renderPreview(simulatedCacheOther, false)
+  fireEvent.click(preview)
+  const dialog = within(await screen.findByRole('dialog'))
+  expect(dialog.queryByText('Simulated cache')).not.toBeInTheDocument()
+})
+
+test('admin token cell marks rows with a simulated cache', () => {
+  render(
+    <I18nextProvider i18n={i18n}>
+      <QueryClientProvider client={client}>
+        <DetailPreview
+          other={simulatedCacheOther}
+          isAdmin
+          columnId='prompt_tokens'
+          log={{ prompt_tokens: 12000, completion_tokens: 300 }}
+        />
+      </QueryClientProvider>
+    </I18nextProvider>
+  )
+  expect(screen.getByText('Simulated cache')).toBeVisible()
+})

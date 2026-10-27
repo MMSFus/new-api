@@ -3,17 +3,24 @@ name: Fork CI
 # Replaces the upstream ci.yml, which stays unmodified for clean upstream syncs
 # and is disabled in this fork's Actions settings.
 #
-# Branch pushes run an incremental check of what changed since the merge base
-# with main. Check runs attach to the commit, so a pull request from a branch of
-# this repository reuses them instead of running CI a second time. Pushes to
-# main (merges) run the full suite and then publish the image.
+# - Branch push without an open pull request: incremental check of what changed
+#   since the merge base with main.
+# - Pull request into main: full check, once when it is opened and again on
+#   every later push to its branch (the push run detects the open PR).
+# - Push to main (merge): no re-check. Branch protection requires the branch to
+#   be up to date, so main already equals the fully checked PR head. The image
+#   is built after a 30s debounce; a newer merge cancels the older run.
 on:
   push:
     branches: ['**']
+  pull_request:
+    types: [opened, reopened]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
+  pull-requests: read
 
 # One run per ref; a newer push cancels the older run. On main this keeps only
 # the latest merge, so a burst of merges builds the image once.
@@ -24,20 +31,17 @@ concurrency:
 jobs:
   changes:
     name: Detect changes
+    if: github.ref != 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
+      full: ${{ steps.detect.outputs.full }}
       backend: ${{ steps.detect.outputs.backend }}
       frontend: ${{ steps.detect.outputs.frontend }}
       frontend_related: ${{ steps.detect.outputs.frontend_related }}
       frontend_shards: ${{ steps.detect.outputs.frontend_shards }}
 
     steps:
-      - name: Debounce merges to main
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        # A merge within 30s cancels this run through the concurrency group.
-        run: sleep 30
-
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -48,14 +52,23 @@ jobs:
         id: detect
         env:
           EVENT_NAME: ${{ github.event_name }}
-          GIT_REF: ${{ github.ref }}
+          BRANCH: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           full=false
           base=""
-          if [ "$GIT_REF" = "refs/heads/main" ] || [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+          if [ "$EVENT_NAME" != "push" ]; then
             full=true
           else
-            base=$(git merge-base origin/main HEAD) || full=true
+            # A failed lookup counts as an open PR, so it errs on a full check.
+            open_prs=$(gh pr list --head "$BRANCH" --base main --state open --json number --jq length) || open_prs=1
+            if [ "$open_prs" != "0" ]; then
+              echo "Open pull request into main: running the full check."
+              full=true
+            else
+              base=$(git merge-base origin/main HEAD) || full=true
+            fi
           fi
           backend=false
           frontend=false
@@ -94,17 +107,21 @@ jobs:
             echo 'frontend_shards=["1/1"]' >> "$GITHUB_OUTPUT"
             echo "frontend_related=$related" >> "$GITHUB_OUTPUT"
           fi
-          echo "backend=$backend" >> "$GITHUB_OUTPUT"
-          echo "frontend=$frontend" >> "$GITHUB_OUTPUT"
+          {
+            echo "full=$full"
+            echo "backend=$backend"
+            echo "frontend=$frontend"
+          } >> "$GITHUB_OUTPUT"
           echo "backend=$backend frontend=$frontend frontend_full=$frontend_full"
 
   backend:
     name: Backend vet, build, and test
     needs: changes
     # A failed detection runs the checks instead of skipping them, so a
-    # required check never passes by being skipped after an error.
+    # required check never passes by being skipped after an error. Branch
+    # protection treats a job skipped because its area did not change as passing.
     if: >-
-      always() && needs.changes.result != 'cancelled' &&
+      always() && github.ref != 'refs/heads/main' && needs.changes.result != 'cancelled' &&
       (needs.changes.result != 'success' || needs.changes.outputs.backend == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -163,10 +180,9 @@ jobs:
       - name: Test root, relaykit, and tokenkit modules
         run: make test
 
-      # Only main writes the cache, so branches always start from main's
-      # build and test results and never evict each other.
+      # A full check saves the cache for later pushes of the same branch.
       - name: Save Go cache
-        if: github.ref == 'refs/heads/main'
+        if: needs.changes.outputs.full == 'true'
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: |
@@ -174,11 +190,73 @@ jobs:
             ~/go/pkg/mod
           key: go-${{ runner.os }}-${{ hashFiles('go.sum', 'relaykit/go.sum', 'tokenkit/go.sum') }}-${{ github.sha }}
 
+  # Database-dependent tests against real MySQL and PostgreSQL. Runs beside
+  # the backend job so it never delays the required check.
+  backend-databases:
+    name: Backend database tests
+    needs: changes
+    if: >-
+      always() && github.ref != 'refs/heads/main' && needs.changes.result != 'cancelled' &&
+      (needs.changes.result != 'success' || needs.changes.outputs.backend == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GOWORK: 'off'
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: new_api_test
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: new_api_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Restore Go cache
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-${{ hashFiles('go.sum', 'relaykit/go.sum', 'tokenkit/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ hashFiles('go.sum', 'relaykit/go.sum', 'tokenkit/go.sum') }}-
+            go-${{ runner.os }}-
+
+      - name: Test log search on SQLite, MySQL, and PostgreSQL
+        env:
+          TEST_MYSQL_DSN: root:root@tcp(127.0.0.1:3306)/new_api_test?charset=utf8mb4
+          TEST_POSTGRES_DSN: postgres://postgres:postgres@127.0.0.1:5432/new_api_test?sslmode=disable
+        run: |
+          mkdir -p web/dist
+          touch web/dist/index.html
+          go test ./model/ -run 'TestSimulatedCacheLogSearchAcrossDatabases' -count=1 -v
+
   frontend:
     name: Frontend test (${{ matrix.shard }})
     needs: changes
     if: >-
-      always() && needs.changes.result != 'cancelled' &&
+      always() && github.ref != 'refs/heads/main' && needs.changes.result != 'cancelled' &&
       (needs.changes.result != 'success' || needs.changes.outputs.frontend == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -214,13 +292,11 @@ jobs:
             bun run test --shard="$SHARD"
           fi
 
-  # Required check. A job skipped because its area did not change counts as
-  # passing for branch protection.
   frontend-typecheck:
     name: Frontend typecheck
     needs: changes
     if: >-
-      always() && needs.changes.result != 'cancelled' &&
+      always() && github.ref != 'refs/heads/main' && needs.changes.result != 'cancelled' &&
       (needs.changes.result != 'success' || needs.changes.outputs.frontend == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -242,12 +318,59 @@ jobs:
 
       - name: Typecheck
         run: bun run typecheck
-  # Images are built only from main, after every check of the same commit
-  # passed. The concurrency group above keeps only the newest merge.
+  # Compiles main (packages and test binaries, without running tests) so
+  # branches can restore main's build cache. Runs beside publish and never
+  # blocks it.
+  warm-go-cache:
+    name: Warm Go cache
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GOWORK: 'off'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Restore Go cache
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-${{ hashFiles('go.sum', 'relaykit/go.sum', 'tokenkit/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ hashFiles('go.sum', 'relaykit/go.sum', 'tokenkit/go.sum') }}-
+            go-${{ runner.os }}-
+
+      - name: Compile all modules
+        run: |
+          mkdir -p web/dist
+          touch web/dist/index.html
+          for dir in . relaykit tokenkit; do
+            (cd "$dir" && go vet ./... && go test -run '^$' ./... > /dev/null)
+          done
+
+      - name: Save Go cache
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-${{ hashFiles('go.sum', 'relaykit/go.sum', 'tokenkit/go.sum') }}-${{ github.sha }}
+
+  # Images are built only from main. The 30s wait lets a newer merge cancel
+  # this run through the concurrency group, so only the latest is published.
   publish:
     name: Build and publish linux-amd64 image
-    needs: [changes, backend, frontend, frontend-typecheck]
-    if: github.ref == 'refs/heads/main' && needs.backend.result == 'success' && needs.frontend.result == 'success' && needs.frontend-typecheck.result == 'success'
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -259,6 +382,9 @@ jobs:
       IMAGE_NAME: ghcr.io/mmsfus/new-api
 
     steps:
+      - name: Debounce merges to main
+        run: sleep 30
+
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 

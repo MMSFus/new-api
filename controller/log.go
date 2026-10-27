@@ -261,3 +261,67 @@ func GetLogsSelfStat(c *gin.Context) {
 	})
 	return
 }
+
+// simulatedCacheLogMaxRange bounds the simulated-cache audit search: the
+// marker is matched inside the other column, so the time index must narrow
+// the rows first.
+const simulatedCacheLogMaxRange = 7 * 24 * 60 * 60
+
+// simulatedCacheLogFilter reads the audit search. The range defaults to the
+// last 24 hours and may not exceed 7 days.
+func simulatedCacheLogFilter(c *gin.Context) (model.LogFilter, error) {
+	filter := logFilterFromQuery(c, true)
+	filter.Type = model.LogTypeConsume
+	filter.SimulatedCacheOnly = true
+	end := common.GetTimestamp()
+	if filter.EndTimestamp != 0 {
+		end = min(end, filter.EndTimestamp)
+	}
+	if filter.StartTimestamp == 0 {
+		filter.StartTimestamp = end - 24*60*60
+	}
+	if end-filter.StartTimestamp > simulatedCacheLogMaxRange {
+		return filter, common.NewMessage("The time range cannot exceed {{days}} days", map[string]any{"days": simulatedCacheLogMaxRange / (24 * 60 * 60)})
+	}
+	filter.EndTimestamp = end
+	return filter, nil
+}
+
+// GetSimulatedCacheLogs lists consume logs whose usage the simulated prompt
+// cache rewrote, with the upstream and simulated numbers in admin_info.
+func GetSimulatedCacheLogs(c *gin.Context) {
+	filter, err := simulatedCacheLogFilter(c)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	pageInfo := common.GetPageQuery(c)
+	logs, total, err := model.GetAllLogs(filter, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if c.GetInt("role") < common.RoleRootUser {
+		model.FormatAdminLogs(logs)
+	} else {
+		model.FormatRootLogs(logs)
+	}
+	pageInfo.SetTotal(int(total))
+	pageInfo.SetItems(logs)
+	common.ApiSuccess(c, pageInfo)
+}
+
+// GetSimulatedCacheLogStat sums charged and original quota of the same search.
+func GetSimulatedCacheLogStat(c *gin.Context) {
+	filter, err := simulatedCacheLogFilter(c)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	stat, err := model.SumSimulatedCacheLogs(filter)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, stat)
+}

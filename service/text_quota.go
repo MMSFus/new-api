@@ -64,6 +64,8 @@ type textQuotaSummary struct {
 	ToolSurchargeItems     []ToolSurchargeItem
 	ToolCallSurchargeQuota decimal.Decimal
 	FixedPriceBilling      bool
+	tieredResult           *billingexpr.TieredResult
+	tieredApplied          bool
 }
 
 // hasBillableUsage reports whether this request should incur any charge.
@@ -387,6 +389,38 @@ func usageSemanticFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) 
 	return "openai"
 }
 
+// settleTextQuota applies tiered-expression settlement on top of the ratio
+// quota already in summary and returns the final quota. It records the tiered
+// result and fixed-price flag on summary.
+func settleTextQuota(relayInfo *relaycommon.RelayInfo, summary *textQuotaSummary, billingUsage *dto.Usage) int {
+	snap := relayInfo.TieredBillingSnapshot
+	// Providers normally estimate missing usage before settlement. Preserve the
+	// same prompt estimate when a fixed-price expression reaches us without it;
+	// its conditions must still run and may select a token-priced fallback.
+	if billingUsage == nil && snap != nil && billingexpr.UsesFixedPricingByHash(snap.ExprString, snap.ExprHash) {
+		billingUsage = &dto.Usage{PromptTokens: summary.PromptTokens, CompletionTokens: summary.CompletionTokens, TotalTokens: summary.TotalTokens}
+	}
+	if billingUsage == nil {
+		return summary.Quota
+	}
+	var tieredUsedVars map[string]bool
+	if snap != nil {
+		tieredUsedVars = billingexpr.UsedVarsByHash(snap.ExprString, snap.ExprHash)
+	}
+	tieredTokens := BuildTieredTokenParams(billingUsage, summary.IsClaudeUsageSemantic, tieredUsedVars)
+	tieredOk, tieredQuota, tieredRes := TryTieredSettle(relayInfo, tieredTokens)
+	if !tieredOk {
+		return summary.Quota
+	}
+	summary.tieredApplied = true
+	summary.tieredResult = tieredRes
+	summary.FixedPriceBilling = isFixedPriceSettlement(relayInfo, tieredRes)
+	if summary.FixedPriceBilling {
+		summary.AudioInputPrice = 0
+	}
+	return composeTieredTextQuota(relayInfo, *summary, tieredQuota, tieredRes)
+}
+
 func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []*common.Message) {
 	originUsage := usage
 	billingUsage := effectiveBillingUsage(usage)
@@ -399,34 +433,8 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 
 	adminRejectReason := common.GetContextKeyString(ctx, constant.ContextKeyAdminRejectReason)
 	summary := calculateTextQuotaSummary(ctx, relayInfo, billingUsage)
-
-	var tieredResult *billingexpr.TieredResult
-	var tieredTokens billingexpr.TokenParams
-	tieredBillingApplied := false
-	snap := relayInfo.TieredBillingSnapshot
-	// Providers normally estimate missing usage before settlement. Preserve the
-	// same prompt estimate when a fixed-price expression reaches us without it;
-	// its conditions must still run and may select a token-priced fallback.
-	if billingUsage == nil && snap != nil && billingexpr.UsesFixedPricingByHash(snap.ExprString, snap.ExprHash) {
-		billingUsage = &dto.Usage{PromptTokens: summary.PromptTokens, CompletionTokens: summary.CompletionTokens, TotalTokens: summary.TotalTokens}
-	}
-	if billingUsage != nil {
-		var tieredUsedVars map[string]bool
-		if snap := relayInfo.TieredBillingSnapshot; snap != nil {
-			tieredUsedVars = billingexpr.UsedVarsByHash(snap.ExprString, snap.ExprHash)
-		}
-		tieredTokens = BuildTieredTokenParams(billingUsage, summary.IsClaudeUsageSemantic, tieredUsedVars)
-		tieredOk, tieredQuota, tieredRes := TryTieredSettle(relayInfo, tieredTokens)
-		if tieredOk {
-			tieredBillingApplied = true
-			tieredResult = tieredRes
-			summary.Quota = composeTieredTextQuota(relayInfo, summary, tieredQuota, tieredRes)
-			summary.FixedPriceBilling = isFixedPriceSettlement(relayInfo, tieredRes)
-			if summary.FixedPriceBilling {
-				summary.AudioInputPrice = 0
-			}
-		}
-	}
+	summary.Quota = settleTextQuota(relayInfo, &summary, billingUsage)
+	tieredResult, tieredBillingApplied := summary.tieredResult, summary.tieredApplied
 
 	for _, item := range summary.ToolSurchargeItems {
 		q := decimal.NewFromFloat(item.Price).
@@ -527,6 +535,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	}
 
 	attachQuotaSaturation(ctx, relayInfo, other)
+	attachSimulatedCacheAudit(ctx, relayInfo, billingUsage, summary, other)
 
 	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
 		ChannelId:        relayInfo.ChannelId,

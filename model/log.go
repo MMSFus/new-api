@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 
 	"gorm.io/gorm"
 )
@@ -477,7 +478,14 @@ type LogFilter struct {
 	Group             string
 	RequestId         string
 	UpstreamRequestId string
+	// SimulatedCacheOnly keeps consume logs whose usage was rewritten by the
+	// channel's simulated prompt cache (admin_info.simulated_cache).
+	SimulatedCacheOnly bool
 }
+
+// simulatedCacheLogPattern matches the admin_info key written for every
+// request whose usage the simulated prompt cache rewrote.
+const simulatedCacheLogPattern = `%"simulated_cache":{%`
 
 func (f LogFilter) apply(tx *gorm.DB) (*gorm.DB, error) {
 	var err error
@@ -511,7 +519,57 @@ func (f LogFilter) apply(tx *gorm.DB) (*gorm.DB, error) {
 	if f.Group != "" {
 		tx = tx.Where("logs."+logGroupCol+" = ?", f.Group)
 	}
+	if f.SimulatedCacheOnly {
+		tx = tx.Where("logs.type = ? AND logs.other LIKE ?", LogTypeConsume, simulatedCacheLogPattern)
+	}
 	return tx, nil
+}
+
+// SimulatedCacheStat sums the simulated-cache consume logs of a search: the
+// quota actually charged and what the upstream usage would have cost.
+type SimulatedCacheStat struct {
+	Count                        int64 `json:"count"`
+	OriginalQuota                int64 `json:"original_quota"`
+	SimulatedQuota               int64 `json:"simulated_quota"`
+	QuotaDelta                   int64 `json:"quota_delta"`
+	OriginalCacheReadTokens      int64 `json:"original_cache_read_tokens"`
+	SimulatedCacheReadTokens     int64 `json:"simulated_cache_read_tokens"`
+	SimulatedCacheCreationTokens int64 `json:"simulated_cache_creation_tokens"`
+	OriginalCacheCreationTokens  int64 `json:"original_cache_creation_tokens"`
+}
+
+// SumSimulatedCacheLogs streams the matching logs once, so memory stays flat
+// however many rows the (time-bounded) search covers.
+func SumSimulatedCacheLogs(filter LogFilter) (stat SimulatedCacheStat, err error) {
+	filter.SimulatedCacheOnly = true
+	tx, err := filter.apply(LOG_DB)
+	if err != nil {
+		return stat, err
+	}
+	rows, err := tx.Model(&Log{}).Select("logs.other").Rows()
+	if err != nil {
+		return stat, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var other string
+		if err = rows.Scan(&other); err != nil {
+			return stat, err
+		}
+		audit := gjson.Get(other, "admin_info.simulated_cache")
+		if !audit.IsObject() {
+			continue
+		}
+		stat.Count++
+		stat.OriginalQuota += audit.Get("original.quota").Int()
+		stat.SimulatedQuota += audit.Get("simulated.quota").Int()
+		stat.OriginalCacheReadTokens += audit.Get("original.cache_read_tokens").Int()
+		stat.OriginalCacheCreationTokens += audit.Get("original.cache_creation_tokens").Int()
+		stat.SimulatedCacheReadTokens += audit.Get("simulated.cache_read_tokens").Int()
+		stat.SimulatedCacheCreationTokens += audit.Get("simulated.cache_creation_tokens").Int()
+	}
+	stat.QuotaDelta = stat.SimulatedQuota - stat.OriginalQuota
+	return stat, rows.Err()
 }
 
 func GetAllLogs(filter LogFilter, startIdx int, num int) (logs []*Log, total int64, err error) {

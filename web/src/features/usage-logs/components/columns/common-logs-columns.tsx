@@ -66,6 +66,7 @@ import {
   renderAuditContent,
   renderLogContent,
 } from '../../lib/format'
+import { getSimulatedCache } from '../../lib/simulated-cache'
 import {
   isDisplayableLogType,
   isTimingLogType,
@@ -76,6 +77,7 @@ import type { LogOtherData } from '../../types'
 import { DetailsDialog } from '../dialogs/details-dialog'
 import { LogCostDisplay } from '../log-cost-display'
 import { ModelBadge } from '../model-badge'
+import { SimulatedCacheBadge } from '../simulated-cache-comparison'
 import { TimingMetricsCell, StreamTpsCell } from '../timing-metrics-cell'
 import { useUsageLogsContext } from '../usage-logs-provider'
 
@@ -738,6 +740,9 @@ export function useCommonLogsColumns(
           const cacheWriteTokens = hasSplitCache
             ? cacheWrite5m + cacheWrite1h
             : other?.cache_creation_tokens || 0
+          // admin_info never reaches users; the isAdmin gate keeps the marker
+          // out of the own-logs view even if a stale payload carries it.
+          const hasSimulatedCache = isAdmin && getSimulatedCache(other) !== null
 
           return (
             <div className='flex flex-col gap-0.5'>
@@ -745,6 +750,7 @@ export function useCommonLogsColumns(
                 {promptTokens.toLocaleString()} /{' '}
                 {completionTokens.toLocaleString()}
               </span>
+              {hasSimulatedCache && <SimulatedCacheBadge />}
               {(cacheReadTokens > 0 || cacheWriteTokens > 0) && (
                 <div className='flex items-center gap-1 text-[11px]'>
                   {cacheReadTokens > 0 && (
