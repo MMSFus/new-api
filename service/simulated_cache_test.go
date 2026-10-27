@@ -41,11 +41,17 @@ func useMemorySimulatedCache(t *testing.T) int {
 
 func prepareSimulatedCacheForTest(t *testing.T, channelID int, format types.RelayFormat, hitRate int, body string) *SimulatedCachePlan {
 	t.Helper()
+	return prepareSimulatedCacheForToken(t, channelID, 1, format, hitRate, body)
+}
+
+func prepareSimulatedCacheForToken(t *testing.T, channelID int, tokenID int, format types.RelayFormat, hitRate int, body string) *SimulatedCachePlan {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/test", strings.NewReader(body))
 	t.Cleanup(func() { common.CleanupBodyStorage(c) })
 	info := &relaycommon.RelayInfo{
+		TokenId:     tokenID,
 		RelayFormat: format,
 		ChannelMeta: &relaycommon.ChannelMeta{
 			ChannelId:         channelID,
@@ -141,6 +147,20 @@ func TestSimulatedCacheNumbers(t *testing.T) {
 			plan:   SimulatedCachePlan{clientFormat: types.RelayFormatGemini, hitRate: 30, jitter: 0.03, boundaries: boundaries([]int{50, 100}), matched: 1, lastBreakpoint: -1, last1hBreakpoint: -1},
 			prompt: 10000,
 			want:   simulatedCacheNumbers{prompt: 10000, read: 3090},
+		},
+		{
+			name: "claude latest turn is plain input and the capped history is created",
+			plan: SimulatedCachePlan{claudeClient: true, clientFormat: types.RelayFormatClaude, hitRate: 50,
+				boundaries: boundaries([]int{100, 300, 400}, simulatedCacheTTL1h, simulatedCacheTTL5m, simulatedCacheTTL5m), matched: 2, lastBreakpoint: 2, last1hBreakpoint: 0},
+			prompt: 4000,
+			want:   simulatedCacheNumbers{prompt: 4000, read: 2000, creation: 1000, c5m: 1000},
+		},
+		{
+			name: "claude first turn creates history and bills the latest turn as input",
+			plan: SimulatedCachePlan{claudeClient: true, clientFormat: types.RelayFormatClaude, hitRate: 80,
+				boundaries: boundaries([]int{100, 300, 400}, simulatedCacheTTL1h, simulatedCacheTTL5m, simulatedCacheTTL5m), matched: -1, lastBreakpoint: 2, last1hBreakpoint: 0},
+			prompt: 4000,
+			want:   simulatedCacheNumbers{prompt: 4000, creation: 3000, c1h: 1000, c5m: 2000},
 		},
 		{
 			name: "claude miss creates up to last breakpoint split 1h and 5m",
@@ -261,6 +281,20 @@ func TestSimulatedCacheOpenAIChatMultiTurn(t *testing.T) {
 	assert.Equal(t, cached, out.Get("usage.prompt_cache_hit_tokens").Int())
 	assert.Equal(t, 10000-cached, out.Get("usage.prompt_cache_miss_tokens").Int())
 	assert.Equal(t, cached, out.Get("choices.0.usage.cached_tokens").Int())
+
+	// Another token sending the same conversation never hits this token's prefixes.
+	other := prepareSimulatedCacheForToken(t, channel, 2, types.RelayFormatOpenAI, 100, turn2)
+	require.NotNil(t, other)
+	require.Equal(t, -1, other.matched)
+}
+
+func TestSimulatedCacheStoreBatchOperations(t *testing.T) {
+	useMemorySimulatedCache(t)
+	store := getSimulatedCacheStore()
+	require.NoError(t, store.SetManyWithTTL(map[string]int{"a": 300, "b": 3600}, time.Minute))
+	got, err := store.GetMany([]string{"a", "b", "missing"})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]int{"a": 300, "b": 3600}, got)
 }
 
 func TestSimulatedCacheOpenAIChatStream(t *testing.T) {
@@ -351,19 +385,21 @@ func TestSimulatedCacheClaudeSyncSplit(t *testing.T) {
 	upstream := `{"type":"message","usage":{"input_tokens":100,"cache_read_input_tokens":7000,"cache_creation_input_tokens":900,"output_tokens":7,` +
 		`"cache_creation":{"ephemeral_5m_input_tokens":900},"claude_cache_creation_1_h_tokens":5,"billing_usage":{"source":"claude_messages"}}}`
 
-	// Turn 1: miss, both breakpoints created; system part (about half) at 1h.
+	// Turn 1: miss; the system prefix (about half, 1h) is created and the
+	// latest user turn is billed as plain input.
 	plan := prepareSimulatedCacheForTest(t, channel, types.RelayFormatClaude, 100, req)
 	require.Equal(t, -1, plan.matched)
 	out := gjson.Parse(wrapSimulatedCacheBody(t, plan, "application/json", upstream))
 	usage := out.Get("usage")
 	creation := usage.Get("cache_creation_input_tokens").Int()
-	assert.Equal(t, int64(8000), creation)
+	assert.InDelta(t, 4000, creation, 50)
 	assert.Zero(t, usage.Get("cache_read_input_tokens").Int())
-	assert.Zero(t, usage.Get("input_tokens").Int())
+	assert.Equal(t, 8000-creation, usage.Get("input_tokens").Int())
 	c1h := usage.Get("cache_creation.ephemeral_1h_input_tokens").Int()
 	c5m := usage.Get("cache_creation.ephemeral_5m_input_tokens").Int()
-	assert.InDelta(t, 4000, c1h, 50)
+	assert.Equal(t, creation, c1h)
 	assert.Equal(t, creation, c1h+c5m)
+	assert.Zero(t, c5m)
 	assert.False(t, usage.Get("billing_usage").Exists())
 	assert.False(t, usage.Get("claude_cache_creation_1_h_tokens").Exists())
 
@@ -411,15 +447,16 @@ func TestSimulatedCacheClaudeStream(t *testing.T) {
 	require.Len(t, start, 1)
 	usage := start[0].Get("message.usage")
 	assert.Zero(t, usage.Get("cache_read_input_tokens").Int())
-	assert.Equal(t, int64(8000), usage.Get("cache_creation_input_tokens").Int())
-	assert.Zero(t, usage.Get("input_tokens").Int())
+	creation := usage.Get("cache_creation_input_tokens").Int()
+	assert.InDelta(t, 4000, creation, 50)
+	assert.Equal(t, 8000-creation, usage.Get("input_tokens").Int())
 
 	delta := sseUsagePayloads(out, "usage.output_tokens")
 	require.Len(t, delta, 1)
 	dUsage := delta[0].Get("usage")
 	assert.False(t, dUsage.Get("input_tokens").Exists())
 	assert.Zero(t, dUsage.Get("cache_read_input_tokens").Int())
-	assert.Equal(t, int64(8000), dUsage.Get("cache_creation_input_tokens").Int())
+	assert.Equal(t, creation, dUsage.Get("cache_creation_input_tokens").Int())
 	assert.Equal(t, usage.Get("cache_creation").Raw, dUsage.Get("cache_creation").Raw)
 	assert.Contains(t, out, `{"type":"content_block_delta","delta":{"type":"text_delta","text":"usage"}}`)
 }
@@ -449,13 +486,14 @@ func TestSimulatedCacheClaudeClientOpenAIUpstreamSidecar(t *testing.T) {
 	canonical, ok := parsed.Usage.BillingUsage.CanonicalUsage()
 	require.True(t, ok)
 	assert.Equal(t, dto.BillingUsageSemanticAnthropic, canonical.UsageSemantic)
-	assert.Zero(t, canonical.PromptTokens)
+	creation := canonical.PromptTokensDetails.CachedCreationTokens
+	assert.InDelta(t, 4000, creation, 50)
+	assert.Equal(t, 8000-creation, canonical.PromptTokens)
 	assert.Equal(t, 12, canonical.CompletionTokens)
-	assert.Equal(t, 8000, canonical.PromptTokensDetails.CachedCreationTokens)
-	assert.InDelta(t, 4000, canonical.ClaudeCacheCreation1hTokens, 50)
-	assert.Equal(t, 8000, canonical.ClaudeCacheCreation5mTokens+canonical.ClaudeCacheCreation1hTokens)
+	assert.Equal(t, creation, canonical.ClaudeCacheCreation1hTokens)
+	assert.Equal(t, creation, canonical.ClaudeCacheCreation5mTokens+canonical.ClaudeCacheCreation1hTokens)
 	assert.Zero(t, parsed.Usage.PromptTokensDetails.CachedTokens)
-	assert.Equal(t, 8000, parsed.Usage.PromptTokensDetails.CacheCreationTokensTotal())
+	assert.Equal(t, creation, parsed.Usage.PromptTokensDetails.CacheCreationTokensTotal())
 }
 
 func TestSimulatedCacheWrapResponsePassthrough(t *testing.T) {

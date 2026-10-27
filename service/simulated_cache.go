@@ -163,7 +163,8 @@ func PrepareSimulatedCache(c *gin.Context, info *relaycommon.RelayInfo) *Simulat
 	if len(segments) == 0 {
 		return nil
 	}
-	prefix := fmt.Sprintf("%d:%s:", info.ChannelId, info.UpstreamModelName)
+	// Scoped per token so users never hit each other's prefixes.
+	prefix := fmt.Sprintf("%d:%d:%s:", info.ChannelId, info.TokenId, info.UpstreamModelName)
 	hash := sha256.New()
 	var sum []byte
 	length := 0
@@ -187,47 +188,62 @@ func PrepareSimulatedCache(c *gin.Context, info *relaycommon.RelayInfo) *Simulat
 		return nil
 	}
 
-	plan.lookupLongestPrefix(len(plan.boundaries) - 1)
-	// Anthropic keeps 1h entries separately: a match extending past a 1h
-	// breakpoint that is only cached at 5m is read only up to before it, and
-	// the rest is re-created at 1h.
-	for k := 0; k <= plan.matched; k++ {
-		if plan.boundaries[k].ttl < simulatedCacheTTL1h {
-			continue
-		}
-		if seconds, found, err := getSimulatedCacheStore().Get(plan.boundaries[k].key); err == nil && found &&
-			time.Duration(seconds)*time.Second >= simulatedCacheTTL1h {
-			continue
-		}
-		plan.matched = -1
-		plan.matchedTTL = 0
-		plan.lookupLongestPrefix(k - 1)
-		break
-	}
+	plan.lookupLongestPrefix()
 	return plan
 }
 
-// lookupLongestPrefix sets matched to the longest stored boundary at or
-// below from whose stored tier satisfies the boundary's breakpoint tier.
-func (p *SimulatedCachePlan) lookupLongestPrefix(from int) {
-	store := getSimulatedCacheStore()
-	lowest := max(0, from+1-simulatedCacheMaxProbes)
-	for k := from; k >= lowest; k-- {
-		seconds, found, err := store.Get(p.boundaries[k].key)
-		if err != nil {
-			common.SysError(common.LogText("simulated cache lookup failed: %s", err.Error()))
-			return
+// lookupLongestPrefix sets matched to the longest stored boundary whose stored
+// tier satisfies the boundary's breakpoint tier. All candidate keys are read
+// in one batch so a long conversation costs a single store round trip.
+//
+// Anthropic keeps 1h entries separately: a match extending past a 1h
+// breakpoint that is only cached at 5m is read only up to before it, and the
+// rest is re-created at 1h.
+func (p *SimulatedCachePlan) lookupLongestPrefix() {
+	last := len(p.boundaries) - 1
+	lowest := max(0, last+1-simulatedCacheMaxProbes)
+	keys := make([]string, 0, last+1-lowest)
+	for k := range p.boundaries {
+		if k >= lowest || p.boundaries[k].ttl >= simulatedCacheTTL1h {
+			keys = append(keys, p.boundaries[k].key)
 		}
-		if !found {
-			continue
-		}
-		stored := time.Duration(seconds) * time.Second
-		if stored < p.boundaries[k].ttl {
+	}
+	stored, err := getSimulatedCacheStore().GetMany(keys)
+	if err != nil {
+		common.SysError(common.LogText("simulated cache lookup failed: %s", err.Error()))
+		return
+	}
+	storedTTL := func(k int) (time.Duration, bool) {
+		seconds, found := stored[p.boundaries[k].key]
+		return time.Duration(seconds) * time.Second, found
+	}
+
+	for k := last; k >= lowest; k-- {
+		ttl, found := storedTTL(k)
+		if !found || ttl < p.boundaries[k].ttl {
 			continue
 		}
 		p.matched = k
-		p.matchedTTL = stored
-		return
+		p.matchedTTL = ttl
+		break
+	}
+	for k := 0; k <= p.matched; k++ {
+		if p.boundaries[k].ttl < simulatedCacheTTL1h {
+			continue
+		}
+		if ttl, found := storedTTL(k); found && ttl >= simulatedCacheTTL1h {
+			continue
+		}
+		p.matched = -1
+		p.matchedTTL = 0
+		for j := k - 1; j >= lowest; j-- {
+			if ttl, found := storedTTL(j); found && ttl >= p.boundaries[j].ttl {
+				p.matched = j
+				p.matchedTTL = ttl
+				break
+			}
+		}
+		break
 	}
 }
 
@@ -391,41 +407,53 @@ func (p *SimulatedCachePlan) numbersFor(prompt int) simulatedCacheNumbers {
 		return numbers
 	}
 	numbers.read = min(matchedTokens, bpTokens)
-	numbers.creation = bpTokens - numbers.read
+	// The latest turn (last message) is billed as plain input; only the span
+	// between the cache read and the latest turn, up to the last breakpoint,
+	// is written to the cache.
+	creationEnd := min(bpTokens, p.prefixTokens(prompt, len(p.boundaries)-2))
+	numbers.creation = max(0, creationEnd-numbers.read)
 	// Re-created tokens before the last 1h breakpoint are written at 1h.
-	oneHourEnd := min(p.prefixTokens(prompt, p.last1hBreakpoint), bpTokens)
-	numbers.c1h = max(0, oneHourEnd-numbers.read)
+	oneHourEnd := min(p.prefixTokens(prompt, p.last1hBreakpoint), creationEnd)
+	numbers.c1h = min(max(0, oneHourEnd-numbers.read), numbers.creation)
 	numbers.c5m = numbers.creation - numbers.c1h
 	return numbers
 }
 
 // recordPrefixes stores the request prefixes after upstream accepted the
-// request, so the next turn of the conversation can hit them.
+// request, so the next turn of the conversation can hit them. Writes are
+// grouped by TTL tier so each tier costs one store round trip.
 func (p *SimulatedCachePlan) recordPrefixes() {
-	store := getSimulatedCacheStore()
+	byTTL := make(map[time.Duration]map[string]int)
 	write := func(k int, ttl time.Duration) {
 		if k == p.matched {
 			ttl = max(ttl, p.matchedTTL)
 		}
-		if err := store.SetWithTTL(p.boundaries[k].key, int(ttl/time.Second), ttl); err != nil {
-			common.SysError(common.LogText("simulated cache write failed: %s", err.Error()))
+		if byTTL[ttl] == nil {
+			byTTL[ttl] = make(map[string]int)
 		}
+		byTTL[ttl][p.boundaries[k].key] = int(ttl / time.Second)
 	}
 	if !p.claudeClient {
 		write(len(p.boundaries)-1, p.writeTTL)
 		if p.matched >= 0 && p.matched != len(p.boundaries)-1 {
 			write(p.matched, p.writeTTL)
 		}
-		return
-	}
-	for k, boundary := range p.boundaries {
-		if boundary.ttl > 0 {
-			write(k, boundary.ttl)
+	} else {
+		for k, boundary := range p.boundaries {
+			if boundary.ttl > 0 {
+				write(k, boundary.ttl)
+			}
+		}
+		// A hit on a prefix this request no longer marks still refreshes it.
+		if p.matched >= 0 && p.boundaries[p.matched].ttl == 0 {
+			write(p.matched, p.matchedTTL)
 		}
 	}
-	// A hit on a prefix this request no longer marks still refreshes it.
-	if p.matched >= 0 && p.boundaries[p.matched].ttl == 0 {
-		write(p.matched, p.matchedTTL)
+	store := getSimulatedCacheStore()
+	for ttl, items := range byTTL {
+		if err := store.SetManyWithTTL(items, ttl); err != nil {
+			common.SysError(common.LogText("simulated cache write failed: %s", err.Error()))
+		}
 	}
 }
 
