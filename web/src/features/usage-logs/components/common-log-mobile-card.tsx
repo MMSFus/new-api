@@ -27,11 +27,16 @@ import { GroupBadge } from '@/components/group-badge'
 import { StatusBadge, type StatusVariant } from '@/components/status-badge'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
+import { toIntlLocale } from '@/i18n/languages'
 import { getUserAvatarFallback, getUserAvatarStyle } from '@/lib/avatar'
 import dayjs from '@/lib/dayjs'
 import { formatLogQuota, formatTimestampToDate } from '@/lib/format'
 
 import type { UsageLog } from '../data/schema'
+import {
+  formatCacheHitRatio,
+  getLogCacheHitRatio,
+} from '../lib/cache-hit-ratio'
 import { formatModelName, logTokenName, parseLogOther } from '../lib/format'
 import {
   getLogTypeConfig,
@@ -62,7 +67,7 @@ export function CommonLogMobileCard<TData>(props: {
   log: UsageLog
   cells: Map<string, Cell<TData, unknown>>
 }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const context = useUsageLogsContext()
   const [selectedField, setSelectedField] = useState<FieldName | null>(null)
   const log = props.log
@@ -133,6 +138,8 @@ export function CommonLogMobileCard<TData>(props: {
       (other?.cache_creation_tokens_1h || 0) ||
     other?.cache_creation_tokens ||
     0
+  const cacheHitRatio = getLogCacheHitRatio(log.prompt_tokens || 0, other)
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const showTokens =
     displayable &&
     props.cells.has('prompt_tokens') &&
@@ -305,6 +312,8 @@ export function CommonLogMobileCard<TData>(props: {
           {cacheRead > 0 && (
             <span>
               {t('Cache')} ↓ {cacheRead.toLocaleString()}
+              {cacheHitRatio !== null &&
+                ` (${formatCacheHitRatio(cacheHitRatio, locale)})`}
             </span>
           )}
           {cacheWrite > 0 && (

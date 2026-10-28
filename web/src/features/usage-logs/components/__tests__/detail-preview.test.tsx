@@ -564,7 +564,7 @@ test('admin log details compare original and simulated cache usage', async () =>
   expect(comparisonRow(dialog, 'Cache Read')).toEqual(['0', '8,000'])
   expect(comparisonRow(dialog, 'Cache Write (5m)')).toEqual(['0', '2,000'])
   expect(comparisonRow(dialog, 'Cache Write (1h)')).toEqual(['0', '0'])
-  expect(comparisonRow(dialog, 'Cache hit ratio')).toEqual(['0%', '66.67%'])
+  expect(comparisonRow(dialog, 'Cache hit ratio')).toEqual(['0%', '66.7%'])
   expect(comparisonRow(dialog, 'Cost')).toEqual(['$0.0084', '$0.0052'])
   expect(
     dialog.getByText('Cost difference').nextElementSibling
@@ -575,6 +575,110 @@ test('admin log details compare original and simulated cache usage', async () =>
   expect(
     dialog.getByText('Matched segments').nextElementSibling
   ).toHaveTextContent('5 / 7')
+  expect(dialog.queryByText('Target hit rate')).not.toBeInTheDocument()
+})
+
+test('simulated cache details show the configured range and the drawn target rate', async () => {
+  const info = simulatedCacheOther.admin_info?.simulated_cache
+  const preview = renderPreview({
+    ...simulatedCacheOther,
+    admin_info: {
+      simulated_cache: {
+        ...info,
+        hit_rate: 85,
+        hit_rate_min: 75,
+        hit_rate_max: 85,
+        target_rate: 81.25,
+      },
+    },
+  })
+  fireEvent.click(preview)
+  const dialog = within(await screen.findByRole('dialog'))
+
+  expect(
+    dialog.getByText('Configured hit rate').nextElementSibling
+  ).toHaveTextContent('75%–85%')
+  expect(
+    dialog.getByText('Target hit rate').nextElementSibling
+  ).toHaveTextContent('81.25%')
+})
+
+function renderTokenCell(log: Partial<UsageLog>, other: LogOtherData) {
+  render(
+    <I18nextProvider i18n={i18n}>
+      <QueryClientProvider client={client}>
+        <DetailPreview
+          other={other}
+          isAdmin={false}
+          columnId='prompt_tokens'
+          log={log}
+        />
+      </QueryClientProvider>
+    </I18nextProvider>
+  )
+}
+
+test.each([
+  {
+    name: 'prompt that already includes cache',
+    log: { prompt_tokens: 12000, completion_tokens: 300 },
+    other: { cache_tokens: 8000 },
+    expected: 'Cache↓ 8,000 (66.7%)',
+  },
+  {
+    name: 'anthropic prompt that excludes cache read and write',
+    log: { prompt_tokens: 1000, completion_tokens: 300 },
+    other: {
+      usage_semantic: 'anthropic',
+      cache_tokens: 8000,
+      cache_creation_tokens: 9999,
+      cache_creation_tokens_5m: 1000,
+    },
+    expected: 'Cache↓ 8,000 (80%)',
+  },
+  {
+    name: 'explicit input total',
+    log: { prompt_tokens: 100, completion_tokens: 1 },
+    other: { cache_tokens: 300, input_tokens_total: 400 },
+    expected: 'Cache↓ 300 (75%)',
+  },
+  {
+    name: 'cache read above the prompt (clamped)',
+    log: { prompt_tokens: 100, completion_tokens: 1 },
+    other: { cache_tokens: 500 },
+    expected: 'Cache↓ 500 (100%)',
+  },
+])('the token cell shows the cache hit ratio for a $name', (scenario) => {
+  renderTokenCell(scenario.log, scenario.other)
+  expect(screen.getByText(/^Cache↓/)).toHaveTextContent(scenario.expected)
+})
+
+test('the token cell omits the ratio when nothing was read from cache', () => {
+  renderTokenCell(
+    { prompt_tokens: 1000, completion_tokens: 10 },
+    { cache_creation_tokens: 500 }
+  )
+  expect(screen.queryByText(/^Cache↓/)).not.toBeInTheDocument()
+  expect(screen.queryByText(/%/)).not.toBeInTheDocument()
+})
+
+test('non-admin log details list the cache hit ratio in the token breakdown', async () => {
+  render(
+    <I18nextProvider i18n={i18n}>
+      <QueryClientProvider client={client}>
+        <DetailPreview
+          other={{ cache_tokens: 3000 }}
+          isAdmin={false}
+          log={{ prompt_tokens: 4000, completion_tokens: 20 }}
+        />
+      </QueryClientProvider>
+    </I18nextProvider>
+  )
+  fireEvent.click(screen.getByRole('button', { name: /./ }))
+  const dialog = within(await screen.findByRole('dialog'))
+  expect(
+    dialog.getByText('Cache hit ratio').nextElementSibling
+  ).toHaveTextContent('75%')
 })
 
 test('simulated cache details tolerate a future version with missing and unknown keys', async () => {

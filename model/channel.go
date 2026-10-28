@@ -1005,6 +1005,9 @@ func (channel *Channel) ValidateSettings() error {
 	if channelParams.SimulatedCacheHitRate < 0 || channelParams.SimulatedCacheHitRate > 100 {
 		return fmt.Errorf("invalid simulated_cache_hit_rate: %d", channelParams.SimulatedCacheHitRate)
 	}
+	if low, high := channelParams.SimulatedCacheHitRateMin, channelParams.SimulatedCacheHitRateMax; low < 0 || high > 100 || low > high {
+		return fmt.Errorf("invalid simulated cache hit rate range: %d-%d", low, high)
+	}
 	channelOtherSettings := &dto.ChannelOtherSettings{}
 	if channel.OtherSettings != "" {
 		err := common.UnmarshalJsonStr(channel.OtherSettings, channelOtherSettings)

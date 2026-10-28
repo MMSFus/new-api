@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { formatLogQuota } from '@/lib/format'
 
 import type { LogOtherData, SimulatedCacheUsage } from '../types'
+import { computeCacheHitRatio } from './cache-hit-ratio'
 
 export interface SimulatedCacheSide {
   promptTokens: number
@@ -34,6 +35,10 @@ export interface SimulatedCacheSide {
 export interface SimulatedCacheAudit {
   version: number | null
   hitRate: number | null
+  hitRateMin: number | null
+  hitRateMax: number | null
+  /** Rate drawn for this request, percent; null on a miss or older rows. */
+  targetRate: number | null
   clientFormat: string
   upstreamSchema: string
   matchedSegments: number | null
@@ -91,6 +96,9 @@ export function getSimulatedCache(
   return {
     version: finiteOrNull(info.version),
     hitRate: finiteOrNull(info.hit_rate),
+    hitRateMin: finiteOrNull(info.hit_rate_min),
+    hitRateMax: finiteOrNull(info.hit_rate_max),
+    targetRate: finiteOrNull(info.target_rate),
     clientFormat:
       typeof info.client_format === 'string' ? info.client_format : '',
     upstreamSchema:
@@ -103,10 +111,13 @@ export function getSimulatedCache(
   }
 }
 
-/** Share of prompt tokens served from cache, in percent (null without prompt). */
+/**
+ * Share of input served from cache, in percent (null without prompt). Audit
+ * prompt_tokens is already the total input for every format, so this is the
+ * same ratio the log list shows.
+ */
 export function getCacheHitRatio(side: SimulatedCacheSide): number | null {
-  if (side.promptTokens <= 0) return null
-  return (side.cacheReadTokens / side.promptTokens) * 100
+  return computeCacheHitRatio(side.cacheReadTokens, side.promptTokens)
 }
 
 /** Signed quota change; positive means the simulated charge is higher. */

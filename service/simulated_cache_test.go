@@ -60,8 +60,9 @@ func prepareSimulatedCacheForToken(t *testing.T, channelID int, tokenID int, for
 			ChannelId:         channelID,
 			UpstreamModelName: "test-model",
 			ChannelSetting: dto.ChannelSettings{
-				SimulatedCacheEnabled: true,
-				SimulatedCacheHitRate: hitRate,
+				SimulatedCacheEnabled:    true,
+				SimulatedCacheHitRateMin: hitRate,
+				SimulatedCacheHitRateMax: hitRate,
 			},
 		},
 	}
@@ -109,110 +110,55 @@ func TestSimulatedCacheNumbers(t *testing.T) {
 		}
 		return out
 	}
+	open := func(format types.RelayFormat, rate float64, lengths []int, matched int) SimulatedCachePlan {
+		return SimulatedCachePlan{clientFormat: format, targetRate: rate, boundaries: boundaries(lengths), matched: matched, lastBreakpoint: -1, last1hBreakpoint: -1}
+	}
+	claude := func(rate float64, matched, lastBreakpoint int, ttls ...time.Duration) SimulatedCachePlan {
+		return SimulatedCachePlan{claudeClient: true, clientFormat: types.RelayFormatClaude, targetRate: rate,
+			boundaries: boundaries([]int{100, 300, 400}, ttls...), matched: matched, lastBreakpoint: lastBreakpoint, last1hBreakpoint: 0}
+	}
 	tests := []struct {
 		name   string
 		plan   SimulatedCachePlan
 		prompt int
 		want   simulatedCacheNumbers
 	}{
-		{
-			name:   "openai half prefix floors to 1024+128n",
-			plan:   SimulatedCachePlan{clientFormat: types.RelayFormatOpenAI, hitRate: 100, boundaries: boundaries([]int{50, 100}), matched: 0, lastBreakpoint: -1, last1hBreakpoint: -1},
-			prompt: 10000,
-			want:   simulatedCacheNumbers{prompt: 10000, read: 4992},
-		},
-		{
-			name:   "openai below 1024 is zero",
-			plan:   SimulatedCachePlan{clientFormat: types.RelayFormatOpenAI, hitRate: 100, boundaries: boundaries([]int{50, 100}), matched: 0, lastBreakpoint: -1, last1hBreakpoint: -1},
-			prompt: 2000,
-			want:   simulatedCacheNumbers{prompt: 2000},
-		},
-		{
-			name:   "responses miss is zero",
-			plan:   SimulatedCachePlan{clientFormat: types.RelayFormatOpenAIResponses, hitRate: 100, boundaries: boundaries([]int{50, 100}), matched: -1, lastBreakpoint: -1, last1hBreakpoint: -1},
-			prompt: 10000,
-			want:   simulatedCacheNumbers{prompt: 10000},
-		},
-		{
-			name:   "gemini has threshold but no rounding",
-			plan:   SimulatedCachePlan{clientFormat: types.RelayFormatGemini, hitRate: 100, boundaries: boundaries([]int{50, 100}), matched: 0, lastBreakpoint: -1, last1hBreakpoint: -1},
-			prompt: 10001,
-			want:   simulatedCacheNumbers{prompt: 10001, read: 5000},
-		},
-		{
-			name:   "hit rate caps a full prefix hit",
-			plan:   SimulatedCachePlan{clientFormat: types.RelayFormatOpenAI, hitRate: 30, boundaries: boundaries([]int{50, 100}), matched: 1, lastBreakpoint: -1, last1hBreakpoint: -1},
-			prompt: 10000,
-			want:   simulatedCacheNumbers{prompt: 10000, read: 2944},
-		},
-		{
-			name:   "positive jitter raises the cap",
-			plan:   SimulatedCachePlan{clientFormat: types.RelayFormatGemini, hitRate: 30, jitter: 0.03, boundaries: boundaries([]int{50, 100}), matched: 1, lastBreakpoint: -1, last1hBreakpoint: -1},
-			prompt: 10000,
-			want:   simulatedCacheNumbers{prompt: 10000, read: 3090},
-		},
-		{
-			name: "claude latest turn is plain input and the capped history is created",
-			plan: SimulatedCachePlan{claudeClient: true, clientFormat: types.RelayFormatClaude, hitRate: 50,
-				boundaries: boundaries([]int{100, 300, 400}, simulatedCacheTTL1h, simulatedCacheTTL5m, simulatedCacheTTL5m), matched: 2, lastBreakpoint: 2, last1hBreakpoint: 0},
-			prompt: 4000,
-			want:   simulatedCacheNumbers{prompt: 4000, read: 2000, creation: 1000, c5m: 1000},
-		},
-		{
-			name: "claude first turn creates history and bills the latest turn as input",
-			plan: SimulatedCachePlan{claudeClient: true, clientFormat: types.RelayFormatClaude, hitRate: 80,
-				boundaries: boundaries([]int{100, 300, 400}, simulatedCacheTTL1h, simulatedCacheTTL5m, simulatedCacheTTL5m), matched: -1, lastBreakpoint: 2, last1hBreakpoint: 0},
-			prompt: 4000,
-			want:   simulatedCacheNumbers{prompt: 4000, creation: 3000, c1h: 1000, c5m: 2000},
-		},
-		{
-			name: "claude miss creates up to last breakpoint split 1h and 5m",
-			plan: SimulatedCachePlan{claudeClient: true, clientFormat: types.RelayFormatClaude, hitRate: 100,
-				boundaries: boundaries([]int{100, 300, 400}, simulatedCacheTTL1h, simulatedCacheTTL5m), matched: -1, lastBreakpoint: 1, last1hBreakpoint: 0},
-			prompt: 4000,
-			want:   simulatedCacheNumbers{prompt: 4000, creation: 3000, c1h: 1000, c5m: 2000},
-		},
-		{
-			name: "claude hit on 1h prefix reads it and creates the rest at 5m",
-			plan: SimulatedCachePlan{claudeClient: true, clientFormat: types.RelayFormatClaude, hitRate: 100,
-				boundaries: boundaries([]int{100, 300, 400}, simulatedCacheTTL1h, simulatedCacheTTL5m), matched: 0, lastBreakpoint: 1, last1hBreakpoint: 0},
-			prompt: 4000,
-			want:   simulatedCacheNumbers{prompt: 4000, read: 1000, creation: 2000, c5m: 2000},
-		},
-		{
-			name: "claude read is bounded by the last breakpoint",
-			plan: SimulatedCachePlan{claudeClient: true, clientFormat: types.RelayFormatClaude, hitRate: 100,
-				boundaries: boundaries([]int{100, 300, 400}, simulatedCacheTTL1h, simulatedCacheTTL5m), matched: 2, lastBreakpoint: 1, last1hBreakpoint: 0},
-			prompt: 4000,
-			want:   simulatedCacheNumbers{prompt: 4000, read: 3000},
-		},
-		{
-			name: "claude hit rate cap turns the rest into creation",
-			plan: SimulatedCachePlan{claudeClient: true, clientFormat: types.RelayFormatClaude, hitRate: 25,
-				boundaries: boundaries([]int{100, 300, 400}, simulatedCacheTTL1h, simulatedCacheTTL5m), matched: 1, lastBreakpoint: 1, last1hBreakpoint: 0},
-			prompt: 4000,
-			want:   simulatedCacheNumbers{prompt: 4000, read: 1000, creation: 2000, c5m: 2000},
-		},
-		{
-			name: "claude without cache_control is zero",
-			plan: SimulatedCachePlan{claudeClient: true, clientFormat: types.RelayFormatClaude, hitRate: 100,
-				boundaries: boundaries([]int{100, 400}), matched: 1, lastBreakpoint: -1, last1hBreakpoint: -1},
-			prompt: 4000,
-			want:   simulatedCacheNumbers{prompt: 4000},
-		},
-		{
-			name: "claude breakpoint below 1024 tokens is zero",
-			plan: SimulatedCachePlan{claudeClient: true, clientFormat: types.RelayFormatClaude, hitRate: 100,
-				boundaries: boundaries([]int{100, 300, 400}, simulatedCacheTTL1h, simulatedCacheTTL5m), matched: -1, lastBreakpoint: 1, last1hBreakpoint: 0},
-			prompt: 1300,
-			want:   simulatedCacheNumbers{prompt: 1300},
-		},
-		{
-			name:   "negative prompt clamps to zero",
-			plan:   SimulatedCachePlan{clientFormat: types.RelayFormatOpenAI, hitRate: 100, boundaries: boundaries([]int{50, 100}), matched: 1, lastBreakpoint: -1, last1hBreakpoint: -1},
-			prompt: -5,
-			want:   simulatedCacheNumbers{},
-		},
+		{name: "openai target floors to 1024+128n", plan: open(types.RelayFormatOpenAI, 50, []int{50, 90, 100}, 1), prompt: 10000,
+			want: simulatedCacheNumbers{prompt: 10000, read: 4992}},
+		{name: "openai below 1024 is zero", plan: open(types.RelayFormatOpenAI, 40, []int{50, 90, 100}, 1), prompt: 2000,
+			want: simulatedCacheNumbers{prompt: 2000}},
+		{name: "a new conversation never hits", plan: open(types.RelayFormatOpenAIResponses, 90, []int{50, 90, 100}, -1), prompt: 10000,
+			want: simulatedCacheNumbers{prompt: 10000}},
+		{name: "gemini has threshold but no rounding", plan: open(types.RelayFormatGemini, 50, []int{50, 90, 100}, 1), prompt: 10001,
+			want: simulatedCacheNumbers{prompt: 10001, read: 5000}},
+		{name: "any prefix hit reads the target, not the byte ratio of the match", plan: open(types.RelayFormatGemini, 85, []int{50, 90, 100}, 0), prompt: 10000,
+			want: simulatedCacheNumbers{prompt: 10000, read: 8500}},
+		{name: "the latest turn is never read", plan: open(types.RelayFormatGemini, 90, []int{50, 100}, 1), prompt: 10000,
+			want: simulatedCacheNumbers{prompt: 10000, read: 5000}},
+		{name: "claude reads the target, creates history up to the latest turn, bills the latest turn as input",
+			plan: claude(50, 2, 2, simulatedCacheTTL1h, simulatedCacheTTL5m, simulatedCacheTTL5m), prompt: 4000,
+			want: simulatedCacheNumbers{prompt: 4000, read: 2000, creation: 1000, c5m: 1000}},
+		{name: "claude first turn creates history and bills the latest turn as input",
+			plan: claude(80, -1, 2, simulatedCacheTTL1h, simulatedCacheTTL5m, simulatedCacheTTL5m), prompt: 4000,
+			want: simulatedCacheNumbers{prompt: 4000, creation: 3000, c1h: 1000, c5m: 2000}},
+		{name: "claude miss creates up to last breakpoint split 1h and 5m",
+			plan: claude(100, -1, 1, simulatedCacheTTL1h, simulatedCacheTTL5m), prompt: 4000,
+			want: simulatedCacheNumbers{prompt: 4000, creation: 3000, c1h: 1000, c5m: 2000}},
+		{name: "claude low target re-creates the rest of the history at 5m",
+			plan: claude(25, 0, 1, simulatedCacheTTL1h, simulatedCacheTTL5m), prompt: 4000,
+			want: simulatedCacheNumbers{prompt: 4000, read: 1000, creation: 2000, c5m: 2000}},
+		{name: "claude read is bounded by the latest turn and the last breakpoint",
+			plan: claude(100, 2, 1, simulatedCacheTTL1h, simulatedCacheTTL5m), prompt: 4000,
+			want: simulatedCacheNumbers{prompt: 4000, read: 3000}},
+		{name: "claude without cache_control is zero",
+			plan: SimulatedCachePlan{claudeClient: true, clientFormat: types.RelayFormatClaude, targetRate: 100,
+				boundaries: boundaries([]int{100, 400}), matched: 1, lastBreakpoint: -1, last1hBreakpoint: -1}, prompt: 4000,
+			want: simulatedCacheNumbers{prompt: 4000}},
+		{name: "claude breakpoint below 1024 tokens is zero",
+			plan: claude(100, -1, 1, simulatedCacheTTL1h, simulatedCacheTTL5m), prompt: 1300,
+			want: simulatedCacheNumbers{prompt: 1300}},
+		{name: "negative prompt clamps to zero", plan: open(types.RelayFormatOpenAI, 100, []int{50, 100}, 1), prompt: -5,
+			want: simulatedCacheNumbers{}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -224,14 +170,32 @@ func TestSimulatedCacheNumbers(t *testing.T) {
 	}
 }
 
-func TestSimulatedCacheJitterIsDeterministicAndBounded(t *testing.T) {
-	require.Zero(t, simulatedCacheJitterFor(""))
-	for i := range 200 {
+func TestSimulatedCacheHitRangeAndDraw(t *testing.T) {
+	for _, tt := range []struct {
+		name          string
+		setting       dto.ChannelSettings
+		wantMin, want int
+	}{
+		{"explicit range", dto.ChannelSettings{SimulatedCacheHitRateMin: 70, SimulatedCacheHitRateMax: 90}, 70, 90},
+		{"legacy single rate maps to +-3", dto.ChannelSettings{SimulatedCacheHitRate: 86}, 83, 89},
+		{"legacy rate clamps at 100", dto.ChannelSettings{SimulatedCacheHitRate: 99}, 96, 100},
+		{"range wins over legacy", dto.ChannelSettings{SimulatedCacheHitRate: 50, SimulatedCacheHitRateMin: 10, SimulatedCacheHitRateMax: 20}, 10, 20},
+		{"nothing configured", dto.ChannelSettings{}, 0, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			low, high := tt.setting.SimulatedCacheHitRange()
+			assert.Equal(t, tt.wantMin, low)
+			assert.Equal(t, tt.want, high)
+		})
+	}
+
+	assert.Equal(t, 0.5, simulatedCacheUnitFor(""))
+	for i := range 50 {
 		id := "req-" + strconv.Itoa(i)
-		j := simulatedCacheJitterFor(id)
-		require.Equal(t, j, simulatedCacheJitterFor(id))
-		require.LessOrEqual(t, j, simulatedCacheJitter)
-		require.GreaterOrEqual(t, j, -simulatedCacheJitter)
+		u := simulatedCacheUnitFor(id)
+		require.Equal(t, u, simulatedCacheUnitFor(id))
+		require.GreaterOrEqual(t, u, 0.0)
+		require.LessOrEqual(t, u, 1.0)
 	}
 }
 
@@ -302,13 +266,13 @@ func TestSimulatedCacheStoreBatchOperations(t *testing.T) {
 
 func TestSimulatedCacheOpenAIChatStream(t *testing.T) {
 	channel := useMemorySimulatedCache(t)
-	req := `{"messages":[{"role":"user","content":"` + longText(9000) + `"}],"stream":true}`
+	req := `{"messages":[{"role":"system","content":"` + longText(9000) + `"},{"role":"user","content":"hi"}],"stream":true}`
 	// Seed the prefix with a first request.
 	plan := prepareSimulatedCacheForTest(t, channel, types.RelayFormatOpenAI, 50, req)
 	wrapSimulatedCacheBody(t, plan, "text/event-stream", "data: [DONE]\n\n")
 
 	plan = prepareSimulatedCacheForTest(t, channel, types.RelayFormatOpenAI, 50, req)
-	require.Equal(t, 0, plan.matched)
+	require.Equal(t, len(plan.boundaries)-1, plan.matched)
 	long := `{"choices":[{"delta":{"content":"` + longText(200_000) + `"}}]}`
 	upstream := "data: " + long + "\r\n\r\n" +
 		": keep-alive\n\n" +
@@ -323,7 +287,7 @@ func TestSimulatedCacheOpenAIChatStream(t *testing.T) {
 	frames := sseUsagePayloads(out, "usage")
 	require.Len(t, frames, 2)
 	for _, frame := range frames {
-		// 50% of 8000 with jitter 0 (no request id) = 4000 -> 3968.
+		// Range 50-50 draws 50% of 8000 = 4000 -> 3968.
 		assert.Equal(t, int64(3968), frame.Get("usage.prompt_tokens_details.cached_tokens").Int())
 	}
 }
@@ -361,7 +325,8 @@ func TestSimulatedCacheGemini(t *testing.T) {
 	require.Equal(t, len(plan.boundaries)-1, plan.matched)
 	sync := `{"candidates":[],"usageMetadata":{"promptTokenCount":3001,"candidatesTokenCount":4,"cachedContentTokenCount":2,"cacheTokensDetails":[{"modality":"TEXT","tokenCount":2}]}}`
 	out := gjson.Parse(wrapSimulatedCacheBody(t, plan, "application/json", sync))
-	assert.Equal(t, int64(3001), out.Get("usageMetadata.cachedContentTokenCount").Int())
+	// A 100% target is capped at the history before the latest turn ("q").
+	assert.Equal(t, int64(2988), out.Get("usageMetadata.cachedContentTokenCount").Int())
 	assert.False(t, out.Get("usageMetadata.cacheTokensDetails").Exists())
 
 	// Below the 1024 floor the real value is removed, not kept.
@@ -409,6 +374,8 @@ func TestSimulatedCacheClaudeSyncSplit(t *testing.T) {
 	// Turn 2 with a new user turn: reads the whole turn-1 prompt.
 	plan = prepareSimulatedCacheForTest(t, channel, types.RelayFormatClaude, 100, claudeRequestForTest(`,"ttl":"1h"`, true))
 	require.Equal(t, 1, plan.matched)
+	require.NotNil(t, plan.audit.TargetRate, "a prefix hit records the drawn rate")
+	assert.Equal(t, 100.0, *plan.audit.TargetRate)
 	upstream2 := `{"type":"message","usage":{"input_tokens":10000,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":7}}`
 	usage = gjson.Parse(wrapSimulatedCacheBody(t, plan, "application/json", upstream2)).Get("usage")
 	read := usage.Get("cache_read_input_tokens").Int()
@@ -503,7 +470,7 @@ func TestSimulatedCacheWrapResponsePassthrough(t *testing.T) {
 	var nilPlan *SimulatedCachePlan
 	nilPlan.WrapResponse(&http.Response{})
 	plan := &SimulatedCachePlan{matched: -1, lastBreakpoint: -1, last1hBreakpoint: -1,
-		boundaries: []simulatedCacheBoundary{{key: "passthrough", length: 1}}, hitRate: 100, writeTTL: simulatedCacheTTL5m}
+		boundaries: []simulatedCacheBoundary{{key: "passthrough", length: 1}}, targetRate: 100, writeTTL: simulatedCacheTTL5m}
 	useMemorySimulatedCache(t)
 	plan.WrapResponse(nil)
 	plan.WrapResponse(&http.Response{Header: http.Header{}})
@@ -562,7 +529,11 @@ func TestSimulatedCacheAuditRecordsOriginalAndPricesBoth(t *testing.T) {
 	assert.Equal(t, simulatedCacheAuditVersion, audit.Version)
 	assert.Equal(t, "claude", audit.UpstreamSchema)
 	assert.Equal(t, string(types.RelayFormatClaude), audit.ClientFormat)
+	// The legacy single rate 100 maps to the range 97-100.
 	assert.Equal(t, 100, audit.HitRate)
+	assert.Equal(t, 97, audit.HitRateMin)
+	assert.Equal(t, 100, audit.HitRateMax)
+	assert.Nil(t, audit.TargetRate, "a miss has no drawn rate")
 	assert.Zero(t, audit.MatchedSegments)
 	assert.Equal(t, SimulatedCacheTokens{PromptTokens: 8000, CompletionTokens: 100, CacheReadTokens: 7000}, audit.Original)
 	assert.Zero(t, audit.Simulated.CacheReadTokens)

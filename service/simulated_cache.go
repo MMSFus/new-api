@@ -38,7 +38,6 @@ const (
 	simulatedCacheMinTokens = 1024
 	// simulatedCacheOpenAIStep is OpenAI's cache-hit granularity above the minimum.
 	simulatedCacheOpenAIStep = 128
-	simulatedCacheJitter     = 0.03
 
 	simulatedCacheTTL5m  = 5 * time.Minute
 	simulatedCacheTTL1h  = time.Hour
@@ -88,9 +87,10 @@ type simulatedCacheBoundary struct {
 type SimulatedCachePlan struct {
 	claudeClient bool
 	clientFormat types.RelayFormat
-	hitRate      int
-	jitter       float64
-	boundaries   []simulatedCacheBoundary
+	// targetRate is the cached share of prompt tokens, in percent, drawn
+	// from the channel's hit-rate range for this request.
+	targetRate float64
+	boundaries []simulatedCacheBoundary
 	// writeTTL is the non-Claude tier (5m, or 24h for prompt_cache_retention).
 	writeTTL time.Duration
 	// lastBreakpoint / last1hBreakpoint are boundary indexes (-1 = none).
@@ -126,8 +126,13 @@ type SimulatedCacheTokens struct {
 // consume log. Fields are only ever added; Version changes only on a breaking
 // change, and readers ignore unknown keys.
 type SimulatedCacheAudit struct {
-	Version         int                  `json:"version"`
-	HitRate         int                  `json:"hit_rate"`
+	Version int `json:"version"`
+	// HitRate is the range maximum, kept for readers of the single rate.
+	HitRate    int `json:"hit_rate"`
+	HitRateMin int `json:"hit_rate_min"`
+	HitRateMax int `json:"hit_rate_max"`
+	// TargetRate is the drawn rate in percent; absent on a miss.
+	TargetRate      *float64             `json:"target_rate,omitempty"`
 	ClientFormat    string               `json:"client_format"`
 	UpstreamSchema  string               `json:"upstream_schema"`
 	MatchedSegments int                  `json:"matched_segments"`
@@ -190,7 +195,8 @@ func PrepareSimulatedCache(c *gin.Context, info *relaycommon.RelayInfo) *Simulat
 		return nil
 	}
 	setting := info.ChannelSetting
-	if !setting.SimulatedCacheEnabled || setting.SimulatedCacheHitRate <= 0 {
+	hitMin, hitMax := setting.SimulatedCacheHitRange()
+	if !setting.SimulatedCacheEnabled || hitMax <= 0 {
 		return nil
 	}
 	switch info.RelayFormat {
@@ -210,13 +216,14 @@ func PrepareSimulatedCache(c *gin.Context, info *relaycommon.RelayInfo) *Simulat
 	plan := &SimulatedCachePlan{
 		audit: &SimulatedCacheAudit{
 			Version:      simulatedCacheAuditVersion,
-			HitRate:      min(setting.SimulatedCacheHitRate, 100),
+			HitRate:      hitMax,
+			HitRateMin:   hitMin,
+			HitRateMax:   hitMax,
 			ClientFormat: string(info.RelayFormat),
 		},
 		claudeClient:     info.RelayFormat == types.RelayFormatClaude,
 		clientFormat:     info.RelayFormat,
-		hitRate:          min(setting.SimulatedCacheHitRate, 100),
-		jitter:           simulatedCacheJitterFor(info.RequestId),
+		targetRate:       float64(hitMin) + float64(hitMax-hitMin)*simulatedCacheUnitFor(info.RequestId),
 		isStream:         info.IsStream,
 		writeTTL:         simulatedCacheTTL5m,
 		lastBreakpoint:   -1,
@@ -257,6 +264,10 @@ func PrepareSimulatedCache(c *gin.Context, info *relaycommon.RelayInfo) *Simulat
 	}
 
 	plan.lookupLongestPrefix()
+	if plan.matched >= 0 {
+		rate := math.Round(plan.targetRate*100) / 100
+		plan.audit.TargetRate = &rate
+	}
 	plan.audit.MatchedSegments = plan.matched + 1
 	plan.audit.TotalSegments = len(plan.boundaries)
 	common.SetContextKey(c, constant.ContextKeySimulatedCache, plan.audit)
@@ -414,15 +425,15 @@ func simulatedCacheBreakpointTTL(ttl string) time.Duration {
 	return simulatedCacheTTL5m
 }
 
-// simulatedCacheJitterFor maps a request id to a deterministic factor in
-// [-simulatedCacheJitter, +simulatedCacheJitter] so every frame agrees.
-func simulatedCacheJitterFor(requestID string) float64 {
+// simulatedCacheUnitFor maps a request id to a deterministic value in [0, 1]
+// so every frame and retry of one request draws the same rate. A missing id
+// takes the middle of the range.
+func simulatedCacheUnitFor(requestID string) float64 {
 	if requestID == "" {
-		return 0
+		return 0.5
 	}
 	sum := sha256.Sum256([]byte(requestID))
-	unit := float64(binary.BigEndian.Uint64(sum[:8])) / float64(math.MaxUint64)
-	return (unit*2 - 1) * simulatedCacheJitter
+	return float64(binary.BigEndian.Uint64(sum[:8])) / float64(math.MaxUint64)
 }
 
 // simulatedCacheTokens truncates a non-negative token estimate into [0, limit].
@@ -458,11 +469,16 @@ func (p *SimulatedCachePlan) numbersFor(prompt int) simulatedCacheNumbers {
 	if prompt == 0 {
 		return numbers
 	}
-	capTokens := simulatedCacheTokens(float64(prompt)*float64(p.hitRate)/100*(1+p.jitter), prompt)
-	matchedTokens := min(p.prefixTokens(prompt, p.matched), capTokens)
+	// A prefix hit reads the drawn share of the prompt, never the latest turn
+	// (the last segment); a new conversation (no stored prefix) reads nothing.
+	historyTokens := p.prefixTokens(prompt, len(p.boundaries)-2)
+	var targetTokens int
+	if p.matched >= 0 {
+		targetTokens = min(simulatedCacheTokens(float64(prompt)*p.targetRate/100, prompt), historyTokens)
+	}
 
 	if !p.claudeClient {
-		cached := matchedTokens
+		cached := targetTokens
 		if cached < simulatedCacheMinTokens {
 			return numbers
 		}
@@ -477,11 +493,11 @@ func (p *SimulatedCachePlan) numbersFor(prompt int) simulatedCacheNumbers {
 	if bpTokens < simulatedCacheMinTokens {
 		return numbers
 	}
-	numbers.read = min(matchedTokens, bpTokens)
 	// The latest turn (last message) is billed as plain input; only the span
 	// between the cache read and the latest turn, up to the last breakpoint,
 	// is written to the cache.
-	creationEnd := min(bpTokens, p.prefixTokens(prompt, len(p.boundaries)-2))
+	creationEnd := min(bpTokens, historyTokens)
+	numbers.read = min(targetTokens, creationEnd)
 	numbers.creation = max(0, creationEnd-numbers.read)
 	// Re-created tokens before the last 1h breakpoint are written at 1h.
 	oneHourEnd := min(p.prefixTokens(prompt, p.last1hBreakpoint), creationEnd)

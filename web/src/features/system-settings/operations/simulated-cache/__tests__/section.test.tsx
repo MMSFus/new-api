@@ -61,7 +61,10 @@ const logItem = {
     admin_info: {
       simulated_cache: {
         version: 1,
-        hit_rate: 80,
+        hit_rate: 90,
+        hit_rate_min: 80,
+        hit_rate_max: 90,
+        target_rate: 85.37,
         client_format: 'claude',
         upstream_schema: 'claude',
         matched_segments: 5,
@@ -165,6 +168,53 @@ test('loads the last 24h by default and expands a row into the comparison', asyn
       .map((cell) => cell.textContent)
   ).toEqual(['Cache Read', '0', '8,000'])
   expect(screen.getByText('5 / 7')).toBeVisible()
+  expect(
+    screen.getByText('Configured hit rate').nextElementSibling
+  ).toHaveTextContent('80%–90%')
+  expect(
+    screen.getByText('Target hit rate').nextElementSibling
+  ).toHaveTextContent('85.37%')
+})
+
+test('the expanded row spans the table and lays comparison and meta out side by side when wide', async () => {
+  vi.spyOn(api, 'get').mockImplementation(async (url: string) => ({
+    data: {
+      success: true,
+      data:
+        url === '/api/log/simulated_cache/stat'
+          ? stat
+          : { page: 1, page_size: 20, total: 1, items: [logItem] },
+    },
+  }))
+  await renderSection()
+  await screen.findByText('alice')
+  await userEvent
+    .setup()
+    .click(screen.getByRole('button', { name: 'Show details' }))
+
+  const comparison = document.querySelector(
+    '[data-slot="simulated-cache-comparison"]'
+  ) as HTMLElement
+  const meta = within(comparison)
+    .getByText('Cost difference')
+    .closest('[data-slot="simulated-cache-meta"]') as HTMLElement
+  const expansionCell = comparison.closest('td') as HTMLElement
+  // Full width: the expansion cell spans every column with no width cap.
+  expect(expansionCell).toHaveAttribute(
+    'colspan',
+    String(
+      within(screen.getAllByRole('row')[0]).getAllByRole('columnheader').length
+    )
+  )
+  expect(comparison.closest('.max-w-xl')).toBeNull()
+  // Stacked by default, a row when the container is wide; meta has a fixed column.
+  expect(comparison).toHaveClass('flex-col', '@3xl/simulated-cache:flex-row')
+  expect(meta.parentElement).toBe(comparison)
+  expect(meta).toHaveClass('@3xl/simulated-cache:w-80')
+  expect(
+    within(comparison).getByRole('cell', { name: 'Cache Read' })
+  ).not.toBeNull()
+  expect(within(meta).queryByRole('table')).toBeNull()
 })
 
 test('a range longer than 7 days is rejected before any request', async () => {

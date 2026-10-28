@@ -33,6 +33,25 @@ func TestChannelValidateSettingsRejectsInvalidHTTPTransport(t *testing.T) {
 			setting: dto.ChannelSettings{HTTPProtocol: "http1", HTTP2ConnectionShards: 2},
 			wantErr: "http2_connection_shards",
 		},
+		{
+			name:    "simulated cache hit rate range is valid",
+			setting: dto.ChannelSettings{SimulatedCacheEnabled: true, SimulatedCacheHitRateMin: 80, SimulatedCacheHitRateMax: 90},
+		},
+		{
+			name:    "simulated cache min above max rejected",
+			setting: dto.ChannelSettings{SimulatedCacheHitRateMin: 90, SimulatedCacheHitRateMax: 80},
+			wantErr: "simulated cache hit rate range",
+		},
+		{
+			name:    "simulated cache max above 100 rejected",
+			setting: dto.ChannelSettings{SimulatedCacheHitRateMin: 10, SimulatedCacheHitRateMax: 101},
+			wantErr: "simulated cache hit rate range",
+		},
+		{
+			name:    "simulated cache negative min rejected",
+			setting: dto.ChannelSettings{SimulatedCacheHitRateMin: -1, SimulatedCacheHitRateMax: 50},
+			wantErr: "simulated cache hit rate range",
+		},
 	}
 
 	for _, tt := range tests {

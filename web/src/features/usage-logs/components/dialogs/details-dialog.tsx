@@ -62,6 +62,7 @@ import { BILLING_PRICING_VARS } from '@/features/pricing/lib/billing-expr'
 import { pluginUsageSchema } from '@/features/pricing/lib/plugin-pricing'
 import { PolicyDecisionRecord } from '@/features/system-settings/request-policies/decision-record'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
+import { toIntlLocale } from '@/i18n/languages'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import { formatLogQuota, formatTokens, formatUseTime } from '@/lib/format'
 import { translateServerText } from '@/lib/server-error-message'
@@ -69,6 +70,10 @@ import { cn } from '@/lib/utils'
 
 import { AuditDetailFields } from '../../audit/components/audit-detail-fields'
 import type { UsageLog } from '../../data/schema'
+import {
+  formatCacheHitRatio,
+  getLogCacheHitRatio,
+} from '../../lib/cache-hit-ratio'
 import {
   parseLogOther,
   getParamOverrideActionLabel,
@@ -376,7 +381,8 @@ function BillingBreakdown(props: {
 }
 
 function TokenBreakdown(props: { log: UsageLog; other: LogOtherData }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const { log, other } = props
 
   const promptTokens = log.prompt_tokens || 0
@@ -401,6 +407,13 @@ function TokenBreakdown(props: { log: UsageLog; other: LogOtherData }) {
     rows.push({
       label: t('Cache Read'),
       value: cacheRead.toLocaleString(),
+    })
+    rows.push({
+      label: t('Cache hit ratio'),
+      value: formatCacheHitRatio(
+        getLogCacheHitRatio(promptTokens, other),
+        locale
+      ),
     })
   }
 

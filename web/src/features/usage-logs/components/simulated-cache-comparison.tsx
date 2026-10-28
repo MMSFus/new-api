@@ -27,6 +27,7 @@ import { StatusBadge } from '@/components/status-badge'
 import { toIntlLocale } from '@/i18n/languages'
 import { formatLogQuota, formatNumber } from '@/lib/format'
 
+import { formatCacheHitRatio } from '../lib/cache-hit-ratio'
 import {
   formatQuotaDelta,
   getCacheHitRatio,
@@ -67,10 +68,14 @@ export function SimulatedCacheComparison(props: {
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const audit = props.audit
   const tokens = (value: number) => formatNumber(value, locale)
-  const ratio = (side: SimulatedCacheSide) => {
-    const value = getCacheHitRatio(side)
-    return value === null ? '-' : `${formatNumber(value, locale)}%`
-  }
+  const ratio = (side: SimulatedCacheSide) =>
+    formatCacheHitRatio(getCacheHitRatio(side), locale)
+  const percent = (value: number | null) =>
+    value === null ? '-' : `${formatNumber(value, locale)}%`
+  const configuredRate =
+    audit.hitRateMin !== null && audit.hitRateMax !== null
+      ? `${percent(audit.hitRateMin)}–${percent(audit.hitRateMax)}`
+      : percent(audit.hitRate)
   const quota = (value: number | null) =>
     value === null ? '-' : formatLogQuota(value)
 
@@ -145,40 +150,57 @@ export function SimulatedCacheComparison(props: {
       : `${audit.matchedSegments ?? '-'} / ${audit.totalSegments ?? '-'}`
 
   return (
-    <div className='min-w-0 space-y-2'>
-      <StaticDataTable
-        columns={columns}
-        data={rows}
-        getRowKey={(row) => row.label}
-        headerRowClassName={staticDataTableClassNames.compactHeaderRow}
-        tableClassName={staticDataTableClassNames.compactTable}
-        className='bg-background'
-      />
-      <DetailRow
-        label={t('Cost difference')}
-        value={formatQuotaDelta(audit.quotaDelta)}
-        mono
-      />
-      <DetailRow
-        label={t('Configured hit rate')}
-        value={
-          audit.hitRate === null
-            ? '-'
-            : `${formatNumber(audit.hitRate, locale)}%`
-        }
-        mono
-      />
-      <DetailRow label={t('Matched segments')} value={segments} mono />
-      <DetailRow
-        label={t('Client format')}
-        value={audit.clientFormat || '-'}
-        mono
-      />
-      <DetailRow
-        label={t('Upstream schema')}
-        value={audit.upstreamSchema || '-'}
-        mono
-      />
+    // Container query: side by side only when the host gives enough width
+    // (the audit table expansion), stacked in the narrow details dialog.
+    <div className='@container/simulated-cache min-w-0'>
+      <div
+        data-slot='simulated-cache-comparison'
+        className='flex min-w-0 flex-col gap-3 @3xl/simulated-cache:flex-row @3xl/simulated-cache:items-start'
+      >
+        <div className='min-w-0 flex-1'>
+          <StaticDataTable
+            columns={columns}
+            data={rows}
+            getRowKey={(row) => row.label}
+            headerRowClassName={staticDataTableClassNames.compactHeaderRow}
+            tableClassName={staticDataTableClassNames.compactTable}
+            className='bg-background'
+          />
+        </div>
+        <div
+          data-slot='simulated-cache-meta'
+          className='bg-background min-w-0 space-y-1.5 rounded-md border p-3 @3xl/simulated-cache:w-80 @3xl/simulated-cache:shrink-0'
+        >
+          <DetailRow
+            label={t('Cost difference')}
+            value={formatQuotaDelta(audit.quotaDelta)}
+            mono
+          />
+          <DetailRow
+            label={t('Configured hit rate')}
+            value={configuredRate}
+            mono
+          />
+          {audit.targetRate !== null && (
+            <DetailRow
+              label={t('Target hit rate')}
+              value={percent(audit.targetRate)}
+              mono
+            />
+          )}
+          <DetailRow label={t('Matched segments')} value={segments} mono />
+          <DetailRow
+            label={t('Client format')}
+            value={audit.clientFormat || '-'}
+            mono
+          />
+          <DetailRow
+            label={t('Upstream schema')}
+            value={audit.upstreamSchema || '-'}
+            mono
+          />
+        </div>
+      </div>
     </div>
   )
 }
