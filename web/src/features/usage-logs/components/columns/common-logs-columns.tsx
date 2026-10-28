@@ -47,6 +47,7 @@ import {
 import { pluginUsageSchema } from '@/features/pricing/lib/plugin-pricing'
 import { taskUsageUnitLabel } from '@/features/pricing/lib/task-price-display'
 import type { BillingUsageSchema } from '@/features/pricing/types'
+import { toIntlLocale } from '@/i18n/languages'
 import { getUserAvatarFallback, getUserAvatarStyle } from '@/lib/avatar'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import { formatLogQuota, formatTimestampToDate } from '@/lib/format'
@@ -55,6 +56,10 @@ import { useSystemConfigStore } from '@/stores/system-config-store'
 
 import { LOG_TYPE_ALL_VALUE } from '../../constants'
 import type { UsageLog } from '../../data/schema'
+import {
+  formatCacheHitRatio,
+  getLogCacheHitRatio,
+} from '../../lib/cache-hit-ratio'
 import {
   formatModelName,
   decodeBillingExprB64,
@@ -347,7 +352,8 @@ export function useCommonLogsColumns(
   isRoot: boolean,
   showBillingSource = false
 ): ColumnDef<UsageLog>[] {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const currency = useSystemConfigStore((state) => state.config.currency)
   return useMemo(() => {
     const columns: ColumnDef<UsageLog>[] = [
@@ -743,6 +749,7 @@ export function useCommonLogsColumns(
           // admin_info never reaches users; the isAdmin gate keeps the marker
           // out of the own-logs view even if a stale payload carries it.
           const hasSimulatedCache = isAdmin && getSimulatedCache(other) !== null
+          const cacheHitRatio = getLogCacheHitRatio(promptTokens, other)
 
           return (
             <div className='flex flex-col gap-0.5'>
@@ -756,6 +763,8 @@ export function useCommonLogsColumns(
                   {cacheReadTokens > 0 && (
                     <span className='text-muted-foreground/60'>
                       {t('Cache')}↓ {cacheReadTokens.toLocaleString()}
+                      {cacheHitRatio !== null &&
+                        ` (${formatCacheHitRatio(cacheHitRatio, locale)})`}
                     </span>
                   )}
                   {cacheWriteTokens > 0 && (
@@ -900,5 +909,5 @@ export function useCommonLogsColumns(
     return columns
     // Log formatters read currency settings from the store.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [t, isAdmin, isRoot, showBillingSource, currency])
+  }, [t, locale, isAdmin, isRoot, showBillingSource, currency])
 }

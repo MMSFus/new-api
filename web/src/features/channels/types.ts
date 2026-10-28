@@ -85,7 +85,10 @@ export interface ChannelSettings {
   force_format?: boolean
   thinking_to_content?: boolean
   simulated_cache_enabled?: boolean
+  /** Legacy single rate; still read, removed on save. */
   simulated_cache_hit_rate?: number
+  simulated_cache_hit_rate_min?: number
+  simulated_cache_hit_rate_max?: number
   proxy?: string
   pass_through_body_enabled?: boolean
   responses_websocket_enabled?: boolean

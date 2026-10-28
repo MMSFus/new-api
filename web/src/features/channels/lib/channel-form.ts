@@ -82,7 +82,10 @@ function isOptionalProxyURL(value: string | undefined): boolean {
 export const HTTP_PROTOCOL_AUTO = 'auto'
 export const HTTP_PROTOCOL_HTTP1 = 'http1'
 export const MAX_HTTP2_CONNECTION_SHARDS = 8
-export const DEFAULT_SIMULATED_CACHE_HIT_RATE = 80
+export const DEFAULT_SIMULATED_CACHE_HIT_RATE_MIN = 80
+export const DEFAULT_SIMULATED_CACHE_HIT_RATE_MAX = 90
+/** Spread around a legacy single hit rate, matching the backend fallback. */
+const LEGACY_SIMULATED_CACHE_HIT_RATE_SPREAD = 3
 
 export function normalizeHttpProtocol(
   value: string | undefined | null
@@ -265,7 +268,8 @@ export const channelFormSchema = z
     force_format: z.boolean().optional(),
     thinking_to_content: z.boolean().optional(),
     simulated_cache_enabled: z.boolean().optional(),
-    simulated_cache_hit_rate: z.number().optional(),
+    simulated_cache_hit_rate_min: z.number().optional(),
+    simulated_cache_hit_rate_max: z.number().optional(),
     proxy: z
       .string()
       .optional()
@@ -425,19 +429,31 @@ export const channelFormSchema = z
       )
     }
 
-    const hitRate = data.simulated_cache_hit_rate
-    if (
-      data.simulated_cache_enabled === true &&
-      (hitRate == null ||
-        !Number.isInteger(hitRate) ||
-        hitRate < 0 ||
-        hitRate > 100)
-    ) {
-      addRequiredIssue(
-        ctx,
-        'simulated_cache_hit_rate',
-        ERROR_MESSAGES.INVALID_SIMULATED_CACHE_HIT_RATE
-      )
+    if (data.simulated_cache_enabled === true) {
+      const isPercent = (value: number | undefined): value is number =>
+        value != null && Number.isInteger(value) && value >= 0 && value <= 100
+      const minRate = data.simulated_cache_hit_rate_min
+      const maxRate = data.simulated_cache_hit_rate_max
+      if (!isPercent(minRate)) {
+        addRequiredIssue(
+          ctx,
+          'simulated_cache_hit_rate_min',
+          ERROR_MESSAGES.INVALID_SIMULATED_CACHE_HIT_RATE
+        )
+      }
+      if (!isPercent(maxRate)) {
+        addRequiredIssue(
+          ctx,
+          'simulated_cache_hit_rate_max',
+          ERROR_MESSAGES.INVALID_SIMULATED_CACHE_HIT_RATE
+        )
+      } else if (isPercent(minRate) && minRate > maxRate) {
+        addRequiredIssue(
+          ctx,
+          'simulated_cache_hit_rate_max',
+          ERROR_MESSAGES.INVALID_SIMULATED_CACHE_HIT_RATE_RANGE
+        )
+      }
     }
   })
 
@@ -479,7 +495,8 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   force_format: false,
   thinking_to_content: false,
   simulated_cache_enabled: false,
-  simulated_cache_hit_rate: DEFAULT_SIMULATED_CACHE_HIT_RATE,
+  simulated_cache_hit_rate_min: DEFAULT_SIMULATED_CACHE_HIT_RATE_MIN,
+  simulated_cache_hit_rate_max: DEFAULT_SIMULATED_CACHE_HIT_RATE_MAX,
   proxy: '',
   http_protocol: HTTP_PROTOCOL_AUTO,
   http2_connection_shards: 1,
@@ -528,7 +545,8 @@ export function transformChannelToFormDefaults(
     force_format: false,
     thinking_to_content: false,
     simulated_cache_enabled: false,
-    simulated_cache_hit_rate: DEFAULT_SIMULATED_CACHE_HIT_RATE,
+    simulated_cache_hit_rate_min: DEFAULT_SIMULATED_CACHE_HIT_RATE_MIN,
+    simulated_cache_hit_rate_max: DEFAULT_SIMULATED_CACHE_HIT_RATE_MAX,
     proxy: '',
     http_protocol: HTTP_PROTOCOL_AUTO as 'auto' | 'http1',
     http2_connection_shards: 1,
@@ -547,12 +565,37 @@ export function transformChannelToFormDefaults(
         parsed.http2_connection_shards
       )
       const simulatedCacheEnabled = parsed.simulated_cache_enabled === true
-      // The backend omits a zero hit rate, so an enabled channel without one is at 0%.
-      let simulatedCacheHitRate = DEFAULT_SIMULATED_CACHE_HIT_RATE
-      if (typeof parsed.simulated_cache_hit_rate === 'number') {
-        simulatedCacheHitRate = parsed.simulated_cache_hit_rate
+      // The backend omits zero rates, so an enabled channel without a range
+      // is at 0%. A legacy single rate H maps to [H-3, H+3] like the backend.
+      let simulatedCacheHitRateMin = DEFAULT_SIMULATED_CACHE_HIT_RATE_MIN
+      let simulatedCacheHitRateMax = DEFAULT_SIMULATED_CACHE_HIT_RATE_MAX
+      const savedMin =
+        typeof parsed.simulated_cache_hit_rate_min === 'number'
+          ? parsed.simulated_cache_hit_rate_min
+          : 0
+      const savedMax =
+        typeof parsed.simulated_cache_hit_rate_max === 'number'
+          ? parsed.simulated_cache_hit_rate_max
+          : 0
+      const legacyRate =
+        typeof parsed.simulated_cache_hit_rate === 'number'
+          ? parsed.simulated_cache_hit_rate
+          : 0
+      if (savedMin > 0 || savedMax > 0) {
+        simulatedCacheHitRateMin = savedMin
+        simulatedCacheHitRateMax = savedMax
+      } else if (legacyRate > 0) {
+        simulatedCacheHitRateMin = Math.max(
+          0,
+          legacyRate - LEGACY_SIMULATED_CACHE_HIT_RATE_SPREAD
+        )
+        simulatedCacheHitRateMax = Math.min(
+          100,
+          legacyRate + LEGACY_SIMULATED_CACHE_HIT_RATE_SPREAD
+        )
       } else if (simulatedCacheEnabled) {
-        simulatedCacheHitRate = 0
+        simulatedCacheHitRateMin = 0
+        simulatedCacheHitRateMax = 0
       }
       extraSettings = {
         task_plugin_key: parsed.task_plugin_key || '',
@@ -560,7 +603,8 @@ export function transformChannelToFormDefaults(
         force_format: parsed.force_format || false,
         thinking_to_content: parsed.thinking_to_content || false,
         simulated_cache_enabled: simulatedCacheEnabled,
-        simulated_cache_hit_rate: simulatedCacheHitRate,
+        simulated_cache_hit_rate_min: simulatedCacheHitRateMin,
+        simulated_cache_hit_rate_max: simulatedCacheHitRateMax,
         proxy: parsed.proxy || '',
         http_protocol: protocol,
         http2_connection_shards: protocol === HTTP_PROTOCOL_HTTP1 ? 1 : shards,
@@ -729,7 +773,10 @@ export function buildSettingJSON(formData: ChannelFormValues): string {
   }
   if (formData.simulated_cache_enabled === true) {
     settingObj.simulated_cache_enabled = true
-    settingObj.simulated_cache_hit_rate = formData.simulated_cache_hit_rate ?? 0
+    settingObj.simulated_cache_hit_rate_min =
+      formData.simulated_cache_hit_rate_min ?? 0
+    settingObj.simulated_cache_hit_rate_max =
+      formData.simulated_cache_hit_rate_max ?? 0
   }
 
   return JSON.stringify(settingObj)

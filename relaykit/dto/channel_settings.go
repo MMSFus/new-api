@@ -41,6 +41,29 @@ type ChannelSettings struct {
 	// SimulatedCacheHitRate caps the simulated cached share of prompt tokens,
 	// in percent (0-100).
 	SimulatedCacheHitRate int `json:"simulated_cache_hit_rate,omitempty"`
+	// SimulatedCacheHitRateMin / Max bound the cached share of prompt tokens
+	// drawn for a request whose prefix hits, in percent (0-100). When both are
+	// zero the legacy SimulatedCacheHitRate H means [H-3, H+3].
+	SimulatedCacheHitRateMin int `json:"simulated_cache_hit_rate_min,omitempty"`
+	SimulatedCacheHitRateMax int `json:"simulated_cache_hit_rate_max,omitempty"`
+}
+
+// SimulatedCacheHitRange returns the effective [min, max] hit-rate range in
+// percent, mapping the legacy single rate when no range is configured.
+func (s *ChannelSettings) SimulatedCacheHitRange() (int, int) {
+	if s == nil {
+		return 0, 0
+	}
+	if s.SimulatedCacheHitRateMin == 0 && s.SimulatedCacheHitRateMax == 0 {
+		if s.SimulatedCacheHitRate <= 0 {
+			return 0, 0
+		}
+		rate := min(s.SimulatedCacheHitRate, 100)
+		return max(0, rate-3), min(100, rate+3)
+	}
+	low := max(0, min(s.SimulatedCacheHitRateMin, 100))
+	high := max(0, min(s.SimulatedCacheHitRateMax, 100))
+	return min(low, high), high
 }
 
 // BindsTaskPlugin reports whether the channel is bound to the task plugin,

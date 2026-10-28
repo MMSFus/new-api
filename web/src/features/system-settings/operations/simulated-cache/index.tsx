@@ -213,9 +213,7 @@ export function SimulatedCacheSection() {
                   colSpan={row.getVisibleCells().length}
                   className='bg-muted/30 whitespace-normal'
                 >
-                  <div className='max-w-xl'>
-                    <SimulatedCacheComparison audit={row.original.audit} />
-                  </div>
+                  <SimulatedCacheComparison audit={row.original.audit} />
                 </TableCell>
               </TableRow>
             )}

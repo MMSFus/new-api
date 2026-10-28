@@ -132,8 +132,13 @@ export interface SimulatedCacheUsage {
 /** `other.admin_info.simulated_cache`, versioned by the backend. */
 export interface SimulatedCacheInfo {
   version?: number
-  /** Channel setting, percent 0-100. */
+  /** Channel setting, percent 0-100; equals hit_rate_max on newer rows. */
   hit_rate?: number
+  /** Configured range, percent 0-100. */
+  hit_rate_min?: number
+  hit_rate_max?: number
+  /** Rate drawn for this request, percent; absent on a miss. */
+  target_rate?: number
   /** openai | openai_responses | claude | gemini */
   client_format?: string
   /** openai_chat | openai_responses | claude | gemini */
@@ -227,6 +232,10 @@ export interface LogOtherData {
   cache_creation_tokens?: number
   cache_creation_tokens_5m?: number
   cache_creation_tokens_1h?: number
+  /** 'anthropic' when prompt_tokens excludes cache read and write. */
+  usage_semantic?: string
+  /** Explicit normalized total input tokens. */
+  input_tokens_total?: number
   claude?: boolean
   model_ratio?: number
   completion_ratio?: number

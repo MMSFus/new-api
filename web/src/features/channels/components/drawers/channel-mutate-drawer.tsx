@@ -299,7 +299,8 @@ const SENSITIVE_FORM_FIELDS = [
   'force_format',
   'thinking_to_content',
   'simulated_cache_enabled',
-  'simulated_cache_hit_rate',
+  'simulated_cache_hit_rate_min',
+  'simulated_cache_hit_rate_max',
   'proxy',
   'http_protocol',
   'http2_connection_shards',
@@ -1953,30 +1954,50 @@ export function ChannelMutateDrawer({
         )}
       />
       {formValues.simulated_cache_enabled && (
-        <FormField
-          control={form.control}
-          name='simulated_cache_hit_rate'
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>{t('Simulated cache hit rate (%)')}</FormLabel>
-              <FormControl>
-                <Input
-                  type='number'
-                  inputMode='numeric'
-                  placeholder='80'
-                  {...field}
-                  onChange={(e) => field.onChange(Number(e.target.value))}
-                />
-              </FormControl>
-              <FormDescription>
-                {t(
-                  'Upper bound on the share of prompt tokens reported as cache hits (0-100)'
+        <div className='space-y-2 px-4 pb-3'>
+          <div className='grid gap-3 sm:grid-cols-2'>
+            {(
+              [
+                [
+                  'simulated_cache_hit_rate_min',
+                  t('Minimum hit rate (%)'),
+                  '80',
+                ],
+                [
+                  'simulated_cache_hit_rate_max',
+                  t('Maximum hit rate (%)'),
+                  '90',
+                ],
+              ] as const
+            ).map(([name, label, placeholder]) => (
+              <FormField
+                key={name}
+                control={form.control}
+                name={name}
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{label}</FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        inputMode='numeric'
+                        placeholder={placeholder}
+                        {...field}
+                        onChange={(e) => field.onChange(Number(e.target.value))}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
                 )}
-              </FormDescription>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
+              />
+            ))}
+          </div>
+          <p className='text-muted-foreground text-xs'>
+            {t(
+              'On a prefix hit, each request reports a cache share drawn from this range (0-100); new conversations and the latest turn are never cached'
+            )}
+          </p>
+        </div>
       )}
     </>
   )

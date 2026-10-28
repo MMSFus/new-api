@@ -362,6 +362,8 @@ export const ERROR_MESSAGES = {
     'HTTP/2 connection shards must be 1 when HTTP/1.1 is selected',
   INVALID_SIMULATED_CACHE_HIT_RATE:
     'Simulated cache hit rate must be an integer between 0 and 100',
+  INVALID_SIMULATED_CACHE_HIT_RATE_RANGE:
+    'Maximum hit rate must not be lower than the minimum hit rate',
   CREATE_FAILED: 'Failed to create channel',
   UPDATE_FAILED: 'Failed to update channel',
   DELETE_FAILED: 'Failed to delete channel',
