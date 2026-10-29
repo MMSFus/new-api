@@ -43,6 +43,7 @@ import { useAuthStore } from '@/stores/auth-store'
 
 import type { TaskPluginOption } from '../../api'
 import {
+  CHANNEL_TYPE_KIMI,
   CHANNEL_TYPE_OLLAMA,
   CHANNEL_TYPE_SGLANG,
   CHANNEL_TYPE_VLLM,
@@ -1928,6 +1929,26 @@ test('an invalid edit switches categories and replaces configured styling with t
   expect(
     within(block).queryByRole('img', { name: 'Configured' })
   ).not.toBeInTheDocument()
+})
+
+test('a saved Kimi channel exposes upstream discovery and allows selecting returned models', async () => {
+  editingChannel = {
+    ...editingChannel,
+    type: CHANNEL_TYPE_KIMI,
+    base_url: 'https://api.kimi.com/coding/v1',
+  }
+  const user = userEvent.setup()
+  render(<ConfigurationHarness currentRow={editingChannel} />)
+  await screen.findByDisplayValue('Existing channel')
+  await user.click(screen.getByRole('button', { name: 'Fetch from Upstream' }))
+  await user.click(
+    await screen.findByRole('checkbox', { name: 'upstream-model' })
+  )
+  expect(api.get).toHaveBeenCalledWith(
+    '/api/channel/fetch_models/42',
+    expect.anything()
+  )
+  expect(screen.getByRole('button', { name: 'upstream-model' })).toBeVisible()
 })
 
 test('ordinary edits discover models with saved settings and keep removed draft models available for reselection', async () => {
