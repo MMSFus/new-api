@@ -52,6 +52,20 @@ func TestChannelValidateSettingsRejectsInvalidHTTPTransport(t *testing.T) {
 			setting: dto.ChannelSettings{SimulatedCacheHitRateMin: -1, SimulatedCacheHitRateMax: 50},
 			wantErr: "simulated cache hit rate range",
 		},
+		{
+			name:    "zero upstream cost ratio is a free channel",
+			setting: dto.ChannelSettings{UpstreamCostRatio: common.GetPointer(0.0)},
+		},
+		{
+			name:    "negative upstream cost ratio rejected",
+			setting: dto.ChannelSettings{UpstreamCostRatio: common.GetPointer(-0.1)},
+			wantErr: "upstream_cost_ratio",
+		},
+		{
+			name:    "upstream cost ratio above the bound rejected",
+			setting: dto.ChannelSettings{UpstreamCostRatio: common.GetPointer(100.5)},
+			wantErr: "upstream_cost_ratio",
+		},
 	}
 
 	for _, tt := range tests {

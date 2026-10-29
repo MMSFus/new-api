@@ -270,6 +270,8 @@ export const channelFormSchema = z
     simulated_cache_enabled: z.boolean().optional(),
     simulated_cache_hit_rate_min: z.number().optional(),
     simulated_cache_hit_rate_max: z.number().optional(),
+    // Text so an empty input means "not set", distinct from a free channel (0).
+    upstream_cost_ratio: z.string().optional(),
     proxy: z
       .string()
       .optional()
@@ -429,6 +431,18 @@ export const channelFormSchema = z
       )
     }
 
+    const upstreamCostRatio = data.upstream_cost_ratio?.trim() ?? ''
+    if (upstreamCostRatio !== '') {
+      const ratio = Number(upstreamCostRatio)
+      if (!Number.isFinite(ratio) || ratio < 0 || ratio > 100) {
+        addRequiredIssue(
+          ctx,
+          'upstream_cost_ratio',
+          ERROR_MESSAGES.INVALID_UPSTREAM_COST_RATIO
+        )
+      }
+    }
+
     if (data.simulated_cache_enabled === true) {
       const isPercent = (value: number | undefined): value is number =>
         value != null && Number.isInteger(value) && value >= 0 && value <= 100
@@ -497,6 +511,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   simulated_cache_enabled: false,
   simulated_cache_hit_rate_min: DEFAULT_SIMULATED_CACHE_HIT_RATE_MIN,
   simulated_cache_hit_rate_max: DEFAULT_SIMULATED_CACHE_HIT_RATE_MAX,
+  upstream_cost_ratio: '',
   proxy: '',
   http_protocol: HTTP_PROTOCOL_AUTO,
   http2_connection_shards: 1,
@@ -547,6 +562,7 @@ export function transformChannelToFormDefaults(
     simulated_cache_enabled: false,
     simulated_cache_hit_rate_min: DEFAULT_SIMULATED_CACHE_HIT_RATE_MIN,
     simulated_cache_hit_rate_max: DEFAULT_SIMULATED_CACHE_HIT_RATE_MAX,
+    upstream_cost_ratio: '',
     proxy: '',
     http_protocol: HTTP_PROTOCOL_AUTO as 'auto' | 'http1',
     http2_connection_shards: 1,
@@ -605,6 +621,10 @@ export function transformChannelToFormDefaults(
         simulated_cache_enabled: simulatedCacheEnabled,
         simulated_cache_hit_rate_min: simulatedCacheHitRateMin,
         simulated_cache_hit_rate_max: simulatedCacheHitRateMax,
+        upstream_cost_ratio:
+          typeof parsed.upstream_cost_ratio === 'number'
+            ? String(parsed.upstream_cost_ratio)
+            : '',
         proxy: parsed.proxy || '',
         http_protocol: protocol,
         http2_connection_shards: protocol === HTTP_PROTOCOL_HTTP1 ? 1 : shards,
@@ -777,6 +797,10 @@ export function buildSettingJSON(formData: ChannelFormValues): string {
       formData.simulated_cache_hit_rate_min ?? 0
     settingObj.simulated_cache_hit_rate_max =
       formData.simulated_cache_hit_rate_max ?? 0
+  }
+  const upstreamCostRatio = formData.upstream_cost_ratio?.trim() ?? ''
+  if (upstreamCostRatio !== '') {
+    settingObj.upstream_cost_ratio = Number(upstreamCostRatio)
   }
 
   return JSON.stringify(settingObj)

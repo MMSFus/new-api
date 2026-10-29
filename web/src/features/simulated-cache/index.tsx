@@ -25,6 +25,7 @@ import {
   DataTableRow,
   useDataTable,
 } from '@/components/data-table'
+import { SectionPageLayout } from '@/components/layout'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { TableCell, TableRow } from '@/components/ui/table'
@@ -33,7 +34,6 @@ import { parseLogOther } from '@/features/usage-logs/lib/format'
 import { getSimulatedCache } from '@/features/usage-logs/lib/simulated-cache'
 import { requireServerSuccess } from '@/lib/server-error-message'
 
-import { SettingsSection } from '../../components/settings-section'
 import {
   getSimulatedCacheLogs,
   getSimulatedCacheStat,
@@ -59,7 +59,7 @@ function lastDayFilters(): SimulatedCacheFilters {
  * Admin audit of requests whose upstream prompt cache usage was replaced by a
  * simulated one (channel setting `simulated_cache_enabled`).
  */
-export function SimulatedCacheSection() {
+export function SimulatedCache() {
   const { t } = useTranslation()
   const [filters, setFilters] = useState<SimulatedCacheFilters>(lastDayFilters)
   const [page, setPage] = useState({ p: 1, page_size: 20 })
@@ -140,7 +140,10 @@ export function SimulatedCacheSection() {
   }
 
   return (
-    <SettingsSection title={t('Simulated cache')}>
+    <SectionPageLayout>
+      <SectionPageLayout.Title>{t('Simulated cache')}</SectionPageLayout.Title>
+      <SectionPageLayout.Content>
+      <div className='space-y-4'>
       <p className='text-muted-foreground text-sm'>
         {t(
           'Requests on channels with a simulated prompt cache. Original is what upstream reported; Simulated is what the client saw and billing charged.'
@@ -220,6 +223,8 @@ export function SimulatedCacheSection() {
           </Fragment>
         )}
       />
-    </SettingsSection>
+      </div>
+      </SectionPageLayout.Content>
+    </SectionPageLayout>
   )
 }

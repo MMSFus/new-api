@@ -3071,3 +3071,55 @@ test('AWS interface selection is disabled without sensitive channel write permis
     await screen.findByRole('combobox', { name: 'AWS API' })
   ).toBeDisabled()
 })
+
+const UPSTREAM_COST_RATIO = { name: 'Upstream cost ratio' }
+
+test.each([
+  ['0', 0],
+  ['', undefined],
+])(
+  'an upstream cost ratio of %j saves as %j and an empty one removes the setting',
+  async (input, expected) => {
+    editingChannel = {
+      ...editingChannel,
+      setting: '{"upstream_cost_ratio":0.3}',
+    }
+    const put = vi
+      .spyOn(api, 'put')
+      .mockResolvedValue({ data: { success: true } })
+    const user = userEvent.setup()
+    render(<ConfigurationHarness currentRow={editingChannel} />)
+    await screen.findByDisplayValue('Existing channel')
+    await user.click(screen.getByRole('tab', { name: /Routing & Mapping/ }))
+    const ratio = screen.getByRole('spinbutton', UPSTREAM_COST_RATIO)
+    expect(ratio).toHaveValue(0.3)
+    await user.clear(ratio)
+    if (input) await user.type(ratio, input)
+    await user.click(screen.getByRole('button', { name: 'Update Channel' }))
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(1))
+    const saved = JSON.parse(
+      (put.mock.calls[0]?.[1] as { setting: string }).setting
+    )
+    if (expected === undefined) {
+      expect(saved).not.toHaveProperty('upstream_cost_ratio')
+    } else {
+      expect(saved.upstream_cost_ratio).toBe(expected)
+    }
+  }
+)
+
+test('an upstream cost ratio above 100 blocks saving with a field error', async () => {
+  const put = vi.spyOn(api, 'put')
+  const user = userEvent.setup()
+  render(<ConfigurationHarness currentRow={editingChannel} />)
+  await screen.findByDisplayValue('Existing channel')
+  await user.click(screen.getByRole('tab', { name: /Routing & Mapping/ }))
+  await user.type(screen.getByRole('spinbutton', UPSTREAM_COST_RATIO), '150')
+  await user.click(screen.getByRole('button', { name: 'Update Channel' }))
+  expect(
+    await screen.findByText(
+      'Upstream cost ratio must be a number between 0 and 100'
+    )
+  ).toBeVisible()
+  expect(put).not.toHaveBeenCalled()
+})

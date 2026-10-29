@@ -46,7 +46,14 @@ type ChannelSettings struct {
 	// zero the legacy SimulatedCacheHitRate H means [H-3, H+3].
 	SimulatedCacheHitRateMin int `json:"simulated_cache_hit_rate_min,omitempty"`
 	SimulatedCacheHitRateMax int `json:"simulated_cache_hit_rate_max,omitempty"`
+	// UpstreamCostRatio is what the upstream charges relative to the official
+	// price (0.3 = 30%). Consume logs snapshot it to compute the channel cost;
+	// nil means the cost is unknown, while 0 is a free channel.
+	UpstreamCostRatio *float64 `json:"upstream_cost_ratio,omitempty"`
 }
+
+// MaxUpstreamCostRatio bounds UpstreamCostRatio.
+const MaxUpstreamCostRatio = 100
 
 // SimulatedCacheHitRange returns the effective [min, max] hit-rate range in
 // percent, mapping the legacy single rate when no range is configured.

@@ -335,6 +335,9 @@ type RecordConsumeLogParams struct {
 	IsStream         bool              `json:"is_stream"`
 	Group            string            `json:"group"`
 	Other            *LogOther         `json:"other"`
+	// GroupRatio is the ratio the charge was multiplied by; it turns Quota
+	// back into the official price for the channel cost snapshot.
+	GroupRatio float64 `json:"group_ratio,omitempty"`
 }
 
 func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams) {
@@ -348,6 +351,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	createdAt := common.GetTimestamp()
 	other := params.Other
 	content := other.setContent(params.Content)
+	attachChannelCost(other, params.ChannelId, params.Quota, params.GroupRatio)
 	otherStr := other.JSONString()
 	// 判断是否需要记录 IP
 	needRecordIp := false
@@ -413,6 +417,8 @@ type RecordTaskBillingLogParams struct {
 	Group     string
 	Other     *LogOther
 	NodeName  string // 任务发起节点；为空时回退当前节点
+	// GroupRatio 见 RecordConsumeLogParams.GroupRatio
+	GroupRatio float64
 }
 
 func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
@@ -428,6 +434,7 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 	}
 	createdAt := common.GetTimestamp()
 	other := params.Other
+	attachChannelCost(other, params.ChannelId, params.Quota, params.GroupRatio)
 	log := &Log{
 		UserId:    params.UserId,
 		Username:  username,
@@ -468,7 +475,9 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 // LogFilter is the usage-log search shared by the log list and the log export.
 // Username and Channel are administrator filters.
 type LogFilter struct {
-	Type              int
+	Type int
+	// Types keeps logs of any listed type; it applies together with Type.
+	Types             []int
 	StartTimestamp    int64
 	EndTimestamp      int64
 	ModelName         string
@@ -491,6 +500,9 @@ func (f LogFilter) apply(tx *gorm.DB) (*gorm.DB, error) {
 	var err error
 	if f.Type != LogTypeUnknown {
 		tx = tx.Where("logs.type = ?", f.Type)
+	}
+	if len(f.Types) > 0 {
+		tx = tx.Where("logs.type IN ?", f.Types)
 	}
 	if tx, err = applyExplicitLogTextFilter(tx, "logs.model_name", f.ModelName); err != nil {
 		return nil, err

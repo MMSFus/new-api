@@ -260,6 +260,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		IsStream:         relayInfo.IsStream,
 		Group:            relayInfo.UsingGroup,
 		Other:            other,
+		GroupRatio:       groupRatio,
 	})
 }
 
@@ -399,6 +400,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		IsStream:         relayInfo.IsStream,
 		Group:            relayInfo.UsingGroup,
 		Other:            other,
+		GroupRatio:       groupRatio,
 	})
 	relayInfo.PerformanceOutputTokens = int64(usage.CompletionTokens)
 }

@@ -949,4 +949,6 @@ func attachSimulatedCacheAudit(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 
 	record.QuotaDelta = record.Simulated.Quota - record.Original.Quota
 	other.SetAdmin("simulated_cache", record)
+	// The upstream bills the real usage, not the simulated one.
+	other.SetCostBasisQuota(record.Original.Quota)
 }

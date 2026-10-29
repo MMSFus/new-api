@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
@@ -65,6 +66,11 @@ func GetAllLogs(c *gin.Context) {
 		model.FormatAdminLogs(logs)
 	} else {
 		model.FormatRootLogs(logs)
+	}
+	if !authz.Can(c.GetInt("id"), c.GetInt("role"), authz.SimulatedCacheRead) {
+		for _, log := range logs {
+			log.HideSimulatedCacheAudit()
+		}
 	}
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(logs)
@@ -140,7 +146,11 @@ func exportLogs(c *gin.Context, all bool) {
 	c.Status(http.StatusOK)
 
 	count := 0
+	hideSimulatedCache := all && !authz.Can(c.GetInt("id"), c.GetInt("role"), authz.SimulatedCacheRead)
 	writeLog := func(log *model.Log) error {
+		if hideSimulatedCache {
+			log.HideSimulatedCacheAudit()
+		}
 		line, err := common.Marshal(log)
 		if err != nil {
 			return err
@@ -267,12 +277,10 @@ func GetLogsSelfStat(c *gin.Context) {
 // the rows first.
 const simulatedCacheLogMaxRange = 7 * 24 * 60 * 60
 
-// simulatedCacheLogFilter reads the audit search. The range defaults to the
-// last 24 hours and may not exceed 7 days.
-func simulatedCacheLogFilter(c *gin.Context) (model.LogFilter, error) {
-	filter := logFilterFromQuery(c, true)
-	filter.Type = model.LogTypeConsume
-	filter.SimulatedCacheOnly = true
+// boundLogFilterRange caps a search whose rows are read one by one. The
+// range ends no later than now, defaults to the last 24 hours, and may not
+// exceed maxRange seconds.
+func boundLogFilterRange(filter *model.LogFilter, maxRange int64) error {
 	end := common.GetTimestamp()
 	if filter.EndTimestamp != 0 {
 		end = min(end, filter.EndTimestamp)
@@ -280,11 +288,21 @@ func simulatedCacheLogFilter(c *gin.Context) (model.LogFilter, error) {
 	if filter.StartTimestamp == 0 {
 		filter.StartTimestamp = end - 24*60*60
 	}
-	if end-filter.StartTimestamp > simulatedCacheLogMaxRange {
-		return filter, common.NewMessage("The time range cannot exceed {{days}} days", map[string]any{"days": simulatedCacheLogMaxRange / (24 * 60 * 60)})
+	if end-filter.StartTimestamp > maxRange {
+		return common.NewMessage("The time range cannot exceed {{days}} days", map[string]any{"days": maxRange / (24 * 60 * 60)})
 	}
 	filter.EndTimestamp = end
-	return filter, nil
+	return nil
+}
+
+// simulatedCacheLogFilter reads the audit search. The range defaults to the
+// last 24 hours and may not exceed 7 days.
+func simulatedCacheLogFilter(c *gin.Context) (model.LogFilter, error) {
+	filter := logFilterFromQuery(c, true)
+	filter.Type = model.LogTypeConsume
+	filter.SimulatedCacheOnly = true
+	err := boundLogFilterRange(&filter, simulatedCacheLogMaxRange)
+	return filter, err
 }
 
 // GetSimulatedCacheLogs lists consume logs whose usage the simulated prompt
@@ -324,4 +342,43 @@ func GetSimulatedCacheLogStat(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, stat)
+}
+
+// channelCostMaxRange bounds the cost report, which reads every consume and
+// refund log of the range.
+const channelCostMaxRange = 31 * 24 * 60 * 60
+
+// GetChannelCostReport sums revenue, upstream cost and profit of the consume
+// and refund logs in a search, by hour, channel, model, group and user.
+func GetChannelCostReport(c *gin.Context) {
+	filter := logFilterFromQuery(c, true)
+	if err := boundLogFilterRange(&filter, channelCostMaxRange); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	report, err := model.SumChannelCost(filter)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, report)
+}
+
+// GetChannelCostLogs pages the consume and refund logs of the same search
+// with each log's cost snapshot.
+func GetChannelCostLogs(c *gin.Context) {
+	filter := logFilterFromQuery(c, true)
+	if err := boundLogFilterRange(&filter, channelCostMaxRange); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	pageInfo := common.GetPageQuery(c)
+	items, total, err := model.GetChannelCostLogs(filter, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	pageInfo.SetTotal(int(total))
+	pageInfo.SetItems(items)
+	common.ApiSuccess(c, pageInfo)
 }

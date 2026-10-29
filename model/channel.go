@@ -1008,6 +1008,9 @@ func (channel *Channel) ValidateSettings() error {
 	if low, high := channelParams.SimulatedCacheHitRateMin, channelParams.SimulatedCacheHitRateMax; low < 0 || high > 100 || low > high {
 		return fmt.Errorf("invalid simulated cache hit rate range: %d-%d", low, high)
 	}
+	if ratio := channelParams.UpstreamCostRatio; ratio != nil && !(*ratio >= 0 && *ratio <= dto.MaxUpstreamCostRatio) {
+		return fmt.Errorf("invalid upstream_cost_ratio: %v", *ratio)
+	}
 	channelOtherSettings := &dto.ChannelOtherSettings{}
 	if channel.OtherSettings != "" {
 		err := common.UnmarshalJsonStr(channel.OtherSettings, channelOtherSettings)

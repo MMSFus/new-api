@@ -364,6 +364,8 @@ export const ERROR_MESSAGES = {
     'Simulated cache hit rate must be an integer between 0 and 100',
   INVALID_SIMULATED_CACHE_HIT_RATE_RANGE:
     'Maximum hit rate must not be lower than the minimum hit rate',
+  INVALID_UPSTREAM_COST_RATIO:
+    'Upstream cost ratio must be a number between 0 and 100',
   CREATE_FAILED: 'Failed to create channel',
   UPDATE_FAILED: 'Failed to update channel',
   DELETE_FAILED: 'Failed to delete channel',
@@ -484,6 +486,8 @@ export const FIELD_DESCRIPTIONS = {
     'For this channel, map the model name in client requests to the model name sent upstream.',
   PRIORITY: 'Higher priority channels are selected first',
   WEIGHT: 'Used for load balancing. Higher weight = more requests',
+  UPSTREAM_COST_RATIO:
+    'What upstream charges relative to the official price, e.g. 0.3 for 30%. Leave empty if unknown; requests are then left out of the cost report.',
   TEST_MODEL: 'Model to use when testing channel connectivity',
   AUTO_BAN: 'Automatically disable channel on repeated failures',
   STATUS_CODE_MAPPING: 'Map response status codes (JSON format)',

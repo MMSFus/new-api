@@ -30,7 +30,7 @@ import {
   useSystemConfigStore,
 } from '@/stores/system-config-store'
 
-import { SimulatedCacheSection } from '..'
+import { SimulatedCache } from '..'
 
 const NOW = 1_800_000_000
 
@@ -120,7 +120,7 @@ async function renderSection() {
   render(
     <I18nextProvider i18n={i18n}>
       <QueryClientProvider client={client}>
-        <SimulatedCacheSection />
+        <SimulatedCache />
       </QueryClientProvider>
     </I18nextProvider>
   )
