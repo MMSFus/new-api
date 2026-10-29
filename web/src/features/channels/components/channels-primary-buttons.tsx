@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQueryClient } from '@tanstack/react-query'
+import { getRouteApi } from '@tanstack/react-router'
 import {
   Plus,
   MoreHorizontal,
@@ -62,7 +63,6 @@ import {
   handleTestAllChannels,
   handleUpdateAllBalances,
 } from '../lib'
-import { getRouteApi } from '@tanstack/react-router'
 import type { ChannelSortBy } from '../types'
 import { ChannelSortControl } from './channel-priority-controls'
 import { useChannels } from './channels-provider'
@@ -97,7 +97,6 @@ export function ChannelsPrimaryButtons() {
     localStorage.setItem('enable-tag-mode', String(checked))
     setEnableTagMode(checked)
   }
-
 
   const handleBatchModeToggle = (checked: boolean) => {
     setBatchMode(checked)

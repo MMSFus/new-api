@@ -99,6 +99,12 @@ func ResponseGeminiChat2OpenAI(id string, created int64, response *dto.GeminiCha
 			var content strings.Builder
 			var inlineGrow int
 			for _, part := range candidate.Content.Parts {
+				if len(part.ThoughtSignature) > 0 {
+					var signature string
+					if kitutil.Unmarshal(part.ThoughtSignature, &signature) == nil && signature != "" {
+						choice.Message.ReasoningSignature = &signature
+					}
+				}
 				if part.InlineData != nil {
 					inlineGrow += len(part.InlineData.MimeType) + len(part.InlineData.Data) + 32
 				}
@@ -137,7 +143,8 @@ func ResponseGeminiChat2OpenAI(id string, created int64, response *dto.GeminiCha
 						toolCalls = append(toolCalls, *call)
 					}
 				} else if part.Thought {
-					choice.Message.ReasoningContent = &part.Text
+					reasoning := choice.Message.GetReasoningContent() + part.Text
+					choice.Message.ReasoningContent = &reasoning
 				} else {
 					if part.ExecutableCode != nil {
 						writeSep()
@@ -229,6 +236,12 @@ func StreamResponseGeminiChat2OpenAI(geminiResponse *dto.GeminiChatResponse) (*d
 			}
 		}
 		for _, part := range candidate.Content.Parts {
+			if len(part.ThoughtSignature) > 0 {
+				var signature string
+				if kitutil.Unmarshal(part.ThoughtSignature, &signature) == nil && signature != "" {
+					choice.Delta.ReasoningSignature = &signature
+				}
+			}
 			if part.InlineData != nil {
 				if strings.HasPrefix(part.InlineData.MimeType, "image") {
 					writeSep()

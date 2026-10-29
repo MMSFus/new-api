@@ -441,6 +441,7 @@ func (info *RelayInfo) ToString() string {
 
 // 定义支持流式选项的通道类型
 var streamSupportedChannels = map[int]bool{
+	constant.ChannelTypeAntigravity:    true,
 	constant.ChannelTypeOpenAI:         true,
 	constant.ChannelTypeAnthropic:      true,
 	constant.ChannelTypeAws:            true,
@@ -981,7 +982,7 @@ func (info *RelayInfo) ConvOptions() *convmeta.Options {
 		Gemini: convmeta.GeminiOptions{
 			ThinkingAdapterEnabled:                geminiSettings.ThinkingAdapterEnabled,
 			ThinkingAdapterBudgetTokensPercentage: geminiSettings.ThinkingAdapterBudgetTokensPercentage,
-			FunctionCallThoughtSignatureEnabled:   geminiSettings.FunctionCallThoughtSignatureEnabled,
+			FunctionCallThoughtSignatureEnabled:   geminiSettings.FunctionCallThoughtSignatureEnabled && channelType != constant.ChannelTypeAntigravity,
 			SupportsImagine:                       model_setting.IsGeminiModelSupportImagine,
 			SafetySetting:                         model_setting.GetGeminiSafetySetting,
 			// Gemini API v1 has no parametersJsonSchema; v1beta and Vertex AI

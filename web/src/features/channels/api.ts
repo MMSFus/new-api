@@ -720,3 +720,35 @@ export async function getPrefillGroups(
   const res = await api.get('/api/prefill_group', { params: { type } })
   return res.data
 }
+
+export type AntigravityCredentialResult = { key: string; count: number }
+export async function startAntigravityOAuth(
+  proxy: string
+): Promise<{ authorization_url: string; expires_at: number }> {
+  const response = await api.post(
+    '/api/channel/antigravity/oauth/start',
+    { proxy },
+    channelActionConfig()
+  )
+  return requireServerSuccess(response.data).data
+}
+export async function exchangeAntigravityOAuth(
+  callbackUrl: string
+): Promise<AntigravityCredentialResult> {
+  const response = await api.post(
+    '/api/channel/antigravity/oauth/exchange',
+    { callback_url: callbackUrl },
+    channelActionConfig()
+  )
+  return requireServerSuccess(response.data).data
+}
+export async function importAntigravityCredentials(
+  json: string
+): Promise<AntigravityCredentialResult> {
+  const response = await api.post(
+    '/api/channel/antigravity/import',
+    { json },
+    channelActionConfig()
+  )
+  return requireServerSuccess(response.data).data
+}

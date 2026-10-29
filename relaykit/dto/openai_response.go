@@ -87,11 +87,12 @@ type ChatCompletionsStreamResponseChoice struct {
 }
 
 type ChatCompletionsStreamResponseChoiceDelta struct {
-	Content          *string            `json:"content,omitempty"`
-	ReasoningContent *string            `json:"reasoning_content,omitempty"`
-	Reasoning        *string            `json:"reasoning,omitempty"`
-	Role             string             `json:"role,omitempty"`
-	ToolCalls        []ToolCallResponse `json:"tool_calls,omitempty"`
+	ReasoningSignature *string            `json:"reasoning_signature,omitempty"`
+	Content            *string            `json:"content,omitempty"`
+	ReasoningContent   *string            `json:"reasoning_content,omitempty"`
+	Reasoning          *string            `json:"reasoning,omitempty"`
+	Role               string             `json:"role,omitempty"`
+	ToolCalls          []ToolCallResponse `json:"tool_calls,omitempty"`
 	// Annotations is an OpenAI-compatible streaming extension supported by
 	// providers such as OpenRouter. Relaykit uses it to preserve streaming URL
 	// citations, including Claude round-trip metadata.

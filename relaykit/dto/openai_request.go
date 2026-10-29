@@ -492,14 +492,19 @@ func (r *GeneralOpenAIRequest) ParseInput() []string {
 }
 
 type Message struct {
-	Role             string          `json:"role"`
-	Content          any             `json:"content"`
-	Name             *string         `json:"name,omitempty"`
-	Prefix           *bool           `json:"prefix,omitempty"`
-	ReasoningContent *string         `json:"reasoning_content,omitempty"`
-	Reasoning        *string         `json:"reasoning,omitempty"`
-	ToolCalls        json.RawMessage `json:"tool_calls,omitempty"`
-	ToolCallId       string          `json:"tool_call_id,omitempty"`
+	// SignedThinking preserves Claude blocks across an internal conversion chain;
+	// it is never emitted to an OpenAI endpoint.
+	SignedThinking []ClaudeMediaMessage `json:"-"`
+	// ReasoningSignature carries an opaque provider signature across compatible clients.
+	ReasoningSignature *string         `json:"reasoning_signature,omitempty"`
+	Role               string          `json:"role"`
+	Content            any             `json:"content"`
+	Name               *string         `json:"name,omitempty"`
+	Prefix             *bool           `json:"prefix,omitempty"`
+	ReasoningContent   *string         `json:"reasoning_content,omitempty"`
+	Reasoning          *string         `json:"reasoning,omitempty"`
+	ToolCalls          json.RawMessage `json:"tool_calls,omitempty"`
+	ToolCallId         string          `json:"tool_call_id,omitempty"`
 	// Tools carries Kimi K3 dynamic tool loading declarations on a system message.
 	// Same shape as the top-level tools array; passthrough-only for OpenAI-compatible upstreams.
 	Tools json.RawMessage `json:"tools,omitempty"`

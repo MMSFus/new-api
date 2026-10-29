@@ -1208,3 +1208,24 @@ func CountChannelsGroupByType() (map[int64]int64, error) {
 	}
 	return counts, nil
 }
+
+// ReplaceChannelCredential preserves concurrent dashboard edits and other keys.
+// The full prior key is compared atomically; an edited channel wins the race.
+func ReplaceChannelCredential(channelID int, prior, next string) (bool, error) {
+	changed := false
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var channel Channel
+		if err := lockForUpdate(tx).Select("id", "key").First(&channel, channelID).Error; err != nil {
+			return err
+		}
+		// Compare in Go: MySQL's default text collation is case-insensitive,
+		// whereas credential rotation requires a byte-exact comparison.
+		if channel.Key != prior {
+			return nil
+		}
+		result := tx.Model(&Channel{}).Where("id = ?", channelID).Update("key", next)
+		changed = result.RowsAffected == 1
+		return result.Error
+	})
+	return changed, err
+}

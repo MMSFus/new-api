@@ -140,6 +140,7 @@ import {
   ADD_MODE_OPTIONS,
   CLAUDE_FIELD_PASSTHROUGH_TYPES,
   CHANNEL_STATUS_LABELS,
+  CHANNEL_TYPE_ANTIGRAVITY,
   CHANNEL_TYPE_NEW_API,
   CHANNEL_TYPE_OLLAMA,
   CHANNEL_TYPE_OPTIONS,
@@ -206,6 +207,7 @@ import {
   nextTaskPluginBaseUrl,
 } from '../../lib/task-plugin-base-url'
 import type { Channel } from '../../types'
+import { AntigravityCredentials } from '../antigravity-credentials'
 import { ChannelPluginExtensions } from '../channel-plugin-extensions'
 import { ChannelQuickOptions } from '../channel-quick-options'
 import { ChannelTypeLogo } from '../channel-type-badge'
@@ -4434,6 +4436,28 @@ export function ChannelMutateDrawer({
             )}
 
             <ChannelAuthSection>
+              {currentType === CHANNEL_TYPE_ANTIGRAVITY && (
+                <AntigravityCredentials
+                  disabled={sensitiveLocked || isSubmitting}
+                  proxy={form.watch('proxy') || ''}
+                  value={form.watch('key') || ''}
+                  onImport={(result) => {
+                    form.setValue('key', result.key, {
+                      shouldDirty: true,
+                      shouldValidate: true,
+                    })
+                    if (
+                      result.count > 1 &&
+                      !isEditing &&
+                      form.getValues('multi_key_mode') === 'single'
+                    ) {
+                      form.setValue('multi_key_mode', 'batch', {
+                        shouldDirty: true,
+                      })
+                    }
+                  }}
+                />
+              )}
               {!isEditing && (
                 <FormField
                   control={form.control}

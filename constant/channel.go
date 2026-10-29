@@ -61,6 +61,7 @@ const (
 	ChannelTypeTaskPlugin     = 61
 	ChannelTypeVLLM           = 62
 	ChannelTypeSGLang         = 63
+	ChannelTypeAntigravity    = 64
 	ChannelTypeDummy          // this one is only for count, do not add any channel after this
 
 )
@@ -132,6 +133,7 @@ var ChannelBaseURLs = []string{
 	"",                                          //61
 	"",                                          //62
 	"",                                          //63
+	"https://daily-cloudcode-pa.googleapis.com", //64
 }
 
 func GetChannelBaseURL(channelType int) string {
@@ -142,6 +144,7 @@ func GetChannelBaseURL(channelType int) string {
 }
 
 var ChannelTypeNames = map[int]string{
+	ChannelTypeAntigravity:    "Antigravity",
 	ChannelTypeUnknown:        "Unknown",
 	ChannelTypeOpenAI:         "OpenAI",
 	ChannelTypeMidjourney:     "Midjourney",

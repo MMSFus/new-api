@@ -49,6 +49,10 @@ func registerChannelRoutes(apiRouter *gin.RouterGroup) {
 		controller.GetChannelKey,
 	)
 
+	handlePermissionRoute(channelRoute, http.MethodPost, "/antigravity/oauth/start", authz.ChannelSensitiveWrite, middleware.DisableCache(), middleware.CriticalRateLimit(), middleware.SessionCookieOriginGuard(), controller.StartAntigravityOAuth)
+	handlePermissionRoute(channelRoute, http.MethodPost, "/antigravity/oauth/exchange", authz.ChannelSensitiveWrite, middleware.DisableCache(), middleware.CriticalRateLimit(), middleware.SessionCookieOriginGuard(), controller.ExchangeAntigravityOAuth)
+	handlePermissionRoute(channelRoute, http.MethodPost, "/antigravity/import", authz.ChannelSensitiveWrite, middleware.DisableCache(), middleware.CriticalRateLimit(), middleware.SessionCookieOriginGuard(), controller.ImportAntigravityCredentials)
+
 	for _, route := range channelPermissionRoutes {
 		handlePermissionRoute(channelRoute, route.method, route.path, route.permission, route.handler)
 	}
