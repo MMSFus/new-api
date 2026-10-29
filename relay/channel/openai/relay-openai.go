@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -145,6 +146,11 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 
 	info.StreamStatus.RequireTerminal()
 
+	if info.ChannelType == constant.ChannelTypeKimi {
+		if info.StreamStatus.FailedOrTruncated() {
+			return usage, types.NewError(errors.New("Kimi stream ended without a valid completion"), types.ErrorCodeBadResponseBody)
+		}
+	}
 	// 处理最后的响应
 	shouldSendLastResp := true
 	if err := handleLastResponse(lastStreamData, &responseId, &createAt, &systemFingerprint, &model, &usage,

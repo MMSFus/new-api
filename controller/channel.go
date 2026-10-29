@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
+	"github.com/QuantumNous/new-api/pkg/kimi"
 	relaychannel "github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/ollama"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -643,6 +644,23 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 		channel.Key = key
 	}
 
+	if channel.Type == constant.ChannelTypeKimi && (isAdd || strings.TrimSpace(channel.Key) != "") {
+		key, _, err := service.NormalizeKimiKeys(channel.Key)
+		if err != nil {
+			return err
+		}
+		channel.Key = key
+		for line := range strings.SplitSeq(key, "\n") {
+			credential, err := kimi.Parse(line)
+			if err != nil {
+				return err
+			}
+			if err := service.ValidateKimiBase(channel.GetBaseURL(), credential); err != nil {
+				return err
+			}
+		}
+	}
+
 	// Codex OAuth key validation (optional, only when JSON object is provided)
 	if channel.Type == constant.ChannelTypeCodex {
 		trimmedKey := strings.TrimSpace(channel.Key)
@@ -745,6 +763,25 @@ func AddChannel(c *gin.Context) {
 		return
 	}
 
+	kimiReference := ""
+	if addChannelRequest.Channel != nil && addChannelRequest.Channel.Type == constant.ChannelTypeKimi {
+		kimiReference = addChannelRequest.Channel.Key
+		key, err := resolveKimiOAuthReference(c, addChannelRequest.Channel.Key, false)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		key, count, err := service.NormalizeKimiKeys(key)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		if count > 1 && addChannelRequest.Mode != "batch" && addChannelRequest.Mode != "multi_to_single" {
+			common.ApiErrorT(c, "Select batch or multi-key mode to import multiple accounts")
+			return
+		}
+		addChannelRequest.Channel.Key = key
+	}
 	if addChannelRequest.Channel != nil && addChannelRequest.Channel.Type == constant.ChannelTypeAntigravity {
 		key, count, err := service.NormalizeAntigravityKeys(addChannelRequest.Channel.Key)
 		if err != nil {
@@ -839,7 +876,11 @@ func AddChannel(c *gin.Context) {
 		}
 		channels = append(channels, *localChannel)
 	}
-	err = model.BatchInsertChannels(channels)
+	if strings.HasPrefix(strings.TrimSpace(kimiReference), kimiOAuthPrefix) {
+		err = saveKimiOAuthReference(c, kimiReference, func(tx *gorm.DB) error { return model.BatchInsertChannelsWithTx(tx, channels) })
+	} else {
+		err = model.BatchInsertChannels(channels)
+	}
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -1119,6 +1160,16 @@ func UpdateChannel(c *gin.Context) {
 	baseURLFromPluginDefault := channel.Type == constant.ChannelTypeTaskPlugin &&
 		(channel.BaseURL == nil || strings.TrimSpace(*channel.BaseURL) == "")
 	// 使用统一的校验函数
+	kimiReference := ""
+	if channel.Type == constant.ChannelTypeKimi && channel.Key != "" {
+		kimiReference = channel.Key
+		key, err := resolveKimiOAuthReference(c, channel.Key, false)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		channel.Key = key
+	}
 	if err := validateChannel(&channel.Channel, false); err != nil {
 		common.ApiError(c, err)
 		return
@@ -1129,7 +1180,7 @@ func UpdateChannel(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if channel.Type == constant.ChannelTypeAntigravity && channel.Key != "" && !originChannel.ChannelInfo.IsMultiKey && strings.Contains(channel.Key, "\n") {
+	if (channel.Type == constant.ChannelTypeAntigravity || channel.Type == constant.ChannelTypeKimi) && channel.Key != "" && !originChannel.ChannelInfo.IsMultiKey && strings.Contains(channel.Key, "\n") {
 		common.ApiErrorT(c, "Select batch or multi-key mode to import multiple accounts")
 		return
 	}
@@ -1245,7 +1296,11 @@ func UpdateChannel(c *gin.Context) {
 			// 覆盖模式：直接使用新密钥（默认行为，不需要特殊处理）
 		}
 	}
-	err = channel.Update()
+	if strings.HasPrefix(strings.TrimSpace(kimiReference), kimiOAuthPrefix) {
+		err = saveKimiOAuthReference(c, kimiReference, func(tx *gorm.DB) error { return channel.UpdateWithTx(tx) })
+	} else {
+		err = channel.Update()
+	}
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -1458,6 +1513,14 @@ func FetchModels(c *gin.Context) {
 		return
 	}
 
+	if req.Type == constant.ChannelTypeKimi {
+		key, err := resolveKimiOAuthReference(c, req.Key, false)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		req.Key = key
+	}
 	var channel *model.Channel
 	if req.Type == constant.ChannelTypeAdvancedCustom || req.ChannelID > 0 {
 		var err error
@@ -1476,7 +1539,7 @@ func FetchModels(c *gin.Context) {
 		}
 
 		key := strings.TrimSpace(req.Key)
-		if req.Type != constant.ChannelTypeCodex && req.Type != constant.ChannelTypeAntigravity {
+		if req.Type != constant.ChannelTypeCodex && req.Type != constant.ChannelTypeAntigravity && req.Type != constant.ChannelTypeKimi {
 			key = strings.Split(key, "\n")[0]
 		}
 		channel = &model.Channel{

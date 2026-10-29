@@ -9,11 +9,13 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,6 +24,8 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/oauth"
 	"github.com/QuantumNous/new-api/pkg/antigravity"
+	"github.com/QuantumNous/new-api/pkg/kimi"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/fxamacker/cbor/v2"
@@ -1394,4 +1398,249 @@ func TestAntigravityCredentialPersistencePreservesOtherKeysAndAdminEdits(t *test
 	changed, err = model.ReplaceChannelCredential(ch.Id, strings.ToUpper(edited), "must-not-overwrite-case")
 	require.NoError(t, err)
 	assert.False(t, changed)
+}
+
+func kimiTestCredential(t *testing.T, secret string) kimi.Credential {
+	t.Helper()
+	credentials, err := kimi.Import(`{"type":"kimi","access_token":"test-access-`+secret+`","refresh_token":"test-refresh-`+secret+`"}`, "")
+	require.NoError(t, err)
+	return credentials[0]
+}
+
+func TestKimiReadySaveIsAtomicRetryableAndSessionBound(t *testing.T) {
+	_, identity := setupSecurityEnrollmentTest(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.Channel{}, &model.Ability{}))
+	credential := kimiTestCredential(t, "ready")
+	state := kimiOAuthState{Identity: identity, Credential: credential, Deadline: time.Now().Add(time.Minute).Unix()}
+	handle, err := createKimiOAuthState(state, "ready")
+	require.NoError(t, err)
+	key := kimiOAuthPrefix + handle
+	var saveErr error
+	save := func(who service.AuthIdentity, fail bool) {
+		securityEnrollmentRequest("POST", "/save", `{}`, "", who, func(c *gin.Context) {
+			saveErr = saveKimiOAuthReference(c, key, func(tx *gorm.DB) error {
+				require.NoError(t, model.BatchInsertChannelsWithTx(tx, []model.Channel{{Type: constant.ChannelTypeKimi, Name: "ready", Key: credential.Key(), Models: "kimi-test", Group: "default", Status: 1}}))
+				if fail {
+					return errors.New("database write failure")
+				}
+				return nil
+			})
+		})
+	}
+	wrong := identity
+	wrong.SessionVersion++
+	save(wrong, false)
+	require.Error(t, saveErr)
+	wrong = identity
+	wrong.SessionID = "other-session"
+	save(wrong, false)
+	require.Error(t, saveErr)
+	save(identity, true)
+	require.Error(t, saveErr)
+	var count int64
+	require.NoError(t, model.DB.Model(&model.Channel{}).Count(&count).Error)
+	require.Zero(t, count)
+	require.NoError(t, model.DB.Model(&model.Ability{}).Count(&count).Error)
+	require.Zero(t, count)
+	save(identity, false)
+	require.NoError(t, saveErr)
+	save(identity, false)
+	require.Error(t, saveErr)
+	require.NoError(t, model.DB.Model(&model.Channel{}).Count(&count).Error)
+	require.EqualValues(t, 1, count)
+	// The public add endpoint also resolves and consumes the opaque result.
+	handle, err = createKimiOAuthState(state, "ready")
+	require.NoError(t, err)
+	body, err := common.Marshal(AddChannelRequest{Mode: "single", Channel: &model.Channel{Type: constant.ChannelTypeKimi, Name: "public-add", Key: " " + kimiOAuthPrefix + handle + " ", Models: "kimi-test", Group: "default", Status: 1}})
+	require.NoError(t, err)
+	response := securityEnrollmentRequest("POST", "/api/channel/", string(body), "", identity, AddChannel)
+	require.Contains(t, response.Body.String(), `"success":true`)
+	response = securityEnrollmentRequest("POST", "/api/channel/", string(body), "", identity, AddChannel)
+	require.Contains(t, response.Body.String(), `"success":false`)
+}
+
+func TestKimiOAuthPollingIntervalRotationCancellationAndExpiry(t *testing.T) {
+	_, identity := setupSecurityEnrollmentTest(t)
+	client, err := service.GetHttpClientWithProxySettings("", dto.ChannelSettings{})
+	require.NoError(t, err)
+	transport := client.Transport
+	t.Cleanup(func() { client.Transport = transport })
+	var grants int
+	client.Transport = emailHTTPTransport(func(req *http.Request) (*http.Response, error) {
+		require.Equal(t, "auth.kimi.com", req.URL.Host)
+		require.Equal(t, "/api/oauth/token", req.URL.Path)
+		grants++
+		body := `{"error":"slow_down"}`
+		status := 400
+		if grants > 1 {
+			body = `{"access_token":"test-new-access","refresh_token":"test-new-refresh","expires_in":3600,"token_type":"Bearer"}`
+			status = 200
+		}
+		return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
+	})
+	state := kimiOAuthState{Identity: identity, Credential: kimi.Credential{Region: kimi.Mainland, DeviceID: "test-device"}, DeviceCode: "test-device-code", Interval: 5, NextPoll: time.Now().Add(time.Minute).Unix(), Deadline: time.Now().Add(5 * time.Minute).Unix()}
+	handle, err := createKimiOAuthState(state, "poll")
+	require.NoError(t, err)
+	poll := func(handle string) *httptest.ResponseRecorder {
+		body, _ := common.Marshal(map[string]string{"handle": handle})
+		return securityEnrollmentRequest("POST", "/poll", string(body), "", identity, PollKimiOAuth)
+	}
+	require.Contains(t, poll(handle).Body.String(), `"success":false`)
+	require.Zero(t, grants)
+	match := model.AuthFlowMatch{Purpose: kimiOAuthPurpose, Provider: "kimi", Intent: "poll", UserId: identity.UserID, SessionId: identity.SessionID}
+	allowPoll := func(handle string) {
+		flow, err := model.GetAuthFlow(handle, match)
+		require.NoError(t, err)
+		var value kimiOAuthState
+		require.NoError(t, common.UnmarshalJsonStr(flow.Payload, &value))
+		value.NextPoll = time.Now().Add(-time.Second).Unix()
+		raw, _ := common.Marshal(value)
+		require.NoError(t, model.DB.Model(flow).Update("payload", string(raw)).Error)
+	}
+	allowPoll(handle)
+	response := poll(handle)
+	var result struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Handle   string `json:"handle"`
+			Interval int    `json:"interval"`
+			Key      string `json:"key"`
+			Status   string `json:"status"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
+	require.True(t, result.Success, response.Body.String())
+	require.Equal(t, 10, result.Data.Interval)
+	require.Contains(t, poll(handle).Body.String(), `"success":false`)
+	next := result.Data.Handle
+	require.NotEqual(t, handle, next)
+	require.Contains(t, poll(next).Body.String(), `"success":false`)
+	require.Equal(t, 1, grants)
+	allowPoll(next)
+	response = poll(next)
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
+	require.True(t, result.Success, response.Body.String())
+	require.Equal(t, "ready", result.Data.Status)
+	require.True(t, strings.HasPrefix(result.Data.Key, kimiOAuthPrefix))
+	require.NotContains(t, response.Body.String(), "test-new-")
+	body, _ := common.Marshal(map[string]string{"handle": result.Data.Key})
+	response = securityEnrollmentRequest("POST", "/cancel", string(body), "", identity, CancelKimiOAuth)
+	require.Contains(t, response.Body.String(), `"success":true`)
+	response = securityEnrollmentRequest("POST", "/cancel", string(body), "", identity, CancelKimiOAuth)
+	require.Contains(t, response.Body.String(), `"success":false`)
+	expired, flow, err := model.CreateAuthFlow(model.AuthFlowCreate{Purpose: kimiOAuthPurpose, Provider: "kimi", Intent: "poll", UserId: identity.UserID, SessionId: identity.SessionID, ExpiresAt: time.Now().Add(time.Minute)})
+	require.NoError(t, err)
+	require.NoError(t, model.DB.Model(flow).Update("expires_at", time.Now().Add(-time.Second)).Error)
+	require.Contains(t, poll(expired).Body.String(), `"success":false`)
+}
+
+func TestKimiRotationPreservesReferencesOrderDisabledKeysAndConflicts(t *testing.T) {
+	setupSecurityEnrollmentTest(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.Channel{}, &model.Ability{}))
+	before := kimiTestCredential(t, "rotation")
+	other := kimiTestCredential(t, "other")
+	duplicate := before
+	duplicate.Name = "another label"
+	duplicate.DeviceID = "another-device"
+	info := model.ChannelInfo{IsMultiKey: true, MultiKeySize: 2, MultiKeyStatusList: map[int]int{0: 2}}
+	channels := []model.Channel{{Type: constant.ChannelTypeKimi, Key: before.Key() + "\n" + other.Key(), ChannelInfo: info}, {Type: constant.ChannelTypeKimi, Key: other.Key() + "\n" + duplicate.Key(), ChannelInfo: info}}
+	require.NoError(t, model.DB.Create(&channels).Error)
+	after := before
+	after.AccessToken = "test-rotated-access"
+	after.RefreshToken = "test-rotated-refresh"
+	after.ExpiresAt = time.Now().Add(time.Hour).Unix()
+	require.NoError(t, model.RotateKimiCredential(before, after))
+	for i, ch := range channels {
+		loaded, err := model.GetChannelById(ch.Id, true)
+		require.NoError(t, err)
+		lines := strings.Split(loaded.Key, "\n")
+		require.Equal(t, other.Key(), lines[1-i])
+		rotated, err := kimi.Parse(lines[i])
+		require.NoError(t, err)
+		require.Equal(t, after.RefreshToken, rotated.RefreshToken)
+		require.Equal(t, info, loaded.ChannelInfo)
+		if i == 1 {
+			require.Equal(t, duplicate.DeviceID, rotated.DeviceID)
+			require.Equal(t, duplicate.Name, rotated.Name)
+		}
+	}
+	require.Error(t, model.RotateKimiCredential(before, after))
+	// Conflicting duplicate references roll the entire rotation back.
+	edited := after
+	edited.RefreshToken = "test-admin-edit"
+	require.NoError(t, model.DB.Model(&model.Channel{}).Where("id = ?", channels[1].Id).Update("key", edited.Key()).Error)
+	next := after
+	next.RefreshToken = "test-next-rotation"
+	require.Error(t, model.RotateKimiCredential(after, next))
+	loaded, err := model.GetChannelById(channels[0].Id, true)
+	require.NoError(t, err)
+	require.Equal(t, after.Key()+"\n"+other.Key(), loaded.Key)
+}
+
+func TestKimiConcurrentRenewalRotatesOnceAndRemovedCredentialStaysRemoved(t *testing.T) {
+	setupSecurityEnrollmentTest(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.Channel{}, &model.Ability{}))
+	master := common.IsMasterNode
+	common.IsMasterNode = true
+	t.Cleanup(func() { common.IsMasterNode = master })
+	before := kimiTestCredential(t, "concurrent")
+	before.ExpiresAt = time.Now().Add(-time.Minute).Unix()
+	ch := model.Channel{Type: constant.ChannelTypeKimi, Key: before.Key()}
+	require.NoError(t, model.DB.Create(&ch).Error)
+	client, err := service.GetHttpClientWithProxySettings("", dto.ChannelSettings{})
+	require.NoError(t, err)
+	transport := client.Transport
+	t.Cleanup(func() { client.Transport = transport })
+	var calls atomic.Int32
+	client.Transport = emailHTTPTransport(func(req *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"access_token":"test-refreshed-access","refresh_token":"test-refreshed-refresh","expires_in":3600,"token_type":"Bearer"}`))}, nil
+	})
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	gate := make(chan struct{})
+	for range 8 {
+		wg.Go(func() {
+			<-gate
+			c, err := service.ResolveKimiCredential(context.Background(), ch.Id, before.Key(), dto.ChannelSettings{}, "")
+			if err == nil && c.AccessToken != "test-refreshed-access" {
+				err = errors.New("unexpected access token")
+			}
+			errs <- err
+		})
+	}
+	close(gate)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	require.EqualValues(t, 1, calls.Load())
+	require.NoError(t, model.DB.Model(&ch).Update("key", kimiTestCredential(t, "removed").Key()).Error)
+	_, err = service.ResolveKimiCredential(context.Background(), ch.Id, before.Key(), dto.ChannelSettings{}, "")
+	require.Error(t, err)
+	require.EqualValues(t, 1, calls.Load())
+}
+
+func TestKimiUsageIgnoresMalformedBucketsWithoutDroppingValidOnes(t *testing.T) {
+	_, identity := setupSecurityEnrollmentTest(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.Channel{}, &model.Ability{}))
+	credentials, err := kimi.Import(`{"api_key":"test-coding-key","auth_type":"api_key","region":"global"}`, "")
+	require.NoError(t, err)
+	ch := model.Channel{Type: constant.ChannelTypeKimi, Key: credentials[0].Key()}
+	require.NoError(t, model.DB.Create(&ch).Error)
+	client, err := service.GetHttpClientWithProxySettings("", dto.ChannelSettings{})
+	require.NoError(t, err)
+	transport := client.Transport
+	t.Cleanup(func() { client.Transport = transport })
+	client.Transport = emailHTTPTransport(func(req *http.Request) (*http.Response, error) {
+		require.Equal(t, "https://api.kimi.ai/coding/v1/usages", req.URL.String())
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"usages":{"limit_5h":{"used_ratio":"bad"},"limit_7d":{"used_ratio":0},"limit_month_total":{"used_ratio":"0.25","reset_time":"2026-11-01T00:00:00Z"},"limit_month_code":{"used_ratio":"NaN"}},"access_token":"must-not-return"}`))}, nil
+	})
+	response := securityEnrollmentRequest("GET", "/usage", "", "", identity, withAccessTokenID(GetKimiChannelUsage, ch.Id))
+	require.Contains(t, response.Body.String(), `"success":true`)
+	require.Contains(t, response.Body.String(), `"used_ratio":0`)
+	require.Contains(t, response.Body.String(), `"used_ratio":0.25`)
+	require.NotContains(t, response.Body.String(), "must-not-return")
+	require.NotContains(t, response.Body.String(), "limit_5h")
 }

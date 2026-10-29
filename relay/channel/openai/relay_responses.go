@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -102,6 +103,10 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	common.SetContextKey(c, constant.ContextKeyResponseStreamStatus, info.StreamStatus)
 	info.StreamStatus.RequireTerminal()
+	if info.ChannelType == constant.ChannelTypeKimi && info.StreamStatus.FailedOrTruncated() {
+		return accumulator.Finish(), types.NewError(errors.New("Kimi stream ended without a valid completion"), types.ErrorCodeBadResponseBody)
+	}
+
 	return accumulator.Finish(), nil
 }
 

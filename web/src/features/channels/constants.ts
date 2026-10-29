@@ -38,6 +38,8 @@ export const CHANNEL_TYPE_VLLM = 62
 
 export const CHANNEL_TYPE_SGLANG = 63
 
+export const CHANNEL_TYPE_KIMI = 64
+
 export const CHANNEL_TYPE_ANTIGRAVITY = 65
 
 export const CHANNEL_TYPES = {
@@ -188,7 +190,7 @@ export const CHANNEL_PROVIDER_PRESENTATION: Partial<
   63: { descriptionKey: 'Connect to self-hosted models served by SGLang' },
   64: {
     descriptionKey:
-      'Reverse proxy Kimi web chat with account refresh_token credentials',
+      'Connect to Kimi Code with regional OAuth or Coding credentials',
   },
   65: { descriptionKey: 'Connect directly to Antigravity with Google OAuth' },
 } satisfies Record<

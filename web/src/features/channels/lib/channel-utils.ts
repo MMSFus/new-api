@@ -21,6 +21,8 @@ import { formatTimestampToDate } from '@/lib/format'
 
 import {
   CHANNEL_STATUS_CONFIG,
+  CHANNEL_TYPE_ANTIGRAVITY,
+  CHANNEL_TYPE_KIMI,
   CHANNEL_TYPES,
   MULTI_KEY_STATUS_CONFIG,
   RESPONSE_TIME_CONFIG,
@@ -56,7 +58,8 @@ export function getChannelTypeIcon(type: number): string {
     60: 'NewAPI', // New API
     62: 'Vllm', // vLLM
     63: 'SGLang', // SGLang
-    64: 'Antigravity',
+    [CHANNEL_TYPE_KIMI]: 'Kimi',
+    [CHANNEL_TYPE_ANTIGRAVITY]: 'Antigravity',
     3: 'Azure', // Azure
 
     // Anthropic

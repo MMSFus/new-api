@@ -224,6 +224,7 @@ import {
   type PassthroughKind,
 } from '../dialogs/passthrough-warning-dialog'
 import { StatusCodeRiskDialog } from '../dialogs/status-code-risk-dialog'
+import { KimiCredentials } from '../kimi-credentials'
 import {
   ModelMappingBatchDialog,
   type ModelMappingBatchResult,
@@ -4438,6 +4439,29 @@ export function ChannelMutateDrawer({
             <ChannelAuthSection>
               {currentType === CHANNEL_TYPE_ANTIGRAVITY && (
                 <AntigravityCredentials
+                  disabled={sensitiveLocked || isSubmitting}
+                  proxy={form.watch('proxy') || ''}
+                  value={form.watch('key') || ''}
+                  onImport={(result) => {
+                    form.setValue('key', result.key, {
+                      shouldDirty: true,
+                      shouldValidate: true,
+                    })
+                    if (
+                      result.count > 1 &&
+                      !isEditing &&
+                      form.getValues('multi_key_mode') === 'single'
+                    ) {
+                      form.setValue('multi_key_mode', 'batch', {
+                        shouldDirty: true,
+                      })
+                    }
+                  }}
+                />
+              )}
+              {currentType === 64 && (
+                <KimiCredentials
+                  channelId={channelId || undefined}
                   disabled={sensitiveLocked || isSubmitting}
                   proxy={form.watch('proxy') || ''}
                   value={form.watch('key') || ''}

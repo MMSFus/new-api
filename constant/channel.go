@@ -134,7 +134,7 @@ var ChannelBaseURLs = []string{
 	"",                                          //61
 	"",                                          //62
 	"",                                          //63
-	"https://www.kimi.ai",                       //64
+	"",                                          //64
 	"https://daily-cloudcode-pa.googleapis.com", //65
 }
 

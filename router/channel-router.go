@@ -53,12 +53,26 @@ func registerChannelRoutes(apiRouter *gin.RouterGroup) {
 	handlePermissionRoute(channelRoute, http.MethodPost, "/antigravity/oauth/exchange", authz.ChannelSensitiveWrite, middleware.DisableCache(), middleware.CriticalRateLimit(), middleware.SessionCookieOriginGuard(), controller.ExchangeAntigravityOAuth)
 	handlePermissionRoute(channelRoute, http.MethodPost, "/antigravity/import", authz.ChannelSensitiveWrite, middleware.DisableCache(), middleware.CriticalRateLimit(), middleware.SessionCookieOriginGuard(), controller.ImportAntigravityCredentials)
 
+	for _, route := range []struct {
+		path    string
+		handler gin.HandlerFunc
+	}{
+		{"/kimi/oauth/start", controller.StartKimiOAuth},
+		{"/kimi/oauth/cancel", controller.CancelKimiOAuth},
+		{"/kimi/import", controller.ImportKimiCredentials},
+	} {
+		handlePermissionRoute(channelRoute, http.MethodPost, route.path, authz.ChannelSensitiveWrite, middleware.DisableCache(), middleware.CriticalRateLimit(), middleware.SessionCookieOriginGuard(), route.handler)
+	}
+
+	handlePermissionRoute(channelRoute, http.MethodPost, "/kimi/oauth/poll", authz.ChannelSensitiveWrite, middleware.DisableCache(), middleware.KimiOAuthPollRateLimit(), middleware.SessionCookieOriginGuard(), controller.PollKimiOAuth)
+
 	for _, route := range channelPermissionRoutes {
 		handlePermissionRoute(channelRoute, route.method, route.path, route.permission, route.handler)
 	}
 }
 
 var channelPermissionRoutes = []permissionRoute{
+	{method: http.MethodGet, path: "/:id/kimi/usage", permission: authz.ChannelRead, handler: controller.GetKimiChannelUsage},
 	{method: http.MethodGet, path: "/priority/order", permission: authz.ChannelRead, handler: controller.GetChannelPriorityOrder},
 	{method: http.MethodPost, path: "/priority/reorder", permission: authz.ChannelWrite, handler: controller.ReorderChannelPriority},
 	{method: http.MethodGet, path: "/", permission: authz.ChannelRead, handler: controller.GetAllChannels},

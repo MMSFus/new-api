@@ -2,6 +2,7 @@ package openai
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
@@ -346,6 +348,10 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			c.JSON(streamErr.StatusCode, gin.H{"error": streamErr.ToOpenAIError(common.UpstreamAddresses(c)...)})
 		}
 		return usage, nil
+	}
+
+	if info.ChannelType == constant.ChannelTypeKimi && info.StreamStatus.FailedOrTruncated() {
+		return state.Usage(), types.NewError(errors.New("Kimi stream ended without a valid completion"), types.ErrorCodeBadResponseBody)
 	}
 
 	usage := state.Usage()
