@@ -522,6 +522,7 @@ export const FIELD_DESCRIPTIONS = {
 // ============================================================================
 
 export const MODEL_FETCHABLE_TYPES = new Set([
+  CHANNEL_TYPE_KIMI,
   CHANNEL_TYPE_ANTIGRAVITY,
   1,
   4,
