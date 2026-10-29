@@ -1459,6 +1459,166 @@ func TestKimiReadySaveIsAtomicRetryableAndSessionBound(t *testing.T) {
 	require.Contains(t, response.Body.String(), `"success":false`)
 }
 
+func TestKimiCreatePreviewPersistsRotatedCredentialEvenWhenModelFetchFails(t *testing.T) {
+	_, identity := setupSecurityEnrollmentTest(t)
+	master := common.IsMasterNode
+	common.IsMasterNode = true
+	t.Cleanup(func() { common.IsMasterNode = master })
+	client, err := service.GetHttpClientWithProxySettings("", dto.ChannelSettings{})
+	require.NoError(t, err)
+	transport := client.Transport
+	t.Cleanup(func() { client.Transport = transport })
+	credentials, err := kimi.Import(`{"type":"kimi-ai","access_token":"preview-expired-access","refresh_token":"preview-refresh","expires_at":1,"device_id":"preview-device"}`, "")
+	require.NoError(t, err)
+	credential := credentials[0]
+	credential.ExpiresAt = time.Now().Add(-time.Minute).Unix()
+	var grants, requests int
+	var draftReference string
+	requestCtx, disconnect := context.WithCancel(context.Background())
+	defer disconnect()
+	client.Transport = emailHTTPTransport(func(req *http.Request) (*http.Response, error) {
+		switch {
+		case req.URL.Host == "auth.kimi.ai" && req.URL.Path == "/api/oauth/token":
+			grants++
+			// A client disconnect must not discard an already rotating token.
+			disconnect()
+			require.NoError(t, req.Context().Err())
+			securityEnrollmentRequest(http.MethodPost, "/save-during-refresh", `{}`, "", identity, func(c *gin.Context) {
+				err := saveKimiOAuthReference(c, draftReference, func(*gorm.DB) error { t.Fatal("must not save while refresh is in flight"); return nil })
+				require.ErrorContains(t, err, "in progress")
+			})
+			require.NoError(t, req.ParseForm())
+			require.Equal(t, "preview-refresh", req.Form.Get("refresh_token"))
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"access_token":"preview-new-access","refresh_token":"preview-new-refresh","expires_in":3600,"token_type":"Bearer"}`))}, nil
+		case req.URL.Host == "api.kimi.ai" && req.URL.Path == "/coding/v1/models":
+			requests++
+			require.Equal(t, "Bearer preview-new-access", req.Header.Get("Authorization"))
+			if requests > 1 {
+				return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"data":[{"id":"kimi-preview"}]}`))}, nil
+			}
+			return &http.Response{StatusCode: http.StatusBadGateway, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+		default:
+			t.Fatalf("unexpected Kimi request: %s", req.URL.Redacted())
+			return nil, errors.New("unexpected Kimi request")
+		}
+	})
+	other := kimiTestCredential(t, "preview-other")
+	stage, err := common.Marshal(map[string]any{"json": credential.Key() + "\n" + other.Key(), "stage": true})
+	require.NoError(t, err)
+	response := securityEnrollmentRequest(http.MethodPost, "/api/channel/kimi/import", string(stage), "", identity, ImportKimiCredentials)
+	var staged struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Key string `json:"key"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &staged))
+	require.True(t, staged.Success, response.Body.String())
+	draftReference = staged.Data.Key
+	body, err := common.Marshal(fetchModelsRequest{Type: constant.ChannelTypeKimi, Key: staged.Data.Key})
+	require.NoError(t, err)
+	response = securityEnrollmentRequest(http.MethodPost, "/api/channel/fetch_models", string(body), "", identity, func(c *gin.Context) {
+		c.Request = c.Request.WithContext(requestCtx)
+		FetchModels(c)
+	})
+	var result struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+		Key     string `json:"key"`
+	}
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
+	require.False(t, result.Success)
+	require.Contains(t, result.Message, "Failed to fetch models")
+	var resolved string
+	securityEnrollmentRequest(http.MethodPost, "/resolve", `{}`, "", identity, func(c *gin.Context) {
+		resolved, err = resolveKimiOAuthReference(c, staged.Data.Key, false)
+	})
+	require.NoError(t, err)
+	parts := strings.Split(resolved, "\n")
+	require.Len(t, parts, 2)
+	require.Equal(t, other.Key(), parts[1])
+	rotated, err := kimi.Parse(parts[0])
+	require.NoError(t, err)
+	require.Equal(t, "preview-new-refresh", rotated.RefreshToken)
+	require.Equal(t, "preview-new-access", rotated.AccessToken)
+	response = securityEnrollmentRequest(http.MethodPost, "/api/channel/fetch_models", string(body), "", identity, FetchModels)
+	require.Contains(t, response.Body.String(), `"success":true`)
+	require.Contains(t, response.Body.String(), "kimi-preview")
+	require.Equal(t, 1, grants)
+	require.NoError(t, model.DB.AutoMigrate(&model.Channel{}, &model.Ability{}))
+	save, err := common.Marshal(AddChannelRequest{Mode: "multi_to_single", Channel: &model.Channel{Type: constant.ChannelTypeKimi, Name: "preview", Key: staged.Data.Key, Models: "kimi-preview", Group: "default", Status: 1}})
+	require.NoError(t, err)
+	response = securityEnrollmentRequest(http.MethodPost, "/api/channel/", string(save), "", identity, AddChannel)
+	require.Contains(t, response.Body.String(), `"success":true`)
+	var ch model.Channel
+	require.NoError(t, model.DB.First(&ch).Error)
+	require.Equal(t, resolved, ch.Key)
+	response = securityEnrollmentRequest(http.MethodPost, "/api/channel/", string(save), "", identity, AddChannel)
+	require.Contains(t, response.Body.String(), `"success":false`)
+}
+
+func TestKimiInternationalSavedModelsRetriesUnauthorizedAndReportsRejectedRefresh(t *testing.T) {
+	for _, rejected := range []bool{false, true} {
+		t.Run(fmt.Sprintf("rejected=%t", rejected), func(t *testing.T) {
+			setupSecurityEnrollmentTest(t)
+			require.NoError(t, model.DB.AutoMigrate(&model.Channel{}, &model.Ability{}))
+			master := common.IsMasterNode
+			common.IsMasterNode = true
+			t.Cleanup(func() { common.IsMasterNode = master })
+			credentials, err := kimi.Import(fmt.Sprintf(`{"type":"kimi-ai","access_token":"saved-old-access","refresh_token":"saved-refresh-%t"}`, rejected), "")
+			require.NoError(t, err)
+			ch := model.Channel{Type: constant.ChannelTypeKimi, Key: credentials[0].Key()}
+			require.NoError(t, model.DB.Create(&ch).Error)
+			client, err := service.GetHttpClientWithProxySettings("", dto.ChannelSettings{})
+			require.NoError(t, err)
+			transport := client.Transport
+			t.Cleanup(func() { client.Transport = transport })
+			var grants, models int
+			client.Transport = emailHTTPTransport(func(req *http.Request) (*http.Response, error) {
+				status, body := 200, `{"data":[{"id":"kimi-international"}]}`
+				switch req.URL.Host {
+				case "api.kimi.ai":
+					require.Equal(t, "/coding/v1/models", req.URL.Path)
+					models++
+					if models == 1 {
+						status, body = 401, `{}`
+					} else {
+						require.Equal(t, "Bearer saved-new-access", req.Header.Get("Authorization"))
+					}
+				case "auth.kimi.ai":
+					require.Equal(t, "/api/oauth/token", req.URL.Path)
+					grants++
+					body = `{"access_token":"saved-new-access","refresh_token":"saved-new-refresh","expires_in":3600}`
+					if rejected {
+						status, body = 400, `{"error":"invalid_grant"}`
+					}
+				default:
+					t.Fatalf("unexpected Kimi host: %s", req.URL.Host)
+				}
+				return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
+			})
+			_, result, err := service.ResolveKimiModels(context.Background(), ch.Id, ch.Key, dto.ChannelSettings{})
+			require.Equal(t, 1, grants)
+			stored, readErr := model.GetChannelById(ch.Id, true)
+			require.NoError(t, readErr)
+			if rejected {
+				var oauthErr *kimi.OAuthError
+				require.ErrorAs(t, err, &oauthErr)
+				require.Equal(t, "invalid_grant", oauthErr.Code)
+				require.Contains(t, err.Error(), "authorize again")
+				require.Equal(t, ch.Key, stored.Key)
+				require.Equal(t, 1, models)
+			} else {
+				require.NoError(t, err)
+				require.Len(t, result, 1)
+				require.Equal(t, "kimi-international", result[0].ID)
+				require.Contains(t, stored.Key, "saved-new-refresh")
+				require.Equal(t, 2, models)
+			}
+		})
+	}
+}
+
 func TestKimiOAuthPollingIntervalRotationCancellationAndExpiry(t *testing.T) {
 	_, identity := setupSecurityEnrollmentTest(t)
 	client, err := service.GetHttpClientWithProxySettings("", dto.ChannelSettings{})

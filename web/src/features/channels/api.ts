@@ -804,6 +804,16 @@ export async function cancelKimiOAuth(handle: string): Promise<void> {
   )
   requireServerSuccess(response.data)
 }
+// Stage imported credentials before any rotating OAuth grant is sent.
+export async function stageKimiCredentials(key: string): Promise<string> {
+  const response = await api.post(
+    '/api/channel/kimi/import',
+    { json: key, stage: true },
+    channelActionConfig()
+  )
+  return requireServerSuccess(response.data).data.key
+}
+
 export async function importKimiCredentials(
   json: string,
   region: string

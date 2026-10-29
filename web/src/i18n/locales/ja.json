@@ -7778,6 +7778,10 @@
     "Use Kimi Code OAuth or Coding credentials. Legacy web tokens require authorization again. PAYG keys belong in a Moonshot channel.": "Kimi Code OAuth または Coding 認証情報を使用してください。旧 Web トークンは再認証が必要です。従量課金キーには Moonshot チャネルを使用してください。",
     "Wait for the Kimi polling interval": "Kimi のポーリング間隔を待ってください",
     "Waiting for official authorization. Keep this form open.": "公式の認証を待っています。このフォームを開いたままにしてください。",
-    "Weekly usage": "週間使用量"
+    "Weekly usage": "週間使用量",
+    "Kimi OAuth refresh token was rejected; authorize again": "Kimi OAuth refresh token was rejected; authorize again",
+    "Kimi preview requires a session credential draft": "Kimi preview requires a session credential draft",
+    "Kimi credential changed; retry saving the channel": "Kimi credential changed; retry saving the channel",
+    "Kimi model discovery is in progress; wait before saving": "Kimi model discovery is in progress; wait before saving"
   }
 }

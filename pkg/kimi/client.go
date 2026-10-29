@@ -46,7 +46,9 @@ type OAuthError struct {
 
 func (e *OAuthError) Error() string {
 	switch e.Code {
-	case "authorization_pending", "slow_down", "access_denied", "expired_token", "invalid_grant":
+	case "invalid_grant":
+		return "Kimi OAuth refresh token was rejected; authorize again"
+	case "authorization_pending", "slow_down", "access_denied", "expired_token":
 		return "Kimi OAuth: " + e.Code
 	}
 	return "Kimi OAuth request failed"

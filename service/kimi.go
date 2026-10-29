@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"net/http"
 	"strings"
 	"time"
@@ -17,6 +18,16 @@ import (
 )
 
 var kimiRefreshGroup singleflight.Group
+
+// Bounded lock stripes coordinate saved and draft grants without retaining
+// credential IDs in a process-wide map. Hash collisions only serialize grants.
+var kimiRefreshLocks = func() [64]chan struct{} {
+	var locks [64]chan struct{}
+	for i := range locks {
+		locks[i] = make(chan struct{}, 1)
+	}
+	return locks
+}()
 var kimiModelGroup singleflight.Group
 var kimiModels = hot.NewHotCache[string, []kimi.Model](hot.LRU, 1024).WithTTL(5 * time.Minute).WithJanitor().Build()
 
@@ -71,21 +82,58 @@ func storedKimiCredential(channelID int, original kimi.Credential) (kimi.Credent
 // ResolveKimiCredential rereads shared storage inside the grant lock. No token
 // cache may override the database or resurrect a credential removed by an admin.
 func ResolveKimiCredential(ctx context.Context, channelID int, raw string, settings dto.ChannelSettings, rejected string) (kimi.Credential, error) {
+	if channelID <= 0 {
+		c, err := kimi.Parse(raw)
+		if err != nil {
+			return c, err
+		}
+		if c.AuthType == "oauth" && (c.NeedsRefresh() || rejected != "" && c.Token() == rejected) {
+			return c, errors.New("Kimi preview requires a session credential draft")
+		}
+		return c, nil
+	}
+	return resolveKimiCredential(ctx, raw, settings, rejected, "saved", func(original kimi.Credential) (kimi.Credential, error) {
+		return storedKimiCredential(channelID, original)
+	}, func(before, after kimi.Credential) error {
+		if err := model.RotateKimiCredential(before, after); err != nil {
+			return err
+		}
+		model.InitChannelCache()
+		return nil
+	})
+}
+
+// Draft resolution persists rotated tokens before model metadata is requested.
+func ResolveKimiDraftModels(ctx context.Context, raw string, settings dto.ChannelSettings, scope string, read func(kimi.Credential) (kimi.Credential, error), persist func(kimi.Credential, kimi.Credential) error) ([]kimi.Model, error) {
+	c, err := resolveKimiCredential(ctx, raw, settings, "", scope, read, persist)
+	if err != nil {
+		return nil, err
+	}
+	models, err := KimiModels(ctx, c, settings)
+	var rejected *kimi.MetadataError
+	if errors.As(err, &rejected) && rejected.Status == http.StatusUnauthorized && c.AuthType == "oauth" {
+		c, err = resolveKimiCredential(ctx, c.Key(), settings, c.AccessToken, scope, read, persist)
+		if err != nil {
+			return nil, err
+		}
+		return KimiModels(ctx, c, settings)
+	}
+	return models, err
+}
+
+func resolveKimiCredential(ctx context.Context, raw string, settings dto.ChannelSettings, rejected, scope string, read func(kimi.Credential) (kimi.Credential, error), persist func(kimi.Credential, kimi.Credential) error) (kimi.Credential, error) {
 	original, err := kimi.Parse(raw)
 	if err != nil {
 		return original, err
 	}
-	c, err := storedKimiCredential(channelID, original)
+	c, err := read(original)
 	if err != nil {
 		return c, err
 	}
 	if !c.NeedsRefresh() && (rejected == "" || c.Token() != rejected) || c.AuthType == "api_key" {
 		return c, nil
 	}
-	if channelID <= 0 {
-		return c, errors.New("Save the Kimi channel before renewing its OAuth credential")
-	}
-	result := kimiRefreshGroup.DoChan(c.Region+":"+c.ID, func() (any, error) {
+	result := kimiRefreshGroup.DoChan(scope+":"+c.Region+":"+c.ID, func() (any, error) {
 		grantCtx, cancel := context.WithTimeout(ctx, 40*time.Second)
 		defer cancel()
 		release, verifyLease, err := acquireKimiRefreshLock(grantCtx, c.Region+":"+c.ID, cancel)
@@ -93,7 +141,7 @@ func ResolveKimiCredential(ctx context.Context, channelID int, raw string, setti
 			return nil, err
 		}
 		defer release()
-		latest, err := storedKimiCredential(channelID, original)
+		latest, err := read(original)
 		if err != nil {
 			return nil, err
 		}
@@ -106,7 +154,7 @@ func ResolveKimiCredential(ctx context.Context, channelID int, raw string, setti
 		}
 		renewed, err := kimi.Token(grantCtx, client, latest, "")
 		if err != nil {
-			current, readErr := storedKimiCredential(channelID, latest)
+			current, readErr := read(latest)
 			if readErr == nil && current.RefreshToken != latest.RefreshToken && !current.NeedsRefresh() {
 				return current, nil
 			}
@@ -115,12 +163,20 @@ func ResolveKimiCredential(ctx context.Context, channelID int, raw string, setti
 		if grantCtx.Err() != nil || verifyLease() != nil {
 			return nil, errors.New("Kimi renewal lost its lease; authorize again")
 		}
-		if err := model.RotateKimiCredential(latest, renewed); err != nil {
+		if err := persist(latest, renewed); err != nil {
 			return nil, errors.New("Failed to save renewed Kimi credential; authorize again")
 		}
-		model.InitChannelCache()
 		return renewed, nil
 	})
+	if strings.HasPrefix(scope, "draft:") {
+		// Keep the draft reserved until the grant has finished persisting, even
+		// when the metadata deadline fires while upstream is returning a token.
+		r := <-result
+		if r.Err != nil {
+			return c, r.Err
+		}
+		return r.Val.(kimi.Credential), nil
+	}
 	select {
 	case <-ctx.Done():
 		return c, ctx.Err()
@@ -139,7 +195,15 @@ func acquireKimiRefreshLock(ctx context.Context, id string, cancel context.Cance
 		if !common.IsMasterNode {
 			return nil, nil, errors.New("Kimi OAuth renewal on worker nodes requires Redis")
 		}
-		return func() {}, func() error { return ctx.Err() }, nil // singleflight serializes this process
+		hash := fnv.New32a()
+		_, _ = hash.Write([]byte(id))
+		lock := kimiRefreshLocks[hash.Sum32()%uint32(len(kimiRefreshLocks))]
+		select {
+		case lock <- struct{}{}:
+			return func() { <-lock }, func() error { return ctx.Err() }, nil
+		case <-ctx.Done():
+			return nil, nil, errors.New("Timed out waiting for Kimi renewal")
+		}
 	}
 	key := "kimi:refresh:" + id
 	owner := common.GetRandomString(32)
