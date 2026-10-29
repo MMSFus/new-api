@@ -105,10 +105,15 @@ func NewChannelSortOptions(sortBy string, sortOrder string, idSort bool) Channel
 
 func (options ChannelSortOptions) Apply(query *gorm.DB) *gorm.DB {
 	if columnName, ok := channelSortColumns[options.SortBy]; ok {
+		column := clause.Column{Name: columnName}
+		if columnName == "priority" {
+			// Routing treats a missing priority as zero on every database.
+			column = clause.Column{Name: "COALESCE(priority, 0)", Raw: true}
+		}
 		return query.Order(clause.OrderByColumn{
-			Column: clause.Column{Name: columnName},
+			Column: column,
 			Desc:   options.SortOrder != "asc",
-		})
+		}).Order(clause.OrderByColumn{Column: clause.Column{Name: "id"}, Desc: true})
 	}
 	if options.IDSort {
 		return query.Order(clause.OrderByColumn{
@@ -117,9 +122,9 @@ func (options ChannelSortOptions) Apply(query *gorm.DB) *gorm.DB {
 		})
 	}
 	return query.Order(clause.OrderByColumn{
-		Column: clause.Column{Name: "priority"},
+		Column: clause.Column{Name: "COALESCE(priority, 0)", Raw: true},
 		Desc:   true,
-	})
+	}).Order(clause.OrderByColumn{Column: clause.Column{Name: "id"}, Desc: true})
 }
 
 func resolveChannelSortOptions(idSort bool, sortOptions []ChannelSortOptions) ChannelSortOptions {
@@ -1202,4 +1207,25 @@ func CountChannelsGroupByType() (map[int64]int64, error) {
 		counts[r.Type] = r.Count
 	}
 	return counts, nil
+}
+
+// ReplaceChannelCredential preserves concurrent dashboard edits and other keys.
+// The full prior key is compared atomically; an edited channel wins the race.
+func ReplaceChannelCredential(channelID int, prior, next string) (bool, error) {
+	changed := false
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var channel Channel
+		if err := lockForUpdate(tx).Select("id", "key").First(&channel, channelID).Error; err != nil {
+			return err
+		}
+		// Compare in Go: MySQL's default text collation is case-insensitive,
+		// whereas credential rotation requires a byte-exact comparison.
+		if channel.Key != prior {
+			return nil
+		}
+		result := tx.Model(&Channel{}).Where("id = ?", channelID).Update("key", next)
+		changed = result.RowsAffected == 1
+		return result.Error
+	})
+	return changed, err
 }

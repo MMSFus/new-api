@@ -252,6 +252,14 @@ jobs:
           touch web/dist/index.html
           go test ./model/ -run 'TestSimulatedCacheLogSearchAcrossDatabases|TestChannelCostBackfillAcrossDatabases' -count=1 -v
 
+      - name: Test Antigravity credentials on MySQL and PostgreSQL
+        env:
+          TEST_MYSQL_DSN: root:root@tcp(127.0.0.1:3306)/new_api_test?parseTime=true&charset=utf8mb4
+          TEST_POSTGRES_DSN: postgres://postgres:postgres@127.0.0.1:5432/new_api_test?sslmode=disable
+        run: |
+          TEST_SECURITY_DIALECT=mysql go test ./controller -run TestAntigravity -count=1 -v
+          TEST_SECURITY_DIALECT=postgres go test ./controller -run TestAntigravity -count=1 -v
+
   frontend:
     name: Frontend test (${{ matrix.shard }})
     needs: changes
@@ -275,7 +283,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: '1.4.0'
+          bun-version: '1.4.4'
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -311,7 +319,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: '1.4.0'
+          bun-version: '1.4.4'
 
       - name: Install dependencies
         run: bun install --frozen-lockfile

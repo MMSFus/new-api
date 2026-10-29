@@ -635,6 +635,14 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 		}
 	}
 
+	if channel.Type == constant.ChannelTypeAntigravity && (isAdd || strings.TrimSpace(channel.Key) != "") {
+		key, _, err := service.NormalizeAntigravityKeys(channel.Key)
+		if err != nil {
+			return err
+		}
+		channel.Key = key
+	}
+
 	// Codex OAuth key validation (optional, only when JSON object is provided)
 	if channel.Type == constant.ChannelTypeCodex {
 		trimmedKey := strings.TrimSpace(channel.Key)
@@ -737,6 +745,18 @@ func AddChannel(c *gin.Context) {
 		return
 	}
 
+	if addChannelRequest.Channel != nil && addChannelRequest.Channel.Type == constant.ChannelTypeAntigravity {
+		key, count, err := service.NormalizeAntigravityKeys(addChannelRequest.Channel.Key)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		if count > 1 && addChannelRequest.Mode != "batch" && addChannelRequest.Mode != "multi_to_single" {
+			common.ApiErrorT(c, "Select batch or multi-key mode to import multiple accounts")
+			return
+		}
+		addChannelRequest.Channel.Key = key
+	}
 	// Binding a plugin needs the same permission on a New API channel as the
 	// type-61 channel dedicated to it.
 	if addChannelRequest.Channel != nil &&
@@ -1109,6 +1129,10 @@ func UpdateChannel(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	if channel.Type == constant.ChannelTypeAntigravity && channel.Key != "" && !originChannel.ChannelInfo.IsMultiKey && strings.Contains(channel.Key, "\n") {
+		common.ApiErrorT(c, "Select batch or multi-key mode to import multiple accounts")
+		return
+	}
 	originProxy := originChannel.GetSetting().Proxy
 	proxyChanged := false
 	_, settingProvided := requestData["setting"]
@@ -1452,7 +1476,7 @@ func FetchModels(c *gin.Context) {
 		}
 
 		key := strings.TrimSpace(req.Key)
-		if req.Type != constant.ChannelTypeCodex {
+		if req.Type != constant.ChannelTypeCodex && req.Type != constant.ChannelTypeAntigravity {
 			key = strings.Split(key, "\n")[0]
 		}
 		channel = &model.Channel{

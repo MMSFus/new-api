@@ -11,14 +11,17 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/oauth"
+	"github.com/QuantumNous/new-api/pkg/antigravity"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/fxamacker/cbor/v2"
@@ -1298,4 +1301,97 @@ func TestOAuthRegistrationEmailPolicyGate(t *testing.T) {
 			assert.Equal(t, "Registration attempt via Casdoor", audits[0].Content)
 		})
 	}
+}
+
+func TestAntigravityOAuthStateBoundToSessionAndConsumedOnce(t *testing.T) {
+	t.Setenv("ANTIGRAVITY_OAUTH_CLIENT_ID", "test-client")
+	t.Setenv("ANTIGRAVITY_OAUTH_CLIENT_SECRET", "test-client-secret")
+	user, identity := setupSecurityEnrollmentTest(t)
+	start := securityEnrollmentRequest("POST", "/api/channel/antigravity/oauth/start", `{"proxy":""}`, "", identity, StartAntigravityOAuth)
+	var result struct {
+		Success bool `json:"success"`
+		Data    struct {
+			URL string `json:"authorization_url"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(start.Body.Bytes(), &result))
+	require.True(t, result.Success, start.Body.String())
+	authorization, err := url.Parse(result.Data.URL)
+	require.NoError(t, err)
+	state := authorization.Query().Get("state")
+	require.NotEmpty(t, state)
+	assert.Equal(t, "S256", authorization.Query().Get("code_challenge_method"))
+	assert.Equal(t, antigravity.RedirectURI, authorization.Query().Get("redirect_uri"))
+	match := model.AuthFlowMatch{Purpose: antigravityOAuthPurpose, Provider: "antigravity", Intent: "channel", UserId: user.Id, SessionId: identity.SessionID}
+	flow, err := model.GetAuthFlow(state, match)
+	require.NoError(t, err)
+	var payload antigravityOAuthPayload
+	require.NoError(t, common.UnmarshalJsonStr(flow.Payload, &payload))
+	sum := sha256.Sum256([]byte(payload.Verifier))
+	assert.Equal(t, base64.RawURLEncoding.EncodeToString(sum[:]), authorization.Query().Get("code_challenge"))
+	body, _ := common.Marshal(map[string]string{"callback_url": antigravity.RedirectURI + "?code=test-code&state=" + state})
+	wrong := identity
+	wrong.SessionID = "other-session"
+	denied := securityEnrollmentRequest("POST", "/exchange", string(body), "", wrong, ExchangeAntigravityOAuth)
+	assert.Contains(t, denied.Body.String(), `"success":false`)
+	_, err = model.GetAuthFlow(state, match)
+	require.NoError(t, err)
+	changed := identity
+	changed.SessionVersion++
+	denied = securityEnrollmentRequest("POST", "/exchange", string(body), "", changed, ExchangeAntigravityOAuth)
+	assert.Contains(t, denied.Body.String(), `"success":false`)
+	_, err = model.GetAuthFlow(state, match)
+	require.NoError(t, err)
+	// Consume using the same identity validation that exchange runs, without
+	// sending a fabricated authorization code to Google's live token endpoint.
+	_, err = model.ConsumeAuthFlowWithAction(state, match, func(tx *gorm.DB, _ *model.AuthFlow) error {
+		return model.ValidateAuthSessionWithTx(tx, payload.Identity)
+	})
+	require.NoError(t, err)
+	replay := securityEnrollmentRequest("POST", "/exchange", string(body), "", identity, ExchangeAntigravityOAuth)
+	assert.Contains(t, replay.Body.String(), `"success":false`)
+	expired, created, err := model.CreateAuthFlow(model.AuthFlowCreate{Purpose: antigravityOAuthPurpose, Provider: "antigravity", Intent: "channel", UserId: user.Id, SessionId: identity.SessionID, Payload: flow.Payload, ExpiresAt: time.Now().Add(time.Minute)})
+	require.NoError(t, err)
+	require.NoError(t, model.DB.Model(&model.AuthFlow{}).Where("id = ?", created.Id).Update("expires_at", time.Now().Add(-time.Minute)).Error)
+	body, _ = common.Marshal(map[string]string{"callback_url": antigravity.RedirectURI + "?code=test-code&state=" + expired})
+	denied = securityEnrollmentRequest("POST", "/exchange", string(body), "", identity, ExchangeAntigravityOAuth)
+	assert.Contains(t, denied.Body.String(), `"success":false`)
+	denied = securityEnrollmentRequest("POST", "/start", `{}`, "", service.AuthIdentity{}, StartAntigravityOAuth)
+	assert.Equal(t, http.StatusUnauthorized, denied.Code)
+}
+
+func TestAntigravityCredentialPersistencePreservesOtherKeysAndAdminEdits(t *testing.T) {
+	setupSecurityEnrollmentTest(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.Channel{}, &model.Ability{}))
+	original := antigravity.Credential{Type: "antigravity", AccessToken: "test-old", RefreshToken: "test-refresh", ProjectID: "test-project"}
+	other := antigravity.Credential{Type: "antigravity", RefreshToken: "test-other"}
+	ch := model.Channel{Type: constant.ChannelTypeAntigravity, Name: "test", Key: original.Key() + "\n" + other.Key()}
+	require.NoError(t, model.DB.Create(&ch).Error)
+	refreshed := original
+	refreshed.AccessToken = "test-new"
+	refreshed.RefreshToken = "test-rotated-refresh"
+	refreshed.ExpiresAt = time.Now().Add(time.Hour).Unix()
+	require.NoError(t, service.PersistAntigravityCredential(ch.Id, original.Key(), refreshed))
+	loaded, err := model.GetChannelById(ch.Id, true)
+	require.NoError(t, err)
+	assert.Equal(t, refreshed.Key()+"\n"+other.Key(), loaded.Key)
+	// A rejected freshly renewed access token may be refreshed once more.
+	retried := refreshed
+	retried.AccessToken = "test-after-401"
+	require.NoError(t, service.PersistAntigravityCredential(ch.Id, refreshed.Key(), retried))
+	loaded, err = model.GetChannelById(ch.Id, true)
+	require.NoError(t, err)
+	assert.Equal(t, retried.Key()+"\n"+other.Key(), loaded.Key)
+	edited := antigravity.Credential{Type: "antigravity", RefreshToken: "test-admin-edited"}.Key()
+	require.NoError(t, model.DB.Model(&model.Channel{}).Where("id = ?", ch.Id).Update("key", edited).Error)
+	require.NoError(t, service.PersistAntigravityCredential(ch.Id, original.Key(), refreshed))
+	changed, err := model.ReplaceChannelCredential(ch.Id, loaded.Key, "must-not-overwrite")
+	require.NoError(t, err)
+	assert.False(t, changed)
+	loaded, err = model.GetChannelById(ch.Id, true)
+	require.NoError(t, err)
+	assert.Equal(t, edited, loaded.Key)
+	changed, err = model.ReplaceChannelCredential(ch.Id, strings.ToUpper(edited), "must-not-overwrite-case")
+	require.NoError(t, err)
+	assert.False(t, changed)
 }

@@ -16,6 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+
+export const CHANNEL_PRIORITY_GUIDE_KEYS = {
+  card: 'channels:priority-drag-guide:card:v1',
+  table: 'channels:priority-drag-guide:v1',
+} as const
 // ============================================================================
 // Channel Types (from constant/channel.go)
 // All label/name values are i18n keys; use t(value) when displaying.
@@ -32,6 +37,8 @@ export const CHANNEL_TYPE_TASK_PLUGIN = 61
 export const CHANNEL_TYPE_VLLM = 62
 
 export const CHANNEL_TYPE_SGLANG = 63
+
+export const CHANNEL_TYPE_ANTIGRAVITY = 65
 
 export const CHANNEL_TYPES = {
   0: 'Unknown',
@@ -95,6 +102,7 @@ export const CHANNEL_TYPES = {
   62: 'vLLM',
   63: 'SGLang',
   64: 'Kimi',
+  65: 'Antigravity',
 } as const
 
 export type ChannelProviderPresentation = {
@@ -182,6 +190,7 @@ export const CHANNEL_PROVIDER_PRESENTATION: Partial<
     descriptionKey:
       'Reverse proxy Kimi web chat with account refresh_token credentials',
   },
+  65: { descriptionKey: 'Connect directly to Antigravity with Google OAuth' },
 } satisfies Record<
   Exclude<keyof typeof CHANNEL_TYPES, 0 | typeof CHANNEL_TYPE_TASK_PLUGIN>,
   ChannelProviderPresentation
@@ -189,8 +198,8 @@ export const CHANNEL_PROVIDER_PRESENTATION: Partial<
 
 const CHANNEL_TYPE_DISPLAY_ORDER: number[] = [
   1, 14, 24, 33, 43, 3, 41, 17, 45, 25, 26, 23, 48, 60, 58, 59, 61, 42, 34, 20,
-  4, 62, 40, 27, 15, 46, 18, 31, 35, 49, 19, 47, 37, 38, 39, 11, 8, 57, 22, 21,
-  44, 2, 5, 36, 50, 51, 52, 53, 54, 55, 56,
+  64, 4, 62, 40, 27, 15, 46, 18, 31, 35, 49, 19, 47, 37, 38, 39, 11, 8, 57, 22,
+  21, 44, 2, 5, 36, 50, 51, 52, 53, 54, 55, 56,
 ]
 
 export const CHANNEL_TYPE_OPTIONS: { value: number; label: string }[] = (() => {
@@ -511,6 +520,7 @@ export const FIELD_DESCRIPTIONS = {
 // ============================================================================
 
 export const MODEL_FETCHABLE_TYPES = new Set([
+  CHANNEL_TYPE_ANTIGRAVITY,
   1,
   4,
   14,

@@ -181,6 +181,10 @@ func ClaudeMessagesRequestToOpenAIChat(ctx context.Context, claudeRequest dto.Cl
 					toolNames[mediaMsg.Id] = mediaMsg.Name
 				}
 				switch mediaMsg.Type {
+				case "thinking":
+					if mediaMsg.Signature != "" {
+						openAIMessage.SignedThinking = append(openAIMessage.SignedThinking, mediaMsg)
+					}
 				case "text", "input_text":
 					message := dto.MediaContent{
 						Type:         "text",
@@ -274,7 +278,7 @@ func ClaudeMessagesRequestToOpenAIChat(ctx context.Context, claudeRequest dto.Cl
 				openAIMessage.SetMediaContent(mediaMessages)
 			}
 		}
-		if len(openAIMessage.ParseContent()) > 0 || len(openAIMessage.ToolCalls) > 0 {
+		if len(openAIMessage.ParseContent()) > 0 || len(openAIMessage.ToolCalls) > 0 || len(openAIMessage.SignedThinking) > 0 {
 			openAIMessages = append(openAIMessages, openAIMessage)
 		}
 	}

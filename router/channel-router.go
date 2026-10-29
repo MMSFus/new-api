@@ -49,12 +49,18 @@ func registerChannelRoutes(apiRouter *gin.RouterGroup) {
 		controller.GetChannelKey,
 	)
 
+	handlePermissionRoute(channelRoute, http.MethodPost, "/antigravity/oauth/start", authz.ChannelSensitiveWrite, middleware.DisableCache(), middleware.CriticalRateLimit(), middleware.SessionCookieOriginGuard(), controller.StartAntigravityOAuth)
+	handlePermissionRoute(channelRoute, http.MethodPost, "/antigravity/oauth/exchange", authz.ChannelSensitiveWrite, middleware.DisableCache(), middleware.CriticalRateLimit(), middleware.SessionCookieOriginGuard(), controller.ExchangeAntigravityOAuth)
+	handlePermissionRoute(channelRoute, http.MethodPost, "/antigravity/import", authz.ChannelSensitiveWrite, middleware.DisableCache(), middleware.CriticalRateLimit(), middleware.SessionCookieOriginGuard(), controller.ImportAntigravityCredentials)
+
 	for _, route := range channelPermissionRoutes {
 		handlePermissionRoute(channelRoute, route.method, route.path, route.permission, route.handler)
 	}
 }
 
 var channelPermissionRoutes = []permissionRoute{
+	{method: http.MethodGet, path: "/priority/order", permission: authz.ChannelRead, handler: controller.GetChannelPriorityOrder},
+	{method: http.MethodPost, path: "/priority/reorder", permission: authz.ChannelWrite, handler: controller.ReorderChannelPriority},
 	{method: http.MethodGet, path: "/", permission: authz.ChannelRead, handler: controller.GetAllChannels},
 	{method: http.MethodGet, path: "/search", permission: authz.ChannelRead, handler: controller.SearchChannels},
 	{method: http.MethodGet, path: "/models", permission: authz.ChannelRead, handler: controller.ChannelListModels},

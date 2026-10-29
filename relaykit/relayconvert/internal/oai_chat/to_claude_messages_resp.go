@@ -1,6 +1,7 @@
 package oaichat
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -236,6 +237,16 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 		return claudeResponses
 	} else {
 		chosenChoice := openAIResponse.Choices[0]
+		signature := chosenChoice.Delta.ReasoningSignature
+		if signature != nil && *signature != "" && chosenChoice.Delta.GetReasoningContent() == "" {
+			if state.LastMessagesType != convmeta.LastMessageTypeThinking {
+				stopOpenBlocksAndAdvance()
+				claudeResponses = append(claudeResponses, &dto.ClaudeResponse{Type: "content_block_start", Index: kitutil.GetPointer(state.Index), ContentBlock: &dto.ClaudeMediaMessage{Type: "thinking", Thinking: kitutil.GetPointer("")}})
+				state.LastMessagesType = convmeta.LastMessageTypeThinking
+			}
+			claudeResponses = append(claudeResponses, &dto.ClaudeResponse{Type: "content_block_delta", Index: kitutil.GetPointer(state.Index), Delta: &dto.ClaudeMediaMessage{Type: "signature_delta", Signature: *signature}})
+		}
+
 		doneChunk := chosenChoice.FinishReason != nil && *chosenChoice.FinishReason != ""
 		if doneChunk {
 			state.FinishReason = *chosenChoice.FinishReason
@@ -363,6 +374,9 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 					},
 				})
 			}
+			if signature != nil && *signature != "" && reasoning != "" {
+				claudeResponses = append(claudeResponses, &dto.ClaudeResponse{Type: "content_block_delta", Index: kitutil.GetPointer(state.Index), Delta: &dto.ClaudeMediaMessage{Type: "signature_delta", Signature: *signature}})
+			}
 			if textContent != "" {
 				if state.LastMessagesType != convmeta.LastMessageTypeText {
 					stopOpenBlocksAndAdvance()
@@ -460,9 +474,12 @@ func ResponseOpenAI2Claude(openAIResponse *dto.OpenAITextResponse, info convmeta
 		reasoningContent := choice.Message.GetReasoningContent()
 		textContent := choice.Message.StringContent()
 		toolCalls := choice.Message.ParseToolCalls()
-		if reasoningContent != "" {
+		if reasoningContent != "" || choice.Message.ReasoningSignature != nil {
 			claudeContent := dto.ClaudeMediaMessage{Type: "thinking"}
 			claudeContent.Thinking = kitutil.GetPointer(reasoningContent)
+			if choice.Message.ReasoningSignature != nil {
+				claudeContent.Signature = *choice.Message.ReasoningSignature
+			}
 			contents = append(contents, claudeContent)
 		}
 		if textContent != "" || (reasoningContent == "" && len(toolCalls) == 0) {
@@ -480,9 +497,9 @@ func ResponseOpenAI2Claude(openAIResponse *dto.OpenAITextResponse, info convmeta
 			claudeContent.Type = "tool_use"
 			claudeContent.Id = toolUse.ID
 			claudeContent.Name = toolUse.Function.Name
-			mapParams := map[string]any{}
+			mapParams := map[string]json.RawMessage{}
 			if strings.TrimSpace(toolUse.Function.Arguments) != "" {
-				var parsed map[string]any
+				var parsed map[string]json.RawMessage
 				if err := kitutil.Unmarshal([]byte(toolUse.Function.Arguments), &parsed); err == nil && parsed != nil {
 					mapParams = parsed
 				}

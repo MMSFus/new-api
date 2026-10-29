@@ -17,6 +17,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  RouterProvider,
+} from '@tanstack/react-router'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, expect, test } from 'vitest'
@@ -28,11 +35,7 @@ function ModeState() {
   const channels = useChannels()
   return (
     <output aria-label='modes'>
-      {[
-        channels.batchMode && 'batch',
-        channels.enableTagMode && 'tag',
-        channels.idSort && 'id-sort',
-      ]
+      {[channels.batchMode && 'batch', channels.enableTagMode && 'tag']
         .filter(Boolean)
         .join(',')}
     </output>
@@ -43,12 +46,28 @@ function renderButtons() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
-  render(
-    <QueryClientProvider client={client}>
+  const root = createRootRoute()
+  const authenticated = createRoute({
+    getParentRoute: () => root,
+    id: '_authenticated',
+  })
+  const channels = createRoute({
+    getParentRoute: () => authenticated,
+    path: '/channels/',
+    component: () => (
       <ChannelsProvider>
         <ChannelsPrimaryButtons />
         <ModeState />
       </ChannelsProvider>
+    ),
+  })
+  const router = createRouter({
+    routeTree: root.addChildren([authenticated.addChildren([channels])]),
+    history: createMemoryHistory({ initialEntries: ['/channels/'] }),
+  })
+  render(
+    <QueryClientProvider client={client}>
+      <RouterProvider router={router} />
     </QueryClientProvider>
   )
   return userEvent.setup()
@@ -58,27 +77,30 @@ afterEach(() => {
   localStorage.clear()
 })
 
-test('display modes are collapsed into one menu instead of inline switches', () => {
+test('display modes are collapsed into one menu instead of inline switches', async () => {
   renderButtons()
 
   expect(screen.queryByRole('switch')).not.toBeInTheDocument()
-  expect(screen.getByRole('button', { name: 'Display options' })).toBeVisible()
+  expect(
+    await screen.findByRole('button', { name: 'Display options' })
+  ).toBeVisible()
   expect(screen.getByRole('button', { name: 'More actions' })).toBeVisible()
 })
 
 test('choosing modes from the display menu updates and remembers them', async () => {
   const user = renderButtons()
 
-  await user.click(screen.getByRole('button', { name: 'Display options' }))
-  for (const name of ['Tag Mode', 'Batch Operations', 'Sort by ID']) {
+  await user.click(
+    await screen.findByRole('button', { name: 'Display options' })
+  )
+  for (const name of ['Tag Mode', 'Batch Operations']) {
     const item = await screen.findByRole('menuitemcheckbox', { name })
     await user.click(item)
     expect(item).toHaveAttribute('aria-checked', 'true')
   }
 
   expect(screen.getByRole('status', { name: 'modes' })).toHaveTextContent(
-    'batch,tag,id-sort'
+    'batch,tag'
   )
   expect(localStorage.getItem('enable-tag-mode')).toBe('true')
-  expect(localStorage.getItem('channels-id-sort')).toBe('true')
 })
