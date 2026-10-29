@@ -85,9 +85,15 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-async function renderChannelsPage(searchGate: () => Promise<void>) {
+async function renderChannelsPage(
+  searchGate: () => Promise<void>,
+  initialEntry = '/channels/?filter=prod&group=%5B%22vip%22%5D&status=%5B%22enabled%22%5D&model=gpt-4o'
+) {
   const get = vi.spyOn(api, 'get').mockImplementation(async (url) => {
-    if (url === '/api/channel/search') {
+    if (url === '/api/channel') {
+      throw new Error('Invalid URL (GET /api/channel)')
+    }
+    if (url === '/api/channel/' || url === '/api/channel/search') {
       await searchGate()
       return {
         data: {
@@ -113,8 +119,6 @@ async function renderChannelsPage(searchGate: () => Promise<void>) {
       </ChannelsProvider>
     ),
   })
-  const initialEntry =
-    '/channels/?filter=prod&group=%5B%22vip%22%5D&status=%5B%22enabled%22%5D&model=gpt-4o'
   const router = createRouter({
     routeTree: root.addChildren([auth.addChildren([channelsRoute])]),
     history: createMemoryHistory({ initialEntries: [initialEntry] }),
@@ -151,4 +155,13 @@ it('refetches the channel list with the current filters and marks Refresh busy w
   expect(refresh).toHaveAttribute('aria-busy', 'true')
   release()
   await waitFor(() => expect(refresh).toHaveAttribute('aria-busy', 'false'))
+})
+
+it('loads the unfiltered channel list using the registered route with a trailing slash', async () => {
+  const get = await renderChannelsPage(() => Promise.resolve(), '/channels/')
+
+  expect(get).toHaveBeenCalledWith(
+    '/api/channel/',
+    expect.objectContaining({ params: expect.objectContaining({ p: 1 }) })
+  )
 })
