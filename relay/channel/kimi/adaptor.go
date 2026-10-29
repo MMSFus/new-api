@@ -1,223 +1,344 @@
 package kimi
 
 import (
+	"bytes"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
-	"strings"
+	"slices"
 
 	"github.com/QuantumNous/new-api/common"
+
+	"github.com/QuantumNous/new-api/pkg/kimi"
 	"github.com/QuantumNous/new-api/relay/channel"
+	"github.com/QuantumNous/new-api/relay/channel/claude"
+	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
-
 	"github.com/gin-gonic/gin"
 )
 
-// Adaptor 把 OpenAI chat.completions 请求桥接到 Kimi 网页版会话接口
-// （www.kimi.ai / www.kimi.com 的 /api/chat + completion/stream SSE）。
-// 每次请求新建一个上游会话，消息历史随请求完整携带。
+// Adaptor uses the regional Coding API. Web-session tokens are never sent to
+// either the Coding resource server or its OAuth token endpoint.
 type Adaptor struct {
-	key         *KeyConfig
-	hosts       Hosts
-	accessToken string
-	chatID      string
-	// 上游恒为 SSE，框架会按响应 Content-Type 把 info.IsStream 翻成 true，
-	// 所以必须记住客户端自己的 stream 意图来决定响应格式。
-	clientStream bool
+	credential kimi.Credential
+	target     types.RelayFormat
+	metadata   kimi.Model
 }
 
-func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
-	key, err := ParseKey(info.ApiKey)
-	if err != nil {
-		common.SysLog("kimi channel: " + err.Error())
-		return
-	}
-	a.key = key
-	a.hosts = key.ResolveHosts(info.ChannelBaseUrl)
-}
-
-func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
-	if a.chatID == "" {
-		return "", errors.New("kimi channel: chat session not created")
-	}
-	return fmt.Sprintf("%s/api/chat/%s/completion/stream", a.hosts.Site, a.chatID), nil
-}
-
-func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {
-	channel.SetupApiRequestHeader(info, c, req)
-	if a.accessToken == "" {
-		return errors.New("kimi channel: access token not resolved")
-	}
-	req.Set("Authorization", "Bearer "+a.accessToken)
-	req.Set("Content-Type", "application/json")
-	req.Set("Accept", "text/event-stream")
-	req.Set("Origin", a.hosts.Site)
-	req.Set("Referer", a.hosts.Site+"/")
-	// 覆盖可能由客户端透传的 UA：Cloudflare 按浏览器签名拦截（error 1010）。
-	req.Set("User-Agent", browserUA)
-	return nil
-}
-
-func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeneralOpenAIRequest) (any, error) {
-	if request == nil {
-		return nil, errors.New("kimi channel: request is nil")
-	}
-	a.clientStream = request.Stream != nil && *request.Stream
-	messages := make([]ChatMessage, 0, len(request.Messages))
-	var systemText strings.Builder
-	for _, message := range request.Messages {
-		content := message.StringContent()
-		switch message.Role {
-		case "system", "developer":
-			systemText.WriteString(content)
-			systemText.WriteString("\n")
-		case "user", "assistant":
-			messages = append(messages, ChatMessage{Role: message.Role, Content: content})
-		default:
-			return nil, fmt.Errorf("kimi channel: unsupported message role %q", message.Role)
-		}
-	}
-	if systemText.Len() > 0 {
-		prefix := strings.TrimSpace(systemText.String())
-		if len(messages) > 0 && messages[0].Role == "user" {
-			messages[0].Content = prefix + "\n\n" + messages[0].Content
-		} else {
-			messages = append([]ChatMessage{{Role: "user", Content: prefix}}, messages...)
-		}
-	}
-	if len(messages) == 0 {
-		return nil, errors.New("kimi channel: no user/assistant messages")
-	}
-	return &CompletionRequest{Messages: messages, Refs: []any{}}, nil
-}
-
-// createChat 在上游新建会话，返回 chat_id。
-func (a *Adaptor) createChat(c *gin.Context, info *relaycommon.RelayInfo, title string) error {
-	body, err := common.Marshal(&CreateChatRequest{
-		Name:       title,
-		BornFrom:   "home",
-		KimiplusID: "kimi",
-		IsExample:  false,
-		Source:     "web",
-	})
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodPost,
-		a.hosts.Site+"/api/chat", strings.NewReader(string(body)))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+a.accessToken)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/plain, */*")
-	req.Header.Set("Origin", a.hosts.Site)
-	req.Header.Set("Referer", a.hosts.Site+"/")
-	req.Header.Set("User-Agent", browserUA)
-
-	client, err := service.GetHttpClientWithProxySettings(info.ChannelSetting.Proxy, info.ChannelSetting)
-	if err != nil {
-		return fmt.Errorf("kimi channel: build http client failed: %w", err)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("kimi channel: create chat failed: %w", err)
-	}
-	defer service.CloseResponseBodyGracefully(resp)
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return fmt.Errorf("kimi channel: read create chat response failed: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("kimi channel: create chat rejected (HTTP %d)", resp.StatusCode)
-	}
-	var created CreateChatResponse
-	if err := common.Unmarshal(respBody, &created); err != nil {
-		return fmt.Errorf("kimi channel: invalid create chat response: %w", err)
-	}
-	if created.ID == "" {
-		return errors.New("kimi channel: create chat response missing id")
-	}
-	a.chatID = created.ID
-	return nil
-}
-
-func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
-	if a.key == nil {
-		return nil, errors.New("kimi channel: invalid channel key")
-	}
-	accessToken, err := EnsureAccessToken(info, a.key, a.hosts)
+func (a *Adaptor) Init(*relaycommon.RelayInfo) {}
+func (a *Adaptor) convert(c *gin.Context, info *relaycommon.RelayInfo, request any) (_ any, err error) {
+	credential, models, err := service.ResolveKimiModels(c.Request.Context(), info.ChannelId, info.ApiKey, info.ChannelSetting)
 	if err != nil {
 		return nil, err
 	}
-	a.accessToken = accessToken
+	if err := service.ValidateKimiBase(info.ChannelBaseUrl, credential); err != nil {
+		return nil, err
+	}
+	a.credential = credential
+	found := false
+	for _, model := range models {
+		if model.ID == info.UpstreamModelName {
+			a.metadata = model
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, errors.New("Kimi model is unavailable; fetch models and update the channel mapping")
+	}
+	switch a.metadata.Protocol {
+	case "", "kimi", "openai":
+		a.target = types.RelayFormatOpenAI
+	case "anthropic":
+		a.target = types.RelayFormatClaude
+	case "response", "openai_responses":
+		a.target = types.RelayFormatOpenAIResponses
+	default:
+		return nil, errors.New("Unsupported Kimi model protocol")
+	}
+	if a.target == types.RelayFormatOpenAI && info.RelayFormat == types.RelayFormatOpenAIResponses {
+		return nil, errors.New("This Kimi model uses Chat; select a Responses or Anthropic model for Responses requests")
+	}
+	if a.target != info.RelayFormat {
+		// Existing converters enforce the configured loss policy and record diagnostics.
+		converted, err := service.ConvertRequest(c, info, a.target, request)
+		if err != nil {
+			return nil, err
+		}
+		request = converted.Value
+	}
+	if err := a.validateCapabilities(request); err != nil {
+		return nil, err
+	}
+	info.FinalRequestRelayFormat = a.target
+	return request, nil
+}
 
-	title := "new-api"
-	if raw, err := io.ReadAll(requestBody); err == nil {
-		requestBody = strings.NewReader(string(raw))
-		var probe CompletionRequest
-		if err := common.Unmarshal(raw, &probe); err == nil {
-			for _, m := range probe.Messages {
-				if m.Role == "user" && m.Content != "" {
-					runes := []rune(strings.TrimSpace(m.Content))
-					if len(runes) > 20 {
-						runes = runes[:20]
+// validateCapabilities follows the selected model's advertised capabilities.
+// It never invents thinking history or silently discards unsupported controls.
+func (a *Adaptor) validateCapabilities(request any) error {
+	thinking, effort, tools := "", "", false
+	var chatRequest *dto.GeneralOpenAIRequest
+	switch r := request.(type) {
+	case *dto.GeneralOpenAIRequest:
+		chatRequest = r
+		if len(r.ExtraBody) != 0 && string(r.ExtraBody) != "null" && string(r.ExtraBody) != "{}" {
+			return errors.New("Send Kimi parameters at the top level instead of extra_body")
+		}
+		if len(r.EnableThinking) != 0 || len(r.ThinkingBudget) != 0 || len(r.ThinkingTokenBudget) != 0 {
+			return errors.New("Use Kimi thinking controls instead of provider-specific thinking parameters")
+		}
+		if len(r.THINKING) > 0 && string(r.THINKING) != "null" {
+			var config struct {
+				Type   string `json:"type"`
+				Effort string `json:"effort"`
+				Budget any    `json:"budget_tokens"`
+			}
+			if common.Unmarshal(r.THINKING, &config) != nil || (config.Type != "enabled" && config.Type != "disabled") || config.Budget != nil {
+				return errors.New("Invalid Kimi thinking controls")
+			}
+			thinking, effort = config.Type, config.Effort
+		}
+		if r.ReasoningEffort != "" {
+			if effort != "" && effort != r.ReasoningEffort {
+				return errors.New("Conflicting Kimi reasoning efforts")
+			}
+			effort = r.ReasoningEffort
+		}
+		tools = len(r.Tools) > 0 || len(r.Functions) > 0
+		if r.MaxCompletionTokens == nil {
+			r.MaxCompletionTokens = r.MaxTokens
+		}
+		r.MaxTokens = nil
+		if r.Stream != nil && *r.Stream {
+			if r.StreamOptions == nil {
+				r.StreamOptions = &dto.StreamOptions{}
+			}
+			r.StreamOptions.IncludeUsage = true
+		}
+	case *dto.ClaudeRequest:
+		tools, effort = len(r.GetTools()) > 0, r.GetEfforts()
+		if r.Thinking != nil {
+			thinking = r.Thinking.Type
+			if r.Thinking.BudgetTokens != nil {
+				return errors.New("Kimi adaptive thinking does not accept a token budget")
+			}
+			if thinking == "enabled" {
+				r.Thinking.Type = "adaptive"
+			}
+		}
+	case *dto.OpenAIResponsesRequest:
+		tools = len(r.Tools) > 0 && string(r.Tools) != "[]" && string(r.Tools) != "null"
+		if r.Reasoning != nil {
+			effort = r.Reasoning.Effort
+			if effort == "none" {
+				thinking, effort = "disabled", ""
+			}
+		}
+	}
+	if tools && a.metadata.SupportsToolUse != nil && !*a.metadata.SupportsToolUse {
+		return errors.New("Kimi model does not support tools")
+	}
+	if thinking != "" && thinking != "enabled" && thinking != "adaptive" && thinking != "disabled" {
+		return errors.New("Invalid Kimi thinking controls")
+	}
+	if thinking == "disabled" && a.metadata.Reasoning.Type == "only" {
+		return errors.New("Kimi model requires thinking")
+	}
+	if (thinking == "enabled" || thinking == "adaptive" || effort != "") && a.metadata.Reasoning.Type != "both" && a.metadata.Reasoning.Type != "only" {
+		return errors.New("Kimi model does not support thinking")
+	}
+	if effort != "" && (!slices.Contains(a.metadata.Reasoning.Effort.Valid, effort) || thinking == "disabled") {
+		return errors.New("Unsupported Kimi reasoning effort")
+	}
+	if chatRequest != nil && chatRequest.ReasoningEffort != "" {
+		config := map[string]any{}
+		if len(chatRequest.THINKING) > 0 && string(chatRequest.THINKING) != "null" {
+			if err := common.Unmarshal(chatRequest.THINKING, &config); err != nil {
+				return err
+			}
+		}
+		if thinking == "" {
+			config["type"] = "enabled"
+		}
+		config["effort"] = effort
+		encoded, err := common.Marshal(config)
+		if err != nil {
+			return err
+		}
+		chatRequest.THINKING = encoded
+		chatRequest.ReasoningEffort = ""
+	}
+	// Only inspect message content, never tool schemas or arbitrary text.
+	if len(a.metadata.Modalities.Input) > 0 {
+		raw, err := common.Marshal(request)
+		if err != nil {
+			return err
+		}
+		var root map[string]any
+		if err := common.Unmarshal(raw, &root); err != nil {
+			return err
+		}
+		for _, field := range []string{"messages", "input"} {
+			messages, _ := root[field].([]any)
+			for _, message := range messages {
+				m, _ := message.(map[string]any)
+				content, _ := m["content"].([]any)
+				for _, part := range content {
+					block, _ := part.(map[string]any)
+					typ, _ := block["type"].(string)
+					modality := ""
+					switch typ {
+					case "image", "image_url", "input_image":
+						modality = "image"
+					case "input_audio", "audio":
+						modality = "audio"
+					case "video", "video_url", "input_video":
+						modality = "video"
 					}
-					title = string(runes)
-					break
+					if modality != "" && !slices.Contains(a.metadata.Modalities.Input, modality) {
+						return errors.New("Kimi model does not support the requested input modality")
+					}
 				}
 			}
 		}
 	}
-	if err := a.createChat(c, info, title); err != nil {
-		return nil, err
+	return nil
+}
+func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, i *relaycommon.RelayInfo, r *dto.GeneralOpenAIRequest) (any, error) {
+	return a.convert(c, i, r)
+}
+func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, i *relaycommon.RelayInfo, r *dto.ClaudeRequest) (any, error) {
+	return a.convert(c, i, r)
+}
+func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, i *relaycommon.RelayInfo, r dto.OpenAIResponsesRequest) (any, error) {
+	return a.convert(c, i, &r)
+}
+func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
+	if a.credential.Token() == "" {
+		return "", errors.New("Kimi credential is not resolved")
 	}
-	return channel.DoApiRequest(a, c, info, requestBody)
-}
-
-func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
-	if a.clientStream {
-		return kimiStreamHandler(c, info, resp)
+	path := "/chat/completions"
+	switch a.target {
+	case types.RelayFormatClaude:
+		path = "/messages?beta=true"
+	case types.RelayFormatOpenAIResponses:
+		path = "/responses"
 	}
-	return kimiHandler(c, info, resp)
+	return a.credential.BaseURL() + path, nil
 }
-
-func (a *Adaptor) GetModelList() []string {
-	return ModelList
+func (a *Adaptor) SetupRequestHeader(c *gin.Context, h *http.Header, info *relaycommon.RelayInfo) error {
+	channel.SetupApiRequestHeader(info, c, h)
+	kimi.Headers(*h, a.credential)
+	h.Set("Content-Type", "application/json")
+	if a.target == types.RelayFormatClaude {
+		h.Set("anthropic-version", "2023-06-01")
+	}
+	return nil
 }
-
-func (a *Adaptor) GetChannelName() string {
-	return ChannelName
+func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, body io.Reader) (_ any, err error) {
+	raw, err := io.ReadAll(io.LimitReader(body, (32<<20)+1))
+	if err != nil || len(raw) > 32<<20 {
+		return nil, errors.New("Kimi request exceeds size limit")
+	}
+	for attempt := range 2 {
+		endpoint, err := a.GetRequestURL(info)
+		if err != nil {
+			return nil, err
+		}
+		req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodPost, endpoint, bytes.NewReader(raw))
+		if err != nil {
+			return nil, err
+		}
+		// The request was bounded and buffered above. Keep each retry on an
+		// independent reader; the original framework body may already be at EOF.
+		req.ContentLength = int64(len(raw))
+		req.GetBody = func() (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(raw)), nil
+		}
+		if err := a.SetupRequestHeader(c, &req.Header, info); err != nil {
+			return nil, err
+		}
+		if err := channel.ApplyHeaderOverride(info, c, req); err != nil {
+			return nil, err
+		}
+		resp, err := channel.DoRequest(c, req, info)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode != http.StatusUnauthorized || attempt == 1 || a.credential.AuthType != "oauth" || c.Writer.Written() {
+			return resp, nil
+		}
+		resp.Body.Close()
+		a.credential, err = service.ResolveKimiCredential(c.Request.Context(), info.ChannelId, info.ApiKey, info.ChannelSetting, a.credential.AccessToken)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return nil, errors.New("Kimi request failed")
 }
-
-func (a *Adaptor) ConvertRerankRequest(c *gin.Context, relayMode int, request dto.RerankRequest) (any, error) {
-	return nil, errors.New("kimi channel: /v1/rerank endpoint not supported")
+func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (_ any, apiErr *types.NewAPIError) {
+	if resp == nil || resp.Body == nil {
+		return nil, types.NewError(errors.New("Invalid Kimi response"), types.ErrorCodeBadResponse)
+	}
+	info.FinalRequestRelayFormat = a.target
+	if info.IsStream {
+		resp.Body = newCodingStream(resp.Body, a.target)
+	} else {
+		b, err := io.ReadAll(io.LimitReader(resp.Body, (32<<20)+1))
+		resp.Body.Close()
+		if err != nil || len(b) > 32<<20 {
+			return nil, types.NewError(errors.New("Invalid Kimi response size"), types.ErrorCodeBadResponseBody)
+		}
+		if a.target == types.RelayFormatClaude {
+			b, err = normalizeUsage(b, false)
+			if err != nil {
+				return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+			}
+		}
+		resp.Body = io.NopCloser(bytes.NewReader(b))
+	}
+	switch a.target {
+	case types.RelayFormatClaude:
+		return (&claude.Adaptor{}).DoResponse(c, resp, info)
+	case types.RelayFormatOpenAIResponses:
+		if info.RelayFormat != types.RelayFormatOpenAIResponses {
+			if info.IsStream {
+				return openai.OaiResponsesToChatStreamHandler(c, info, resp)
+			}
+			return openai.OaiResponsesToChatHandler(c, info, resp)
+		}
+		if info.IsStream {
+			return openai.OaiResponsesStreamHandler(c, info, resp)
+		}
+		return openai.OaiResponsesHandler(c, info, resp)
+	default:
+		if info.RelayFormat == types.RelayFormatOpenAIResponses {
+			return nil, types.NewError(errors.New("This Kimi model uses Chat; select a Responses or Anthropic model for Responses requests"), types.ErrorCodeBadResponse)
+		}
+		if info.IsStream {
+			return openai.OaiStreamHandler(c, info, resp)
+		}
+		return openai.OpenaiHandler(c, info, resp)
+	}
 }
-
-func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.EmbeddingRequest) (any, error) {
-	return nil, errors.New("kimi channel: /v1/embeddings endpoint not supported")
+func (a *Adaptor) GetModelList() []string { return ModelList }
+func (a *Adaptor) GetChannelName() string { return ChannelName }
+func (a *Adaptor) ConvertGeminiRequest(*gin.Context, *relaycommon.RelayInfo, *dto.GeminiChatRequest) (any, error) {
+	return nil, errors.New("Kimi Gemini requests are not supported")
 }
-
-func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.AudioRequest) (io.Reader, error) {
-	return nil, errors.New("kimi channel: audio endpoint not supported")
+func (a *Adaptor) ConvertRerankRequest(*gin.Context, int, dto.RerankRequest) (any, error) {
+	return nil, errors.New("Kimi reranking is not supported")
 }
-
-func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.ImageRequest) (any, error) {
-	return nil, errors.New("kimi channel: image endpoint not supported")
+func (a *Adaptor) ConvertEmbeddingRequest(*gin.Context, *relaycommon.RelayInfo, dto.EmbeddingRequest) (any, error) {
+	return nil, errors.New("Kimi embeddings are not supported")
 }
-
-func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
-	return nil, errors.New("kimi channel: /v1/responses endpoint not supported")
+func (a *Adaptor) ConvertAudioRequest(*gin.Context, *relaycommon.RelayInfo, dto.AudioRequest) (io.Reader, error) {
+	return nil, errors.New("Kimi audio is not supported")
 }
-
-func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.ClaudeRequest) (any, error) {
-	return nil, errors.New("kimi channel: /v1/messages endpoint not supported")
-}
-
-func (a *Adaptor) ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeminiChatRequest) (any, error) {
-	return nil, errors.New("kimi channel: gemini endpoint not supported")
+func (a *Adaptor) ConvertImageRequest(*gin.Context, *relaycommon.RelayInfo, dto.ImageRequest) (any, error) {
+	return nil, errors.New("Kimi image generation is not supported")
 }

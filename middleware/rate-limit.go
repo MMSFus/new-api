@@ -205,6 +205,12 @@ func UserCriticalRateLimit(scope string) func(c *gin.Context) {
 	)
 }
 
+// KimiOAuthPollRateLimit permits device polling independently of sensitive actions.
+// The one-time server state also enforces the provider's polling interval.
+func KimiOAuthPollRateLimit() func(c *gin.Context) {
+	return userRateLimitFactory(120, 60, "KIMI:poll")
+}
+
 func DownloadRateLimit() func(c *gin.Context) {
 	return rateLimitFactory(common.DownloadRateLimitNum, common.DownloadRateLimitDuration, "DW")
 }

@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -441,4 +442,35 @@ func TestUserAuthVersionInvalidatesExistingSession(t *testing.T) {
 	assert.ErrorIs(t, err, ErrLoginSessionRevoked)
 	_, err = CreateLoginSessionAtAuthVersion(user.Id, identity.UserAuthVersion, "2fa", "127.0.0.1", "test-agent")
 	assert.ErrorIs(t, err, ErrLoginSessionRevoked, "a pending 2FA flow must not survive an auth-version change")
+}
+
+func TestKimiRenewalLeaseWaitsAndNeverReleasesAnotherOwner(t *testing.T) {
+	server, _, _, _ := useIndependentAuthSessionRedis(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	release, verify, err := acquireKimiRefreshLock(ctx, "test-account", cancel)
+	require.NoError(t, err)
+	require.NoError(t, verify())
+	waiting, stop := context.WithCancel(context.Background())
+	stop()
+	_, _, err = acquireKimiRefreshLock(waiting, "test-account", func() {})
+	require.Error(t, err)
+	require.NoError(t, server.Set("kimi:refresh:test-account", "another-owner"))
+	require.Error(t, verify())
+	release()
+	owner, err := server.Get("kimi:refresh:test-account")
+	require.NoError(t, err)
+	require.Equal(t, "another-owner", owner)
+	server.Close()
+	_, _, err = acquireKimiRefreshLock(ctx, "outage", func() {})
+	require.ErrorContains(t, err, "unavailable")
+}
+
+func TestKimiRenewalWithoutRedisRejectsWorkerNode(t *testing.T) {
+	enabled, master := common.RedisEnabled, common.IsMasterNode
+	t.Cleanup(func() { common.RedisEnabled, common.IsMasterNode = enabled, master })
+	common.RedisEnabled = false
+	common.IsMasterNode = false
+	_, _, err := acquireKimiRefreshLock(context.Background(), "worker", func() {})
+	require.ErrorContains(t, err, "requires Redis")
 }

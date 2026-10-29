@@ -2,6 +2,7 @@ package claude
 
 import (
 	"cmp"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -351,6 +352,11 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 		return nil, err
 	}
 
+	if info.ChannelType == constant.ChannelTypeKimi {
+		if info.StreamStatus.FailedOrTruncated() {
+			return claudeInfo.Usage, types.NewError(errors.New("Kimi stream ended without a valid completion"), types.ErrorCodeBadResponseBody)
+		}
+	}
 	HandleStreamFinalResponse(c, info, claudeInfo)
 	return claudeInfo.Usage, nil
 }

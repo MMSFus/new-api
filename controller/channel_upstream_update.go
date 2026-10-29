@@ -364,6 +364,11 @@ func getFetchModelsResponseBody(method string, requestURL string, channel *model
 }
 
 func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
+	if channel.Type == constant.ChannelTypeKimi {
+		ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+		defer cancel()
+		return service.FetchKimiModels(ctx, channel)
+	}
 	if channel.Type == constant.ChannelTypeAntigravity {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()

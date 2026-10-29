@@ -18,6 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import {
   CHANNEL_TYPES,
+  CHANNEL_TYPE_ANTIGRAVITY,
+  CHANNEL_TYPE_KIMI,
   CHANNEL_TYPE_VLLM,
   CHANNEL_TYPE_SGLANG,
 } from '../constants'
@@ -180,15 +182,20 @@ export const CHANNEL_TYPE_CONFIGS: Record<number, ChannelTypeConfig> = {
       models: 'Models',
     },
   },
-  64: {
-    id: 64,
-    name: CHANNEL_TYPES[64],
+  [CHANNEL_TYPE_KIMI]: {
+    id: CHANNEL_TYPE_KIMI,
+    name: CHANNEL_TYPES[CHANNEL_TYPE_KIMI],
     icon: 'Kimi',
     hints: {
-      baseUrl: 'Optional site override (default https://www.kimi.ai)',
-      key: 'JSON: {"refresh_token": "...", "region": "global|cn"}',
-      models: 'Fixed placeholder model: kimi',
+      baseUrl: 'Leave empty to use the official regional Kimi Coding endpoint',
+      key: 'Authorize Kimi Code or import CPA/sub2api JSON',
+      models: 'Fetch available Kimi Coding models',
     },
+  },
+  [CHANNEL_TYPE_ANTIGRAVITY]: {
+    id: CHANNEL_TYPE_ANTIGRAVITY,
+    name: CHANNEL_TYPES[CHANNEL_TYPE_ANTIGRAVITY],
+    icon: 'Antigravity',
   },
 }
 

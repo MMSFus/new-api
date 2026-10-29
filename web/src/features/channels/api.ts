@@ -752,3 +752,70 @@ export async function importAntigravityCredentials(
   )
   return requireServerSuccess(response.data).data
 }
+
+export type KimiDevice = {
+  handle: string
+  user_code: string
+  verification_uri: string
+  verification_uri_complete: string
+  interval: number
+  expires_at: number
+}
+export type KimiPoll =
+  | { status: 'pending'; handle: string; interval: number }
+  | { status: 'ready'; key: string; count: number }
+export type KimiAccount = {
+  name: string
+  region: string
+  auth_type: string
+  expires_at: number
+  renewable: boolean
+  key: string
+}
+export type KimiPreview = {
+  accounts: KimiAccount[]
+  issues: Array<{ id: number; name: string; error: string }>
+}
+export type KimiUsage = { name: string; used_ratio: number; reset_time: string }
+export async function startKimiOAuth(
+  region: string,
+  proxy: string
+): Promise<KimiDevice> {
+  const response = await api.post(
+    '/api/channel/kimi/oauth/start',
+    { region, proxy },
+    channelActionConfig()
+  )
+  return requireServerSuccess(response.data).data
+}
+export async function pollKimiOAuth(handle: string): Promise<KimiPoll> {
+  const response = await api.post(
+    '/api/channel/kimi/oauth/poll',
+    { handle },
+    channelActionConfig()
+  )
+  return requireServerSuccess(response.data).data
+}
+export async function cancelKimiOAuth(handle: string): Promise<void> {
+  const response = await api.post(
+    '/api/channel/kimi/oauth/cancel',
+    { handle },
+    channelActionConfig()
+  )
+  requireServerSuccess(response.data)
+}
+export async function importKimiCredentials(
+  json: string,
+  region: string
+): Promise<KimiPreview> {
+  const response = await api.post(
+    '/api/channel/kimi/import',
+    { json, region },
+    channelActionConfig()
+  )
+  return requireServerSuccess(response.data).data
+}
+export async function getKimiUsage(id: number): Promise<KimiUsage[]> {
+  const response = await api.get(`/api/channel/${id}/kimi/usage`)
+  return requireServerSuccess(response.data).data
+}

@@ -1,11 +1,13 @@
 package claude
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
@@ -163,6 +165,10 @@ func ClaudeResponsesStreamHandler(c *gin.Context, resp *http.Response, info *rel
 	}
 	if streamFailed {
 		return claudeInfo.Usage, nil
+	}
+
+	if info.ChannelType == constant.ChannelTypeKimi && info.StreamStatus.FailedOrTruncated() {
+		return claudeInfo.Usage, types.NewError(errors.New("Kimi stream ended without a valid completion"), types.ErrorCodeBadResponseBody)
 	}
 
 	HandleStreamFinalResponse(c, info, claudeInfo)

@@ -206,6 +206,17 @@ func (s *StreamStatus) TotalErrorCount() int {
 	return s.ErrorCount
 }
 
+// FailedOrTruncated checks protocols that require a terminal event. Client
+// cancellation is handled separately by settlement and is not an upstream fault.
+func (s *StreamStatus) FailedOrTruncated() bool {
+	outcome := s.OutcomeSnapshot()
+	if outcome.EndReason == StreamEndReasonClientGone {
+		return false
+	}
+	return outcome.HasErrors || outcome.Response == ResponseOutcomeFailed ||
+		(outcome.Response == ResponseOutcomeUnknown && outcome.EndReason != StreamEndReasonDone)
+}
+
 func (s *StreamStatus) IsNormalEnd() bool {
 	if s == nil {
 		return true

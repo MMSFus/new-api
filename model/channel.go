@@ -455,32 +455,22 @@ func GetChannelById(id int, selectAll bool) (*Channel, error) {
 }
 
 func BatchInsertChannels(channels []Channel) error {
-	if len(channels) == 0 {
-		return nil
-	}
-	tx := DB.Begin()
-	if tx.Error != nil {
-		return tx.Error
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			tx.Rollback()
-		}
-	}()
+	return DB.Transaction(func(tx *gorm.DB) error { return BatchInsertChannelsWithTx(tx, channels) })
+}
 
+// BatchInsertChannelsWithTx lets credential enrollment commit with channel creation.
+func BatchInsertChannelsWithTx(tx *gorm.DB, channels []Channel) error {
 	for _, chunk := range lo.Chunk(channels, 50) {
 		if err := tx.Create(&chunk).Error; err != nil {
-			tx.Rollback()
 			return err
 		}
-		for _, channel_ := range chunk {
-			if err := channel_.AddAbilities(tx); err != nil {
-				tx.Rollback()
+		for _, channel := range chunk {
+			if err := channel.AddAbilities(tx); err != nil {
 				return err
 			}
 		}
 	}
-	return tx.Commit().Error
+	return nil
 }
 
 func BatchDeleteChannels(ids []int) (int64, error) {
@@ -560,7 +550,10 @@ func (channel *Channel) Insert() error {
 	return err
 }
 
-func (channel *Channel) Update() error {
+func (channel *Channel) Update() error { return channel.UpdateWithTx(DB) }
+
+// UpdateWithTx lets a one-time credential enrollment and its channel save share a transaction.
+func (channel *Channel) UpdateWithTx(tx *gorm.DB) error {
 	// If this is a multi-key channel, recalculate MultiKeySize based on the current key list to avoid inconsistency after editing keys
 	if channel.ChannelInfo.IsMultiKey {
 		var keyStr string
@@ -568,7 +561,8 @@ func (channel *Channel) Update() error {
 			keyStr = channel.Key
 		} else {
 			// If key is not provided, read the existing key from the database
-			if existing, err := GetChannelById(channel.Id, true); err == nil {
+			var existing Channel
+			if err := tx.First(&existing, channel.Id).Error; err == nil {
 				keyStr = existing.Key
 			}
 		}
@@ -600,12 +594,14 @@ func (channel *Channel) Update() error {
 		}
 	}
 	var err error
-	err = DB.Model(channel).Updates(channel).Error
+	err = tx.Model(channel).Updates(channel).Error
 	if err != nil {
 		return err
 	}
-	DB.Model(channel).First(channel, "id = ?", channel.Id)
-	err = channel.UpdateAbilities(nil)
+	if err := tx.Model(channel).First(channel, "id = ?", channel.Id).Error; err != nil {
+		return err
+	}
+	err = channel.UpdateAbilities(tx)
 	return err
 }
 
