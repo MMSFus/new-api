@@ -7778,6 +7778,10 @@
     "Use Kimi Code OAuth or Coding credentials. Legacy web tokens require authorization again. PAYG keys belong in a Moonshot channel.": "请使用 Kimi Code OAuth 或 Coding 凭据。旧版网页令牌需重新授权，按量付费密钥请使用 Moonshot 渠道。",
     "Wait for the Kimi polling interval": "请等待 Kimi 轮询间隔结束",
     "Waiting for official authorization. Keep this form open.": "等待官方授权，请保持此表单打开。",
-    "Weekly usage": "每周用量"
+    "Weekly usage": "每周用量",
+    "Kimi OAuth refresh token was rejected; authorize again": "Kimi OAuth 刷新凭据被上游拒绝，请重新授权或导入最新凭据",
+    "Kimi preview requires a session credential draft": "请重新导入 Kimi 凭据后获取模型",
+    "Kimi credential changed; retry saving the channel": "Kimi 凭据已更新，请重试保存渠道",
+    "Kimi model discovery is in progress; wait before saving": "正在获取 Kimi 模型，请等待完成后再保存"
   }
 }

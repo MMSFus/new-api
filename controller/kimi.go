@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"errors"
 	"math"
 	"net/http"
@@ -23,13 +24,26 @@ const kimiOAuthPurpose = "kimi_channel"
 const kimiOAuthPrefix = "kimi-oauth:"
 
 type kimiOAuthState struct {
-	Identity   model.AuthSessionIdentity `json:"identity"`
-	Credential kimi.Credential           `json:"credential"`
-	Proxy      string                    `json:"proxy"`
-	DeviceCode string                    `json:"device_code,omitempty"`
-	Interval   int                       `json:"interval"`
-	NextPoll   int64                     `json:"next_poll"`
-	Deadline   int64                     `json:"deadline"`
+	Identity    model.AuthSessionIdentity `json:"identity"`
+	Credential  kimi.Credential           `json:"credential"`
+	Credentials []kimi.Credential         `json:"credentials,omitempty"`
+	Proxy       string                    `json:"proxy"`
+	DeviceCode  string                    `json:"device_code,omitempty"`
+	Interval    int                       `json:"interval"`
+	NextPoll    int64                     `json:"next_poll"`
+	Deadline    int64                     `json:"deadline"`
+	BusyUntil   int64                     `json:"busy_until,omitempty"`
+}
+
+func (s kimiOAuthState) key() string {
+	if len(s.Credentials) == 0 {
+		return s.Credential.Key()
+	}
+	lines := make([]string, len(s.Credentials))
+	for i, credential := range s.Credentials {
+		lines[i] = credential.Key()
+	}
+	return strings.Join(lines, "\n")
 }
 
 func kimiSession(c *gin.Context) (model.AuthSessionIdentity, error) {
@@ -53,6 +67,12 @@ func readKimiOAuthState(c *gin.Context, handle, intent string, consume bool) (ki
 	if err != nil {
 		return state, err
 	}
+	return readKimiOAuthStateForSession(identity, handle, intent, consume)
+}
+
+func readKimiOAuthStateForSession(identity model.AuthSessionIdentity, handle, intent string, consume bool) (kimiOAuthState, error) {
+	var state kimiOAuthState
+	var err error
 	match := model.AuthFlowMatch{Purpose: kimiOAuthPurpose, Provider: "kimi", Intent: intent, UserId: identity.UserID, SessionId: identity.SessionID}
 	action := func(tx *gorm.DB, flow *model.AuthFlow) error {
 		if common.UnmarshalJsonStr(flow.Payload, &state) != nil || state.Identity != identity {
@@ -83,7 +103,7 @@ func resolveKimiOAuthReference(c *gin.Context, key string, consume bool) (string
 	if err != nil {
 		return "", errors.New("Kimi authorization expired or was already used; authorize again")
 	}
-	return state.Credential.Key(), nil
+	return state.key(), nil
 }
 func StartKimiOAuth(c *gin.Context) {
 	identity, err := kimiSession(c)
@@ -201,10 +221,43 @@ func ImportKimiCredentials(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 2*kimi.MaxImportBytes+1024)
 	var req struct {
 		JSON   string `json:"json"`
+		Stage  bool   `json:"stage"`
 		Region string `json:"region"`
 	}
 	if c.ShouldBindJSON(&req) != nil {
 		common.ApiErrorT(c, "Invalid parameters")
+		return
+	}
+	if req.Stage {
+		identity, err := kimiSession(c)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		normalized, count, err := service.NormalizeKimiKeys(req.JSON)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		if count == 0 || count > kimi.MaxAccounts {
+			common.ApiErrorT(c, "Invalid parameters")
+			return
+		}
+		credentials := make([]kimi.Credential, 0, count)
+		for line := range strings.SplitSeq(normalized, "\n") {
+			credential, err := kimi.Parse(line)
+			if err != nil {
+				common.ApiError(c, err)
+				return
+			}
+			credentials = append(credentials, credential)
+		}
+		handle, err := createKimiOAuthState(kimiOAuthState{Identity: identity, Credentials: credentials, Deadline: time.Now().Add(10 * time.Minute).Unix()}, "ready")
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		c.JSON(200, gin.H{"success": true, "data": gin.H{"key": kimiOAuthPrefix + handle}})
 		return
 	}
 	credentials, issues, err := kimi.Preview(req.JSON, req.Region)
@@ -223,7 +276,7 @@ func ImportKimiCredentials(c *gin.Context) {
 
 // saveKimiOAuthReference consumes a ready result in the same transaction as its
 // channel write. Validation or database failures leave the result available.
-func saveKimiOAuthReference(c *gin.Context, key string, save func(*gorm.DB) error) error {
+func saveKimiOAuthReference(c *gin.Context, key string, save func(*gorm.DB) error, expected ...string) error {
 	handle, ok := strings.CutPrefix(strings.TrimSpace(key), kimiOAuthPrefix)
 	if !ok {
 		return save(model.DB)
@@ -239,6 +292,12 @@ func saveKimiOAuthReference(c *gin.Context, key string, save func(*gorm.DB) erro
 		}
 		if err := model.ValidateAuthSessionWithTx(tx, identity); err != nil {
 			return err
+		}
+		if state.BusyUntil > time.Now().Unix() {
+			return errors.New("Kimi model discovery is in progress; wait before saving")
+		}
+		if len(expected) > 0 && state.key() != expected[0] {
+			return errors.New("Kimi credential changed; retry saving the channel")
 		}
 		return save(tx)
 	})
@@ -313,4 +372,108 @@ func GetKimiChannelUsage(c *gin.Context) {
 		entries = append(entries, gin.H{"name": name, "used_ratio": ratio, "reset_time": reset})
 	}
 	c.JSON(200, gin.H{"success": true, "data": entries})
+}
+
+// mutateKimiDraft serializes draft changes against save and cancellation without
+// holding a database transaction during upstream I/O.
+func mutateKimiDraft(identity model.AuthSessionIdentity, handle string, mutate func(*kimiOAuthState) error) error {
+	_, err := model.ConsumeAuthFlowWithAction(handle, model.AuthFlowMatch{Purpose: kimiOAuthPurpose, Provider: "kimi", Intent: "ready", UserId: identity.UserID, SessionId: identity.SessionID}, func(tx *gorm.DB, flow *model.AuthFlow) error {
+		var state kimiOAuthState
+		if common.UnmarshalJsonStr(flow.Payload, &state) != nil || state.Identity != identity {
+			return model.ErrAuthFlowInvalid
+		}
+		if err := model.ValidateAuthSessionWithTx(tx, identity); err != nil {
+			return err
+		}
+		if err := mutate(&state); err != nil {
+			return err
+		}
+		payload, err := common.Marshal(state)
+		if err != nil {
+			return err
+		}
+		return tx.Model(flow).Updates(map[string]any{"payload": string(payload), "consumed_at": nil}).Error
+	})
+	return err
+}
+
+// Preview uses the same session-bound draft for retries, including after metadata failures.
+func fetchKimiDraftModels(c *gin.Context, reference string, settings dto.ChannelSettings) ([]string, error) {
+	handle, ok := strings.CutPrefix(strings.TrimSpace(reference), kimiOAuthPrefix)
+	if !ok {
+		return nil, errors.New("Kimi preview requires a session credential draft")
+	}
+	identity, err := kimiSession(c)
+	if err != nil {
+		return nil, err
+	}
+	if err := mutateKimiDraft(identity, handle, func(state *kimiOAuthState) error {
+		if state.BusyUntil > time.Now().Unix() {
+			return errors.New("Kimi model discovery is in progress; wait before saving")
+		}
+		// The preview has a 40 second deadline. This bound also recovers a draft
+		// after process termination without extending its enrollment expiry.
+		state.BusyUntil = time.Now().Add(time.Minute).Unix()
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = mutateKimiDraft(identity, handle, func(state *kimiOAuthState) error { state.BusyUntil = 0; return nil })
+	}()
+	state, err := readKimiOAuthStateForSession(identity, handle, "ready", false)
+	if err != nil {
+		return nil, err
+	}
+	first := strings.Split(state.key(), "\n")[0]
+	read := func(original kimi.Credential) (kimi.Credential, error) {
+		latest, err := readKimiOAuthStateForSession(identity, handle, "ready", false)
+		if err != nil {
+			return original, err
+		}
+		for line := range strings.SplitSeq(latest.key(), "\n") {
+			candidate, err := kimi.Parse(line)
+			if err == nil && candidate.ID == original.ID && candidate.Region == original.Region {
+				return candidate, nil
+			}
+		}
+		return original, model.ErrAuthFlowInvalid
+	}
+	persist := func(before, after kimi.Credential) error {
+		return mutateKimiDraft(identity, handle, func(latest *kimiOAuthState) error {
+			credentials := latest.Credentials
+			if len(credentials) == 0 {
+				credentials = []kimi.Credential{latest.Credential}
+			}
+			found := false
+			for i, credential := range credentials {
+				if credential.ID != before.ID || credential.Region != before.Region {
+					continue
+				}
+				if credential.Key() != before.Key() {
+					return errors.New("Kimi credential changed during renewal")
+				}
+				credentials[i] = after
+				found = true
+			}
+			if !found {
+				return model.ErrAuthFlowInvalid
+			}
+			latest.Credentials = credentials
+			return nil
+		})
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 40*time.Second)
+	defer cancel()
+	models, err := service.ResolveKimiDraftModels(ctx, first, settings, "draft:"+handle, read, persist)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(models))
+	for _, m := range models {
+		if m.ID != "" {
+			out = append(out, m.ID)
+		}
+	}
+	return out, nil
 }

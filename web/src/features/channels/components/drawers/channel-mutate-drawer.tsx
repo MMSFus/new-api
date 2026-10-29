@@ -1237,6 +1237,12 @@ export function ChannelMutateDrawer({
     () => ({ kind: 'saved', channelId: channelId || 0 }),
     [channelId]
   )
+  const handleCredentialDraft = useCallback(
+    (key: string) => {
+      form.setValue('key', key)
+    },
+    [form]
+  )
   const discovery = useChannelModelDiscovery({
     enabled:
       open &&
@@ -1244,6 +1250,7 @@ export function ChannelMutateDrawer({
       MODEL_FETCHABLE_TYPES.has(currentType) &&
       (!isEditing || Boolean(channelData?.data)),
     request: previewModels ? previewRequest : savedRequest,
+    onCredentialDraft: handleCredentialDraft,
   })
   const upstreamModelList =
     discovery.status === 'success' ? discovery.models : NO_UPSTREAM_MODELS

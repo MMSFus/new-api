@@ -764,6 +764,7 @@ func AddChannel(c *gin.Context) {
 	}
 
 	kimiReference := ""
+	kimiResolvedKey := ""
 	if addChannelRequest.Channel != nil && addChannelRequest.Channel.Type == constant.ChannelTypeKimi {
 		kimiReference = addChannelRequest.Channel.Key
 		key, err := resolveKimiOAuthReference(c, addChannelRequest.Channel.Key, false)
@@ -781,6 +782,7 @@ func AddChannel(c *gin.Context) {
 			return
 		}
 		addChannelRequest.Channel.Key = key
+		kimiResolvedKey = key
 	}
 	if addChannelRequest.Channel != nil && addChannelRequest.Channel.Type == constant.ChannelTypeAntigravity {
 		key, count, err := service.NormalizeAntigravityKeys(addChannelRequest.Channel.Key)
@@ -877,7 +879,7 @@ func AddChannel(c *gin.Context) {
 		channels = append(channels, *localChannel)
 	}
 	if strings.HasPrefix(strings.TrimSpace(kimiReference), kimiOAuthPrefix) {
-		err = saveKimiOAuthReference(c, kimiReference, func(tx *gorm.DB) error { return model.BatchInsertChannelsWithTx(tx, channels) })
+		err = saveKimiOAuthReference(c, kimiReference, func(tx *gorm.DB) error { return model.BatchInsertChannelsWithTx(tx, channels) }, kimiResolvedKey)
 	} else {
 		err = model.BatchInsertChannels(channels)
 	}
@@ -1161,6 +1163,7 @@ func UpdateChannel(c *gin.Context) {
 		(channel.BaseURL == nil || strings.TrimSpace(*channel.BaseURL) == "")
 	// 使用统一的校验函数
 	kimiReference := ""
+	kimiResolvedKey := ""
 	if channel.Type == constant.ChannelTypeKimi && channel.Key != "" {
 		kimiReference = channel.Key
 		key, err := resolveKimiOAuthReference(c, channel.Key, false)
@@ -1169,6 +1172,7 @@ func UpdateChannel(c *gin.Context) {
 			return
 		}
 		channel.Key = key
+		kimiResolvedKey = key
 	}
 	if err := validateChannel(&channel.Channel, false); err != nil {
 		common.ApiError(c, err)
@@ -1297,7 +1301,7 @@ func UpdateChannel(c *gin.Context) {
 		}
 	}
 	if strings.HasPrefix(strings.TrimSpace(kimiReference), kimiOAuthPrefix) {
-		err = saveKimiOAuthReference(c, kimiReference, func(tx *gorm.DB) error { return channel.UpdateWithTx(tx) })
+		err = saveKimiOAuthReference(c, kimiReference, func(tx *gorm.DB) error { return channel.UpdateWithTx(tx) }, kimiResolvedKey)
 	} else {
 		err = channel.Update()
 	}
@@ -1514,12 +1518,17 @@ func FetchModels(c *gin.Context) {
 	}
 
 	if req.Type == constant.ChannelTypeKimi {
-		key, err := resolveKimiOAuthReference(c, req.Key, false)
+		settings := dto.ChannelSettings{}
+		if req.Proxy != nil {
+			settings.Proxy = strings.TrimSpace(*req.Proxy)
+		}
+		models, err := fetchKimiDraftModels(c, req.Key, settings)
 		if err != nil {
-			common.ApiError(c, err)
+			common.ApiErrorT(c, "Failed to fetch models: {{error}}", map[string]any{"error": err.Error()})
 			return
 		}
-		req.Key = key
+		c.JSON(http.StatusOK, gin.H{"success": true, "data": models})
+		return
 	}
 	var channel *model.Channel
 	if req.Type == constant.ChannelTypeAdvancedCustom || req.ChannelID > 0 {

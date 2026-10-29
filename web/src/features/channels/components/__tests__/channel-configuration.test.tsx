@@ -1931,6 +1931,58 @@ test('an invalid edit switches categories and replaces configured styling with t
   ).not.toBeInTheDocument()
 })
 
+test('a new Kimi channel stages imported credentials before discovery and retains the draft when models fail', async () => {
+  const key = JSON.stringify({
+    schema_version: 1,
+    provider: 'kimi',
+    region: 'global',
+    auth_type: 'oauth',
+    account_mode: 'coding',
+    refresh_token: 'imported-refresh',
+  })
+  const post = vi.spyOn(api, 'post').mockImplementation(async (url) => {
+    if (url === '/api/channel/kimi/import') {
+      return {
+        data: { success: true, data: { key: 'kimi-oauth:preview-draft' } },
+      }
+    }
+    if (url === '/api/channel/fetch_models') {
+      return {
+        data: { success: false, message: 'Kimi metadata request failed' },
+      }
+    }
+    return { data: { success: true } }
+  })
+  const user = userEvent.setup()
+  render(<ConfigurationHarness />)
+  await user.click(screen.getByRole('option', { name: /^Kimi / }))
+  fireEvent.change(screen.getByLabelText('API Key *'), {
+    target: { value: key },
+  })
+  await user.click(screen.getByRole('button', { name: 'Fetch from Upstream' }))
+  expect(await screen.findByText('Kimi metadata request failed')).toBeVisible()
+  expect(screen.getByLabelText('API Key *')).toHaveValue(
+    'kimi-oauth:preview-draft'
+  )
+  expect(post).toHaveBeenCalledWith(
+    '/api/channel/fetch_models',
+    expect.objectContaining({
+      key: 'kimi-oauth:preview-draft',
+      type: CHANNEL_TYPE_KIMI,
+    }),
+    expect.anything()
+  )
+  await user.click(screen.getByRole('button', { name: 'Retry' }))
+  await waitFor(() =>
+    expect(
+      post.mock.calls.filter(([url]) => url === '/api/channel/fetch_models')
+    ).toHaveLength(2)
+  )
+  expect(
+    post.mock.calls.filter(([url]) => url === '/api/channel/kimi/import')
+  ).toHaveLength(1)
+})
+
 test('a saved Kimi channel exposes upstream discovery and allows selecting returned models', async () => {
   editingChannel = {
     ...editingChannel,
