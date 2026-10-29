@@ -250,7 +250,7 @@ jobs:
         run: |
           mkdir -p web/dist
           touch web/dist/index.html
-          go test ./model/ -run 'TestSimulatedCacheLogSearchAcrossDatabases' -count=1 -v
+          go test ./model/ -run 'TestSimulatedCacheLogSearchAcrossDatabases|TestChannelCostBackfillAcrossDatabases' -count=1 -v
 
   frontend:
     name: Frontend test (${{ matrix.shard }})

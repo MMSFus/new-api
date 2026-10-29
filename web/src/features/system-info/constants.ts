@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 // Maps backend system task type constants to i18n source keys. Unknown/future
 // types fall back to their raw identifier so the panel never shows blank.
 export const SYSTEM_TASK_TYPE_LABEL: Record<string, string> = {
+  channel_cost_backfill: 'Historical cost backfill',
   log_cleanup: 'Log cleanup',
   channel_test: 'Batch channel test',
   model_update: 'Batch upstream model update',

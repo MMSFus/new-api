@@ -382,3 +382,41 @@ func GetChannelCostLogs(c *gin.Context) {
 	pageInfo.SetItems(items)
 	common.ApiSuccess(c, pageInfo)
 }
+
+func CreateChannelCostBackfill(c *gin.Context) {
+	if !model.ChannelCostBackfillSupported() {
+		common.ApiError(c, common.NewMessage("Historical cost backfill is not supported by this log database"))
+		return
+	}
+	filter := logFilterFromQuery(c, true)
+	if err := boundLogFilterRange(&filter, channelCostMaxRange); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	filter.EndTimestamp = min(filter.EndTimestamp, common.GetTimestamp())
+	if filter.StartTimestamp > filter.EndTimestamp {
+		common.ApiError(c, common.NewMessage("End time must be after start time"))
+		return
+	}
+	task, created, err := service.EnqueueSystemTask(model.SystemTaskTypeChannelCostBackfill, service.ChannelCostBackfillPayload{Filter: filter})
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	// Return the active task and its own range even when a different range was
+	// requested. The UI must never imply a second concurrent task was created.
+	common.ApiSuccess(c, gin.H{"task": task.ToResponse(), "created": created})
+}
+
+func GetChannelCostBackfill(c *gin.Context) {
+	task, err := model.GetLatestSystemTask(model.SystemTaskTypeChannelCostBackfill)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	var response any
+	if task != nil {
+		response = task.ToResponse()
+	}
+	common.ApiSuccess(c, gin.H{"supported": model.ChannelCostBackfillSupported(), "task": response})
+}

@@ -7,6 +7,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -231,4 +232,42 @@ func TestEnqueueSystemTaskReportsCreatedAndExistingActive(t *testing.T) {
 	require.True(t, created)
 	require.NotNil(t, second)
 	assert.NotEqual(t, first.TaskID, second.TaskID)
+}
+
+func TestChannelCostBackfillTaskLifecycle(t *testing.T) {
+	truncate(t)
+	channel := &model.Channel{Id: 901, Name: "backfill", Key: "test"}
+	channel.SetSetting(dto.ChannelSettings{UpstreamCostRatio: common.GetPointer(0.5)})
+	require.NoError(t, model.DB.Create(channel).Error)
+	log := model.Log{CreatedAt: 100, Type: model.LogTypeConsume, ChannelId: 901, Quota: 100, Other: `{"group_ratio":2}`}
+	require.NoError(t, model.LOG_DB.Create(&log).Error)
+	payload := ChannelCostBackfillPayload{Filter: model.LogFilter{StartTimestamp: 100, EndTimestamp: 200, Channel: 901}}
+	task, created, err := EnqueueSystemTask(model.SystemTaskTypeChannelCostBackfill, payload)
+	require.NoError(t, err)
+	require.True(t, created)
+	duplicate, created, err := EnqueueSystemTask(model.SystemTaskTypeChannelCostBackfill, payload)
+	require.NoError(t, err)
+	assert.False(t, created)
+	assert.Equal(t, task.TaskID, duplicate.TaskID)
+	claimedTask, claimed, err := model.ClaimSystemTask(task.ID, task.Type, "cost-runner", common.GetTimestamp()+60)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	channelCostBackfillHandler{}.Run(context.Background(), claimedTask, "cost-runner")
+	finished, err := model.GetSystemTaskByTaskID(task.TaskID)
+	require.NoError(t, err)
+	assert.Equal(t, model.SystemTaskStatusSucceeded, finished.Status)
+	var state model.ChannelCostBackfillState
+	require.NoError(t, common.UnmarshalJsonStr(finished.Result, &state))
+	assert.EqualValues(t, 1, state.Updated)
+	assert.Equal(t, 100, state.Progress)
+
+	invalid, _, err := EnqueueSystemTask(model.SystemTaskTypeChannelCostBackfill, ChannelCostBackfillPayload{})
+	require.NoError(t, err)
+	invalid, claimed, err = model.ClaimSystemTask(invalid.ID, invalid.Type, "cost-runner", common.GetTimestamp()+60)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	channelCostBackfillHandler{}.Run(context.Background(), invalid, "cost-runner")
+	invalid, err = model.GetSystemTaskByTaskID(invalid.TaskID)
+	require.NoError(t, err)
+	assert.Equal(t, model.SystemTaskStatusFailed, invalid.Status)
 }

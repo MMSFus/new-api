@@ -34,6 +34,7 @@ import {
   type ChannelCostFilters,
   type ChannelCostLog,
 } from './api'
+import { ChannelCostBackfillPanel } from './backfill-panel'
 import { ChannelCostBreakdown } from './breakdown'
 import { useChannelCostColumns } from './columns'
 import { ChannelCostSummaryCards } from './summary-cards'
@@ -135,7 +136,7 @@ export function ChannelCost() {
         <div className='space-y-4'>
           <p className='text-muted-foreground text-sm'>
             {t(
-              "Cost is the official price times the channel's upstream cost ratio at the time of the request. Requests on channels without a ratio are uncosted and left out of profit and margin."
+              'Costs use channel ratios saved at request time. Historical backfill estimates costs using ratios at task start and labels the results. Uncosted requests are excluded from profit and margin.'
             )}
           </p>
           <SimulatedCacheFilterBar
@@ -173,6 +174,17 @@ export function ChannelCost() {
             loading={canQuery && reportQuery.isPending}
             error={!canQuery || reportQuery.isError}
           />
+          <ChannelCostBackfillPanel
+            filters={{
+              ...filters,
+              start_timestamp: effectiveStart,
+              end_timestamp: effectiveEnd,
+            }}
+            missing={report?.total.uncosted_requests}
+            enabled={
+              canQuery && !reportQuery.isFetching && !reportQuery.isError
+            }
+          />
           <ChannelCostTrendChart
             trend={report?.trend ?? []}
             rangeSeconds={effectiveEnd - effectiveStart}
@@ -202,7 +214,9 @@ export function ChannelCost() {
             isLoading={canQuery && listQuery.isPending}
             isFetching={listQuery.isFetching}
             emptyTitle={
-              listQuery.isError ? t('Failed to load cost logs') : t('No records')
+              listQuery.isError
+                ? t('Failed to load cost logs')
+                : t('No records')
             }
             hideMobile
             fixedHeight={false}

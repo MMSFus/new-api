@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { t } from 'i18next'
 
 import type { ApiResponse } from '@/features/profile/types'
+import type { SystemTask } from '@/features/system-settings/types'
 import { api } from '@/lib/api'
 import { createServerError } from '@/lib/server-error-message'
 
@@ -86,6 +87,9 @@ export interface ChannelCostSnapshot {
   group_ratio: number
   base_quota: number
   cost_quota: number
+  source?: 'historical_backfill'
+  backfilled_at?: number
+  task_id?: string
 }
 
 export interface ChannelCostLog {
@@ -139,6 +143,58 @@ export async function getChannelCostLogs(
   )
   if (!response.data.success || !response.data.data) {
     throw createServerError(response.data, t('Failed to load cost logs'))
+  }
+  return response.data.data
+}
+
+export type CostBackfillState = {
+  total: number
+  processed: number
+  updated: number
+  skipped: number
+  progress: number
+  reasons: Record<string, number>
+}
+
+export type CostBackfillTask = SystemTask<
+  {
+    filter: {
+      StartTimestamp: number
+      EndTimestamp: number
+      Channel: number
+      ModelName: string
+      Username: string
+      Group: string
+    }
+  },
+  CostBackfillState,
+  CostBackfillState
+>
+
+export type CostBackfillStatus = {
+  supported: boolean
+  task: CostBackfillTask | null
+}
+
+export async function getCostBackfillStatus(): Promise<CostBackfillStatus> {
+  const response = await api.get<ApiResponse<CostBackfillStatus>>(
+    '/api/channel_cost/backfill'
+  )
+  if (!response.data.success || !response.data.data) {
+    throw createServerError(response.data, t('Failed to load backfill status'))
+  }
+  return response.data.data
+}
+
+export async function startCostBackfill(params: ChannelCostFilters) {
+  const response = await api.post<
+    ApiResponse<{ task: CostBackfillTask; created: boolean }>
+  >('/api/channel_cost/backfill', null, { params })
+  if (!response.data.success || !response.data.data) {
+    throw createServerError(
+      response.data,
+      t('Failed to start historical cost backfill')
+    )
   }
   return response.data.data
 }
