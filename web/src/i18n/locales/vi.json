@@ -1522,6 +1522,7 @@
     "Connect to MiniMax model services": "Kết nối với dịch vụ mô hình MiniMax",
     "Connect to Mistral AI model services": "Kết nối với dịch vụ mô hình Mistral AI",
     "Connect to model services through a Sub2API gateway": "Kết nối với dịch vụ mô hình qua cổng Sub2API",
+    "Reverse proxy Kimi web chat with account refresh_token credentials": "Proxy ngược chat web Kimi bằng thông tin xác thực refresh_token của tài khoản",
     "Connect to models through the Google Gemini API": "Kết nối với các mô hình qua API Google Gemini",
     "Connect to Moonshot AI model services": "Kết nối với dịch vụ mô hình Moonshot AI",
     "Connect to New API model services with support for multiple task plugins": "Kết nối dịch vụ mô hình qua New API, hỗ trợ nhiều plugin tác vụ",

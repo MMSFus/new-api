@@ -18,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	provider "github.com/QuantumNous/new-api/pkg/antigravity"
+	"github.com/QuantumNous/new-api/relay"
 	channel "github.com/QuantumNous/new-api/relay/channel/antigravity"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -34,6 +35,26 @@ import (
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestNativeChannelRoutingPreservesKimiAndAntigravity(t *testing.T) {
+	for _, tc := range []struct {
+		channelType int
+		apiType     int
+		name        string
+	}{
+		{64, constant.APITypeKimi, "kimi"},
+		{65, constant.APITypeAntigravity, "antigravity"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			apiType, ok := common.ChannelType2APIType(tc.channelType)
+			require.True(t, ok)
+			require.Equal(t, tc.apiType, apiType)
+			adaptor := relay.GetAdaptor(apiType)
+			require.NotNil(t, adaptor)
+			assert.Equal(t, tc.name, adaptor.GetChannelName())
+		})
+	}
+}
 
 func TestImportCPAAndSub2API(t *testing.T) {
 	for _, tc := range []struct {

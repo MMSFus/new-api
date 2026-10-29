@@ -1522,6 +1522,7 @@
     "Connect to MiniMax model services": "接入 MiniMax 模型服務",
     "Connect to Mistral AI model services": "接入 Mistral AI 模型服務",
     "Connect to model services through a Sub2API gateway": "透過 Sub2API 閘道接入模型服務",
+    "Reverse proxy Kimi web chat with account refresh_token credentials": "使用帳號 refresh_token 憑據反向代理 Kimi 網頁版對話",
     "Connect to models through the Google Gemini API": "透過 Google Gemini API 接入模型服務",
     "Connect to Moonshot AI model services": "接入 Moonshot AI 模型服務",
     "Connect to New API model services with support for multiple task plugins": "接入 New API 閘道的模型服務，支援多個任務外掛",

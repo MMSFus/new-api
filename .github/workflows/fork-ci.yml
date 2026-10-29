@@ -252,6 +252,14 @@ jobs:
           touch web/dist/index.html
           go test ./model/ -run 'TestSimulatedCacheLogSearchAcrossDatabases|TestChannelCostBackfillAcrossDatabases' -count=1 -v
 
+      - name: Test Antigravity credentials on MySQL and PostgreSQL
+        env:
+          TEST_MYSQL_DSN: root:root@tcp(127.0.0.1:3306)/new_api_test?parseTime=true&charset=utf8mb4
+          TEST_POSTGRES_DSN: postgres://postgres:postgres@127.0.0.1:5432/new_api_test?sslmode=disable
+        run: |
+          TEST_SECURITY_DIALECT=mysql go test ./controller -run TestAntigravity -count=1 -v
+          TEST_SECURITY_DIALECT=postgres go test ./controller -run TestAntigravity -count=1 -v
+
   frontend:
     name: Frontend test (${{ matrix.shard }})
     needs: changes
