@@ -301,6 +301,7 @@ const SENSITIVE_FORM_FIELDS = [
   'simulated_cache_enabled',
   'simulated_cache_hit_rate_min',
   'simulated_cache_hit_rate_max',
+  'upstream_cost_ratio',
   'proxy',
   'http_protocol',
   'http2_connection_shards',
@@ -2318,6 +2319,30 @@ export function ChannelMutateDrawer({
                 />
               </FormControl>
               <FormDescription>{t(FIELD_DESCRIPTIONS.WEIGHT)}</FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
+        <FormField
+          control={form.control}
+          name='upstream_cost_ratio'
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>{t('Upstream cost ratio')}</FormLabel>
+              <FormControl>
+                <Input
+                  type='number'
+                  inputMode='decimal'
+                  step='any'
+                  placeholder='0.3'
+                  disabled={sensitiveLocked}
+                  {...field}
+                />
+              </FormControl>
+              <FormDescription>
+                {t(FIELD_DESCRIPTIONS.UPSTREAM_COST_RATIO)}
+              </FormDescription>
               <FormMessage />
             </FormItem>
           )}

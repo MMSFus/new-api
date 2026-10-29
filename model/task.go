@@ -175,6 +175,14 @@ type TaskBillingContext struct {
 	TieredSnapshot  *billingexpr.BillingSnapshot `json:"tiered_snapshot,omitempty"`
 }
 
+// BillingGroupRatio 返回提交时的分组倍率；旧任务没有计费上下文时为 0。
+func (t *Task) BillingGroupRatio() float64 {
+	if bc := t.PrivateData.BillingContext; bc != nil {
+		return bc.GroupRatio
+	}
+	return 0
+}
+
 // ResultRetrievable reports whether retrieval surfaces (native query routes,
 // protocol retrieve endpoints, artifact projection) may serve this task.
 func (t *Task) ResultRetrievable() bool {

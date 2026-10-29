@@ -18,7 +18,9 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import {
   Box,
+  Calculator,
   CreditCard,
+  DatabaseZap,
   FileText,
   FlaskConical,
   Key,
@@ -36,6 +38,10 @@ import {
 import { useTranslation } from 'react-i18next'
 
 import type { SidebarData } from '@/components/layout/types'
+import {
+  ADMIN_PERMISSION_ACTIONS,
+  ADMIN_PERMISSION_RESOURCES,
+} from '@/lib/admin-permissions'
 import { ROLE } from '@/lib/roles'
 
 /**
@@ -142,6 +148,24 @@ export function useSidebarData(): SidebarData {
             title: t('Subscriptions'),
             url: '/subscriptions',
             icon: CreditCard,
+          },
+          {
+            title: t('Cost & Billing'),
+            url: '/channel-cost',
+            icon: Calculator,
+            requiredPermission: {
+              resource: ADMIN_PERMISSION_RESOURCES.CHANNEL_COST,
+              action: ADMIN_PERMISSION_ACTIONS.READ,
+            },
+          },
+          {
+            title: t('Simulated cache'),
+            url: '/simulated-cache',
+            icon: DatabaseZap,
+            requiredPermission: {
+              resource: ADMIN_PERMISSION_RESOURCES.SIMULATED_CACHE,
+              action: ADMIN_PERMISSION_ACTIONS.READ,
+            },
           },
           {
             title: t('System Info'),

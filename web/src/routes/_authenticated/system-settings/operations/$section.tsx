@@ -28,6 +28,9 @@ export const Route = createFileRoute(
   '/_authenticated/system-settings/operations/$section'
 )({
   beforeLoad: ({ params }) => {
+    if (params.section === 'simulated-cache') {
+      throw redirect({ to: '/simulated-cache', replace: true })
+    }
     if (params.section === 'monitoring') {
       throw redirect({
         to: '/system-settings/request-policies/$section',

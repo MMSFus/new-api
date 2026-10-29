@@ -27,12 +27,16 @@ import {
 } from '@/features/usage-logs/components/logs-filter-toolbar'
 
 import type { SimulatedCacheFilters } from './api'
-import type { SimulatedCacheRow } from './columns'
 
-export function SimulatedCacheFilterBar(props: {
-  table: Table<SimulatedCacheRow>
-  filters: SimulatedCacheFilters
-  onChange: (patch: Partial<SimulatedCacheFilters>) => void
+/** The log range search shared with the cost report, which adds a group. */
+type LogRangeFilters = SimulatedCacheFilters & { group?: string }
+
+export function SimulatedCacheFilterBar<TData>(props: {
+  table: Table<TData>
+  filters: LogRangeFilters
+  onChange: (patch: Partial<LogRangeFilters>) => void
+  /** Shows the group filter. */
+  withGroup?: boolean
   isFetching: boolean
   onSearch: () => void
   onReset: () => void
@@ -99,12 +103,25 @@ export function SimulatedCacheFilterBar(props: {
           }
         />
       </LogsFilterField>
+      {props.withGroup && (
+        <LogsFilterField>
+          <LogsFilterInput
+            aria-label={t('Group')}
+            placeholder={t('Group')}
+            value={props.filters.group ?? ''}
+            onChange={(event) =>
+              props.onChange({ group: event.target.value || undefined })
+            }
+          />
+        </LogsFilterField>
+      )}
     </>
   )
   const filterCount = [
     props.filters.channel,
     props.filters.model_name,
     props.filters.username,
+    props.filters.group,
   ].filter(Boolean).length
   return (
     <LogsFilterToolbar

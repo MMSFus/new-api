@@ -41,6 +41,8 @@ type LogOther struct {
 	adminInfo map[string]any
 	rootInfo  map[string]any
 	auditInfo map[string]any
+	// costBasisQuota is never stored; see SetCostBasisQuota.
+	costBasisQuota *int
 }
 
 func NewLogOther() *LogOther {

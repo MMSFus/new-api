@@ -89,6 +89,7 @@ export interface ChannelSettings {
   simulated_cache_hit_rate?: number
   simulated_cache_hit_rate_min?: number
   simulated_cache_hit_rate_max?: number
+  upstream_cost_ratio?: number
   proxy?: string
   pass_through_body_enabled?: boolean
   responses_websocket_enabled?: boolean

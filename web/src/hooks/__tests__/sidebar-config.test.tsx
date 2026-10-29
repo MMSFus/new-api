@@ -30,6 +30,12 @@ import { useAuthStore } from '@/stores/auth-store'
 
 import { useSidebarConfig } from '../use-sidebar-config'
 import { useSidebarData } from '../use-sidebar-data'
+import { useSidebarView } from '../use-sidebar-view'
+
+vi.mock('@tanstack/react-router', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@tanstack/react-router')>()),
+  useLocation: () => '/dashboard/overview',
+}))
 
 beforeEach(() => {
   vi.stubGlobal('localStorage', {
@@ -227,4 +233,53 @@ describe('usage log sidebar entry', () => {
       expect(itemTitled(result.current, 'Usage Logs')).toBeUndefined()
     }
   )
+})
+
+describe('permission-gated admin entries', () => {
+  function adminSidebarTitles(
+    role: number,
+    adminPermissions?: Record<string, Record<string, boolean>>
+  ) {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    client.setQueryData(['status'], { SidebarModulesAdmin: '' })
+    useAuthStore.getState().auth.setUser({
+      id: 2,
+      username: 'bob',
+      role,
+      permissions: { admin_permissions: adminPermissions },
+      sidebar_modules: '',
+    })
+    function Wrapper(props: { children: ReactNode }) {
+      return (
+        <QueryClientProvider client={client}>
+          {props.children}
+        </QueryClientProvider>
+      )
+    }
+    const { result } = renderHook(() => useSidebarView(), { wrapper: Wrapper })
+    return result.current.navGroups
+      .flatMap((group) => group.items)
+      .map((item) => item.title)
+  }
+
+  it('admins without the grants do not see Cost & Billing or Simulated cache', () => {
+    const titles = adminSidebarTitles(10)
+    expect(titles).toContain('Channels')
+    expect(titles).not.toContain('Cost & Billing')
+    expect(titles).not.toContain('Simulated cache')
+  })
+
+  it('each grant reveals only its own entry', () => {
+    const titles = adminSidebarTitles(10, { channel_cost: { read: true } })
+    expect(titles).toContain('Cost & Billing')
+    expect(titles).not.toContain('Simulated cache')
+  })
+
+  it('root sees both entries without explicit grants', () => {
+    const titles = adminSidebarTitles(100)
+    expect(titles).toContain('Cost & Billing')
+    expect(titles).toContain('Simulated cache')
+  })
 })
