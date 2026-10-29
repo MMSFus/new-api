@@ -26,7 +26,6 @@ import {
   TestTube,
   DollarSign,
   ListChecks,
-  SortAsc,
   SlidersHorizontal,
   RefreshCw,
   ArrowUpFromLine,
@@ -63,17 +62,22 @@ import {
   handleTestAllChannels,
   handleUpdateAllBalances,
 } from '../lib'
+import { getRouteApi } from '@tanstack/react-router'
+import type { ChannelSortBy } from '../types'
+import { ChannelSortControl } from './channel-priority-controls'
 import { useChannels } from './channels-provider'
 
 export function ChannelsPrimaryButtons() {
   const { t } = useTranslation()
+  const navigate = getRouteApi('/_authenticated/channels/').useNavigate()
   const {
     setOpen,
     setCurrentRow,
     enableTagMode,
     setEnableTagMode,
-    idSort,
-    setIdSort,
+    sorting,
+    setSorting,
+    setPriorityActionContainer,
     batchMode,
     setBatchMode,
     upstream,
@@ -94,10 +98,6 @@ export function ChannelsPrimaryButtons() {
     setEnableTagMode(checked)
   }
 
-  const handleIdSortToggle = (checked: boolean) => {
-    localStorage.setItem('channels-id-sort', String(checked))
-    setIdSort(checked)
-  }
 
   const handleBatchModeToggle = (checked: boolean) => {
     setBatchMode(checked)
@@ -105,7 +105,8 @@ export function ChannelsPrimaryButtons() {
 
   return (
     <>
-      <div className='flex items-center gap-2'>
+      <div className='flex flex-wrap items-center gap-2'>
+        <div ref={setPriorityActionContainer} className='empty:hidden' />
         {/* Display modes: low-frequency switches kept in one menu */}
         <DropdownMenu>
           <DropdownMenuTrigger
@@ -135,15 +136,20 @@ export function ChannelsPrimaryButtons() {
               <Tags className='mr-2 h-4 w-4' />
               {t('Tag Mode')}
             </DropdownMenuCheckboxItem>
-            <DropdownMenuCheckboxItem
-              checked={idSort}
-              onCheckedChange={handleIdSortToggle}
-            >
-              <SortAsc className='mr-2 h-4 w-4' />
-              {t('Sort by ID')}
-            </DropdownMenuCheckboxItem>
           </DropdownMenuContent>
         </DropdownMenu>
+
+        <ChannelSortControl
+          field={(sorting[0]?.id ?? 'priority') as ChannelSortBy}
+          desc={sorting[0]?.desc ?? true}
+          onChange={(field, desc) => {
+            setSorting([{ id: field, desc }])
+            void navigate({
+              search: (previous) => ({ ...previous, page: 1 }),
+              replace: true,
+            })
+          }}
+        />
 
         {/* Create Channel */}
         <Tooltip>

@@ -49,6 +49,8 @@ const STATUS_RELATED_KEYS = new Set([
   'passkey.origins',
   'theme_default.light',
   'theme_default.dark',
+  'QuotaRemindEnabled',
+  'QuotaRemindThreshold',
 ])
 
 export function useUpdateOption() {
