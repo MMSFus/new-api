@@ -1,8 +1,6 @@
 package model
 
 import (
-	"github.com/QuantumNous/new-api/common"
-
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -18,7 +16,9 @@ import (
 // is skipped there; SQLite's single-writer model makes one of two conflicting
 // transactions fail instead of both committing.
 func lockForUpdate(tx *gorm.DB) *gorm.DB {
-	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
+	// A separately configured log database can use a different engine from
+	// the main database. Follow the connection being locked.
+	if tx.Dialector.Name() == "sqlite" {
 		return tx
 	}
 	return tx.Clauses(clause.Locking{Strength: "UPDATE"})

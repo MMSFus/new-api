@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -34,5 +35,11 @@ func TestLockForUpdateEmitsRowLock(t *testing.T) {
 	assert.Contains(t, buildSQL(), "FOR UPDATE")
 
 	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
-	assert.NotContains(t, buildSQL(), "FOR UPDATE")
+	// The dummy dialector is not SQLite, regardless of the configured main
+	// database type; the helper follows the connection being locked.
+	assert.Contains(t, buildSQL(), "FOR UPDATE")
+	sqliteDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{DryRun: true})
+	require.NoError(t, err)
+	var rows []Redemption
+	assert.NotContains(t, lockForUpdate(sqliteDB).Where("id = ?", 1).Find(&rows).Statement.SQL.String(), "FOR UPDATE")
 }

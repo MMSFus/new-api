@@ -338,6 +338,8 @@ func SetApiRouter(router *gin.Engine) {
 		channelCostRoute := apiRouter.Group("/channel_cost", middleware.DisableCache(), middleware.AdminAuth())
 		handlePermissionRoute(channelCostRoute, http.MethodGet, "/report", authz.ChannelCostRead, controller.GetChannelCostReport)
 		handlePermissionRoute(channelCostRoute, http.MethodGet, "/logs", authz.ChannelCostRead, controller.GetChannelCostLogs)
+		channelCostRoute.GET("/backfill", middleware.RootAuth(), controller.GetChannelCostBackfill)
+		channelCostRoute.POST("/backfill", middleware.RootAuth(), controller.CreateChannelCostBackfill)
 		logRoute.GET("/search", middleware.AdminAuth(), controller.SearchAllLogs)
 		logRoute.GET("/self", middleware.UserAuth(), controller.GetUserLogs)
 		logRoute.GET("/export", middleware.AdminAuth(), controller.ExportAllLogs)

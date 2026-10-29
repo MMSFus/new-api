@@ -23,8 +23,11 @@ type ChannelCostSnapshot struct {
 	// under the simulated cache, what the upstream usage costs) divided by the
 	// group ratio. Surcharges added after the group ratio, such as tiered tool
 	// call fees, make it an estimate.
-	BaseQuota float64 `json:"base_quota"`
-	CostQuota float64 `json:"cost_quota"`
+	BaseQuota    float64 `json:"base_quota"`
+	CostQuota    float64 `json:"cost_quota"`
+	Source       string  `json:"source,omitempty"`
+	BackfilledAt int64   `json:"backfilled_at,omitempty"`
+	TaskID       string  `json:"task_id,omitempty"`
 }
 
 // SetCostBasisQuota overrides the charged quota as the basis of the channel
@@ -316,6 +319,9 @@ func GetChannelCostLogs(filter LogFilter, startIdx int, num int) ([]ChannelCostL
 				GroupRatio:    snapshot.Get("group_ratio").Float(),
 				BaseQuota:     snapshot.Get("base_quota").Float(),
 				CostQuota:     snapshot.Get("cost_quota").Float(),
+				Source:        snapshot.Get("source").String(),
+				BackfilledAt:  snapshot.Get("backfilled_at").Int(),
+				TaskID:        snapshot.Get("task_id").String(),
 			}
 		}
 		if delta := gjson.Get(log.Other, "admin_info.simulated_cache.quota_delta"); delta.Exists() {

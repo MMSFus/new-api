@@ -104,9 +104,7 @@ export function useChannelCostColumns(): ColumnDef<ChannelCostLog>[] {
         cell: ({ row }) => {
           const cost = row.original.cost
           if (!cost) {
-            return (
-              <span className='text-warning text-xs'>{t('Uncosted')}</span>
-            )
+            return <span className='text-warning text-xs'>{t('Uncosted')}</span>
           }
           return (
             <span className='font-mono tabular-nums'>
@@ -147,6 +145,22 @@ export function useChannelCostColumns(): ColumnDef<ChannelCostLog>[] {
               {formatCostQuota(sign * cost.cost_quota)}
             </span>
           )
+        },
+      },
+      {
+        id: 'cost_source',
+        header: t('Cost source'),
+        size: 150,
+        cell: ({ row }) => {
+          if (!row.original.cost) return t('Uncosted')
+          if (row.original.cost.source === 'historical_backfill') {
+            return (
+              <StatusBadge variant='warning' copyable={false}>
+                {t('Historical backfill · Estimate')}
+              </StatusBadge>
+            )
+          }
+          return t('Recorded at request time')
         },
       },
       {
