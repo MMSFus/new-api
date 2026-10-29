@@ -1452,6 +1452,7 @@
     "Connect to MiniMax model services": "Connect to MiniMax model services",
     "Connect to Mistral AI model services": "Connect to Mistral AI model services",
     "Connect to model services through a Sub2API gateway": "Connect to model services through a Sub2API gateway",
+    "Reverse proxy Kimi web chat with account refresh_token credentials": "Reverse proxy Kimi web chat with account refresh_token credentials",
     "Connect to models through the Google Gemini API": "Connect to models through the Google Gemini API",
     "Connect to Moonshot AI model services": "Connect to Moonshot AI model services",
     "Connect to New API model services with support for multiple task plugins": "Connect to New API model services with support for multiple task plugins",

@@ -180,6 +180,16 @@ export const CHANNEL_TYPE_CONFIGS: Record<number, ChannelTypeConfig> = {
       models: 'Models',
     },
   },
+  64: {
+    id: 64,
+    name: CHANNEL_TYPES[64],
+    icon: 'Kimi',
+    hints: {
+      baseUrl: 'Optional site override (default https://www.kimi.ai)',
+      key: 'JSON: {"refresh_token": "...", "region": "global|cn"}',
+      models: 'Fixed placeholder model: kimi',
+    },
+  },
 }
 
 /**
