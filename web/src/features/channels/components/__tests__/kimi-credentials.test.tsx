@@ -281,6 +281,9 @@ test('subscription ratios are shown as percentages independently of credential i
   await user.click(
     screen.getByRole('button', { name: 'Check Kimi subscription usage' })
   )
-  expect(await screen.findByText(/Five-hour usage: 25%/)).toBeInTheDocument()
+  expect(
+    await screen.findByRole('progressbar', { name: 'Five-hour usage' })
+  ).toHaveAttribute('aria-valuenow', '25')
+  expect(screen.getByText('25%')).toBeInTheDocument()
   expect(onImport).not.toHaveBeenCalled()
 })
