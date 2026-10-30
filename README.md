@@ -64,6 +64,20 @@ This repository is a customized fork of [QuantumNous/new-api](https://github.com
 - Security vulnerabilities: do not open a public issue. Email **admin@momentsofus.cn** with the subject `[SECURITY]`, or follow the process in [SECURITY.md](./.github/SECURITY.md).
 - If you run a modified version of this software for users, please let us know at **admin@momentsofus.cn** (deployment name and source location, if public). This is a request, not a license condition. AGPL-3.0 section 13 still requires you to offer the corresponding source to those users.
 
+### Features in this fork
+
+- **Console UI:** the 汇点 theme, storefront home page, and a simplified top bar and navigation.
+- **Channel cost billing:** per-channel upstream ratios, cost details, and a background job that backfills historical costs.
+- **Simulated prompt cache:** channels can simulate prompt cache hits, with hit-rate ranges and cache audit in logs.
+- **Balance buckets:** group-available balances, and unknown-source balances counted as gifts instead of top-ups.
+- **Config groups:** automatic group routing, and the pricing panel shows config groups.
+- **Rate limits:** global and private limits separated by call group.
+- **Session recorder:** built into the server, filterable by channel, group, and model.
+- **Kimi native access:** dual-region OAuth, credential import, and a Kimi web chat reverse-proxy channel.
+- **Antigravity native access:** Google OAuth and credential import.
+- **Error rewriting:** rules that rewrite error messages returned to clients.
+- **OIDC registration:** username and email policy for OIDC sign-up.
+
 Upstream documentation and the upstream project remain the reference for general usage.
 
 ---

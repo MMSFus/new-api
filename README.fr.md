@@ -55,6 +55,32 @@
 
 ---
 
+## À propos de ce fork
+
+Ce dépôt est une version personnalisée de [QuantumNous/new-api](https://github.com/QuantumNous/new-api) et correspond au code source d'un service de production actif. Il est publié sous la même licence que l'amont, AGPL-3.0.
+
+- Les issues et pull requests sont les bienvenues dans ce dépôt.
+- Pour une vulnérabilité de sécurité, n'ouvrez pas d'issue publique. Écrivez à **admin@momentsofus.cn** avec le sujet `[SECURITY]`, ou suivez la procédure de [SECURITY.md](./.github/SECURITY.md).
+- Si vous proposez une version modifiée de ce logiciel à des utilisateurs, merci de nous écrire à **admin@momentsofus.cn** avec le nom du déploiement et l'emplacement du code source (s'il est public). Il s'agit d'une demande, pas d'une condition de licence. La section 13 de l'AGPL-3.0 vous oblige tout de même à fournir le code source correspondant à ces utilisateurs.
+
+### Fonctionnalités de ce fork
+
+- **Interface de console :** thème 汇点, page d'accueil de type vitrine, barre supérieure et navigation simplifiées.
+- **Facturation des coûts par canal :** ratios amont par canal, détails des coûts, et recalcul en arrière-plan des coûts historiques.
+- **Cache de prompt simulé :** les canaux peuvent simuler des hits de cache, avec des plages de taux de hit et un audit du cache dans les journaux.
+- **Compartiments de solde :** solde disponible par groupe ; les soldes de source inconnue sont comptés comme des offres, et non comme des recharges.
+- **Groupes de configuration :** routage automatique par groupe, et affichage des groupes de configuration dans le panneau des tarifs.
+- **Limites de débit :** limites globales et privées séparées par groupe d'appel.
+- **Enregistreur de session :** intégré au serveur, filtrable par canal, groupe et modèle.
+- **Intégration native de Kimi :** OAuth à deux régions, import d'identifiants et canal proxy inverse de Kimi web chat.
+- **Intégration native d'Antigravity :** OAuth Google et import d'identifiants.
+- **Réécriture des erreurs :** règles qui réécrivent les messages d'erreur renvoyés aux clients.
+- **Inscription OIDC :** politique de nom d'utilisateur et d'e-mail pour l'inscription via OIDC.
+
+Pour l'usage général, la documentation et le projet amont restent la référence.
+
+---
+
 ## 📝 Description du projet
 
 New API est une passerelle IA auto-hébergée pour les applications, les agents et les équipes. Connectez vos fournisseurs de modèles, exposez une API commune à vos clients et gérez le routage, les accès, les usages et les coûts depuis une même console.
