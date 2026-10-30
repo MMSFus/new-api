@@ -56,6 +56,18 @@
 
 ---
 
+## About this fork
+
+This repository is a customized fork of [QuantumNous/new-api](https://github.com/QuantumNous/new-api). It is the source code of a running production service, published under the same license as upstream (AGPL-3.0).
+
+- Issues and pull requests are welcome in this repository.
+- Security vulnerabilities: do not open a public issue. Email **admin@momentsofus.cn** with the subject `[SECURITY]`, or follow the process in [SECURITY.md](./.github/SECURITY.md).
+- If you run a modified version of this software for users, please let us know at **admin@momentsofus.cn** (deployment name and source location, if public). This is a request, not a license condition. AGPL-3.0 section 13 still requires you to offer the corresponding source to those users.
+
+Upstream documentation and the upstream project remain the reference for general usage.
+
+---
+
 ## 📝 Project Description
 
 New API is a self-hosted AI gateway for applications, agents, and teams. Connect upstream model services, expose a consistent API to your clients, and manage routing, access, usage, and costs in one place.
@@ -332,7 +344,9 @@ link to the original project: <https://github.com/QuantumNous/new-api>.
 
 This is an open-source project developed based on [One API](https://github.com/songquanpeng/one-api) (MIT License).
 
-If your organization's policies do not permit the use of AGPLv3-licensed software, or if you wish to avoid the open-source obligations of AGPLv3, please contact us at: [support@quantumnous.com](mailto:support@quantumnous.com)
+If your organization's policies do not permit the use of AGPLv3-licensed software, or if you wish to avoid the open-source obligations of AGPLv3, please contact the upstream project at: [support@quantumnous.com](mailto:support@quantumnous.com)
+
+For this fork, questions about licensing or deploying modified versions can be sent to **admin@momentsofus.cn**.
 
 See [NOTICE](./NOTICE) and [third-party licenses](./THIRD-PARTY-LICENSES.md) for attribution and dependency notices.
 

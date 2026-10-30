@@ -33,7 +33,8 @@ To report a security issue, please use the GitHub Security Advisories tab to "[O
 
 Alternatively, you can report via email:
 
-- **Email:** [support@quantumnous.com](mailto:support@quantumnous.com)
+- **Email (this fork):** [admin@momentsofus.cn](mailto:admin@momentsofus.cn)
+- **Email (upstream project):** [support@quantumnous.com](mailto:support@quantumnous.com)
 - **Subject:** `[SECURITY] Security Vulnerability Report`
 
 ### What to Include
