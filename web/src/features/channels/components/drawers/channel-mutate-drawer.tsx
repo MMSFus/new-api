@@ -135,12 +135,14 @@ import {
   getPrefillGroups,
   getTaskPluginOptions,
   refreshCodexCredential,
+  type AntigravityCredentialResult,
 } from '../../api'
 import {
   ADD_MODE_OPTIONS,
   CLAUDE_FIELD_PASSTHROUGH_TYPES,
   CHANNEL_STATUS_LABELS,
   CHANNEL_TYPE_ANTIGRAVITY,
+  CHANNEL_TYPE_KIMI,
   CHANNEL_TYPE_NEW_API,
   CHANNEL_TYPE_OLLAMA,
   CHANNEL_TYPE_OPTIONS,
@@ -1236,6 +1238,22 @@ export function ChannelMutateDrawer({
   const savedRequest = useMemo<ChannelModelDiscoveryRequest>(
     () => ({ kind: 'saved', channelId: channelId || 0 }),
     [channelId]
+  )
+  const handleCredentialImport = useCallback(
+    (result: AntigravityCredentialResult) => {
+      form.setValue('key', result.key, {
+        shouldDirty: true,
+        shouldValidate: true,
+      })
+      if (
+        result.count > 1 &&
+        !isEditing &&
+        form.getValues('multi_key_mode') === 'single'
+      ) {
+        form.setValue('multi_key_mode', 'batch', { shouldDirty: true })
+      }
+    },
+    [form, isEditing]
   )
   const handleCredentialDraft = useCallback(
     (key: string) => {
@@ -4449,44 +4467,16 @@ export function ChannelMutateDrawer({
                   disabled={sensitiveLocked || isSubmitting}
                   proxy={form.watch('proxy') || ''}
                   value={form.watch('key') || ''}
-                  onImport={(result) => {
-                    form.setValue('key', result.key, {
-                      shouldDirty: true,
-                      shouldValidate: true,
-                    })
-                    if (
-                      result.count > 1 &&
-                      !isEditing &&
-                      form.getValues('multi_key_mode') === 'single'
-                    ) {
-                      form.setValue('multi_key_mode', 'batch', {
-                        shouldDirty: true,
-                      })
-                    }
-                  }}
+                  onImport={handleCredentialImport}
                 />
               )}
-              {currentType === 64 && (
+              {currentType === CHANNEL_TYPE_KIMI && (
                 <KimiCredentials
                   channelId={channelId || undefined}
                   disabled={sensitiveLocked || isSubmitting}
                   proxy={form.watch('proxy') || ''}
                   value={form.watch('key') || ''}
-                  onImport={(result) => {
-                    form.setValue('key', result.key, {
-                      shouldDirty: true,
-                      shouldValidate: true,
-                    })
-                    if (
-                      result.count > 1 &&
-                      !isEditing &&
-                      form.getValues('multi_key_mode') === 'single'
-                    ) {
-                      form.setValue('multi_key_mode', 'batch', {
-                        shouldDirty: true,
-                      })
-                    }
-                  }}
+                  onImport={handleCredentialImport}
                 />
               )}
               {!isEditing && (

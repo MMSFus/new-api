@@ -17,18 +17,32 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useMutation, useQuery } from '@tanstack/react-query'
+import {
+  CircleAlert,
+  ClipboardPaste,
+  KeyRound,
+  LoaderCircle,
+  LogIn,
+  RefreshCw,
+} from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { CopyButton } from '@/components/copy-button'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Field, FieldDescription, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
+import { Progress, ProgressLabel } from '@/components/ui/progress'
+import { Separator } from '@/components/ui/separator'
 import { toIntlLocale } from '@/i18n/languages'
 import { formatNumber } from '@/lib/format'
 import { handleServerError } from '@/lib/handle-server-error'
+import { cn } from '@/lib/utils'
 
 import {
   cancelKimiOAuth,
@@ -40,6 +54,13 @@ import {
   type KimiDevice,
   type KimiPreview,
 } from '../api'
+import {
+  AuthorizationLink,
+  CredentialNotice,
+  CredentialPanel,
+  CredentialStep,
+  type CredentialNoticeTone,
+} from './credential-panel'
 
 type CredentialProps = {
   disabled: boolean
@@ -60,7 +81,10 @@ function KimiDeviceLogin(
   const isDisabled = props.disabled
   const onImport = props.onImport
   const [device, setDevice] = useState<KimiDevice | null>(null)
-  const [message, setMessage] = useState('')
+  const [message, setMessage] = useState<{
+    tone: CredentialNoticeTone
+    text: string
+  } | null>(null)
   const active = useRef(true)
   const disabled = useRef(props.disabled)
   disabled.current = props.disabled
@@ -93,7 +117,10 @@ function KimiDeviceLogin(
         if (Date.now() >= device.expires_at * 1000) {
           setDevice(null)
           handle.current = ''
-          setMessage('Kimi authorization expired; authorize again')
+          setMessage({
+            tone: 'warning',
+            text: 'Kimi authorization expired; authorize again',
+          })
           return
         }
         void pollToken(device.handle)
@@ -120,7 +147,10 @@ function KimiDeviceLogin(
               // The ready handle now belongs to the form until it is saved or expires.
               handle.current = ''
               setDevice(null)
-              setMessage('Kimi authorization ready. Save the channel to apply.')
+              setMessage({
+                tone: 'success',
+                text: 'Kimi authorization ready. Save the channel to apply.',
+              })
             }
           })
           .catch((error: unknown) => {
@@ -136,13 +166,14 @@ function KimiDeviceLogin(
   }, [device, isDisabled, pollToken, pollPending, onImport])
   const busy = props.disabled || start.isPending || cancel.isPending
   return (
-    <div className='space-y-2'>
+    <div className='flex flex-col gap-3'>
       <Button
         type='button'
         size='sm'
+        className='self-start'
         disabled={busy || !!device}
         onClick={() => {
-          setMessage('')
+          setMessage(null)
           void start
             .mutateAsync()
             .then((result) => {
@@ -158,56 +189,77 @@ function KimiDeviceLogin(
             })
         }}
       >
+        {start.isPending ? (
+          <LoaderCircle className='animate-spin' aria-hidden='true' />
+        ) : (
+          <LogIn aria-hidden='true' />
+        )}
         {t('Sign in with Kimi Code')}
       </Button>
       {device && (
-        <div className='space-y-2'>
-          <a
-            className='text-primary text-sm underline'
-            href={device.verification_uri_complete || device.verification_uri}
-            target='_blank'
-            rel='noopener noreferrer'
-          >
-            {t('Open Kimi authorization')}
-          </a>
-          <div className='flex items-center gap-2'>
-            <span>
-              {t('Device code')}: <code>{device.user_code}</code>
+        <CredentialStep>
+          <div className='flex flex-col gap-1.5'>
+            <span className='text-muted-foreground text-xs'>
+              {t('Device code')}
             </span>
-            <CopyButton
-              value={device.user_code}
-              size='sm'
-              aria-label={t('Copy device code')}
-            />
+            <div className='flex items-center gap-2'>
+              <code className='bg-background rounded-md border px-3 py-1.5 font-mono text-base font-semibold tracking-[0.2em]'>
+                {device.user_code}
+              </code>
+              <CopyButton
+                value={device.user_code}
+                variant='outline'
+                className='size-8'
+                tooltip={t('Copy device code')}
+                aria-label={t('Copy device code')}
+              />
+            </div>
           </div>
-          <p role='status' className='text-muted-foreground text-xs'>
+          <div className='flex flex-wrap items-center gap-2'>
+            <AuthorizationLink
+              href={device.verification_uri_complete || device.verification_uri}
+            >
+              {t('Open Kimi authorization')}
+            </AuthorizationLink>
+            <Button
+              type='button'
+              size='sm'
+              variant='ghost'
+              disabled={busy || pollPending}
+              onClick={() => {
+                void cancel
+                  .mutateAsync(device.handle)
+                  .then(() => {
+                    if (!active.current) return
+                    handle.current = ''
+                    setDevice(null)
+                    setMessage({
+                      tone: 'info',
+                      text: 'Authorization cancelled',
+                    })
+                  })
+                  .catch(() => {})
+              }}
+            >
+              {t('Cancel authorization')}
+            </Button>
+          </div>
+          <p
+            role='status'
+            className='text-muted-foreground flex items-center gap-2 text-xs'
+          >
+            <LoaderCircle
+              className='size-3.5 animate-spin'
+              aria-hidden='true'
+            />
             {t('Waiting for official authorization. Keep this form open.')}
           </p>
-          <Button
-            type='button'
-            size='sm'
-            variant='outline'
-            disabled={busy || pollPending}
-            onClick={() => {
-              void cancel
-                .mutateAsync(device.handle)
-                .then(() => {
-                  if (!active.current) return
-                  handle.current = ''
-                  setDevice(null)
-                  setMessage('Authorization cancelled')
-                })
-                .catch(() => {})
-            }}
-          >
-            {t('Cancel authorization')}
-          </Button>
-        </div>
+        </CredentialStep>
       )}
       {message && (
-        <p role='status' className='text-muted-foreground text-xs'>
-          {t(message)}
-        </p>
+        <CredentialNotice tone={message.tone}>
+          {t(message.text)}
+        </CredentialNotice>
       )}
     </div>
   )
@@ -228,27 +280,55 @@ function KimiSubscription(props: { channelId: number }) {
     limit_month_code: 'Monthly Coding usage',
   }
   return (
-    <div className='space-y-2'>
-      <Button
-        type='button'
-        size='sm'
-        variant='outline'
-        disabled={usage.isFetching}
-        onClick={() => void usage.refetch()}
-      >
-        {t('Check Kimi subscription usage')}
-      </Button>
+    <div className='flex flex-col gap-3'>
+      <div className='flex items-center justify-between gap-2'>
+        <span className='text-sm font-medium'>{t('Usage')}</span>
+        <Button
+          type='button'
+          size='sm'
+          variant='outline'
+          disabled={usage.isFetching}
+          onClick={() => void usage.refetch()}
+        >
+          <RefreshCw
+            className={cn(usage.isFetching && 'animate-spin')}
+            aria-hidden='true'
+          />
+          {t('Check Kimi subscription usage')}
+        </Button>
+      </div>
       {usage.data?.length === 0 && (
-        <p>{t('No subscription usage available')}</p>
-      )}
-      {usage.data?.map((entry) => (
-        <p key={entry.name} className='text-muted-foreground text-xs'>
-          {t(labels[entry.name] || entry.name)}:{' '}
-          {formatNumber(entry.used_ratio * 100, locale)}%{' '}
-          {entry.reset_time &&
-            new Date(entry.reset_time).toLocaleString(locale)}
+        <p className='text-muted-foreground text-xs'>
+          {t('No subscription usage available')}
         </p>
-      ))}
+      )}
+      {!!usage.data?.length && (
+        <div className='grid gap-3 sm:grid-cols-2'>
+          {usage.data.map((entry) => {
+            const percent = Math.min(100, Math.max(0, entry.used_ratio * 100))
+            return (
+              <Progress
+                key={entry.name}
+                value={percent}
+                className='gap-1.5 rounded-lg border p-3'
+              >
+                <ProgressLabel className='flex-1 text-xs'>
+                  {t(labels[entry.name] || entry.name)}
+                </ProgressLabel>
+                <span className='text-xs font-medium tabular-nums'>
+                  {formatNumber(entry.used_ratio * 100, locale)}%
+                </span>
+                {entry.reset_time && (
+                  <span className='text-muted-foreground order-last w-full text-xs'>
+                    {t('Next reset')}:{' '}
+                    {new Date(entry.reset_time).toLocaleString(locale)}
+                  </span>
+                )}
+              </Progress>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
@@ -309,28 +389,45 @@ export function KimiCredentials(props: CredentialProps) {
     },
   })
   const busy = props.disabled || imported.isPending || oauthBusy
+  const regionLabels: Record<string, string> = {
+    'mainland-cn': t('Mainland China (.com)'),
+    global: t('International (.ai)'),
+  }
+  const authTypeLabels: Record<string, string> = {
+    oauth: t('OAuth'),
+    api_key: t('API Key'),
+  }
   return (
-    <div className='space-y-3 rounded-lg border p-3'>
-      <p className='text-sm font-medium'>{t('Kimi Code credentials')}</p>
-      <Label htmlFor={`${id}-region`}>{t('Kimi region')}</Label>
-      <NativeSelect
-        id={`${id}-region`}
-        value={region}
-        disabled={props.disabled}
-        onChange={(event) => {
-          generation.current++
-          setRegion(event.target.value)
-          setPreview(null)
-          setSelected(new Set())
-        }}
-      >
-        <NativeSelectOption value='mainland-cn'>
-          {t('Mainland China (.com)')}
-        </NativeSelectOption>
-        <NativeSelectOption value='global'>
-          {t('International (.ai)')}
-        </NativeSelectOption>
-      </NativeSelect>
+    <CredentialPanel
+      icon={<KeyRound />}
+      title={t('Kimi Code credentials')}
+      description={t(
+        'Connect to Kimi Code with regional OAuth or Coding credentials'
+      )}
+    >
+      <Field>
+        <FieldLabel htmlFor={`${id}-region`}>{t('Kimi region')}</FieldLabel>
+        <NativeSelect
+          id={`${id}-region`}
+          size='sm'
+          className='w-full sm:w-56'
+          value={region}
+          disabled={props.disabled}
+          onChange={(event) => {
+            generation.current++
+            setRegion(event.target.value)
+            setPreview(null)
+            setSelected(new Set())
+          }}
+        >
+          <NativeSelectOption value='mainland-cn'>
+            {t('Mainland China (.com)')}
+          </NativeSelectOption>
+          <NativeSelectOption value='global'>
+            {t('International (.ai)')}
+          </NativeSelectOption>
+        </NativeSelect>
+      </Field>
       <KimiDeviceLogin
         key={`${region}:${props.proxy}`}
         {...props}
@@ -338,95 +435,157 @@ export function KimiCredentials(props: CredentialProps) {
         region={region}
         onBusyChange={setOAuthBusy}
       />
-      <Button
-        type='button'
-        size='sm'
-        variant='outline'
-        disabled={busy || !props.value.trim()}
-        onClick={() => imported.mutate(null)}
-      >
-        {t('Preview pasted Kimi JSON')}
-      </Button>
-      <Label htmlFor={`${id}-files`}>
-        {t('Import sub2api or CPA JSON files')}
-      </Label>
-      <Input
-        id={`${id}-files`}
-        type='file'
-        accept='.json,.jsonl,application/json'
-        multiple
-        disabled={busy}
-        onChange={(event) => {
-          const files = [...(event.target.files ?? [])]
-          event.target.value = ''
-          if (files.length) imported.mutate(files)
-        }}
-      />
-      {preview && (
-        <div className='space-y-2' aria-label={t('Kimi import preview')}>
-          {preview.issues.map((issue) => (
-            <p role='alert' key={issue.id} className='text-destructive text-xs'>
-              {issue.name} {t(issue.error)}
-            </p>
-          ))}
-          {preview.accounts.map((account, index) => (
-            <Label key={account.key} className='flex items-center gap-2'>
-              <Checkbox
-                disabled={busy}
-                checked={selected.has(account.key)}
-                onCheckedChange={(checked) =>
-                  setSelected((previous) => {
-                    const next = new Set(previous)
-                    if (checked) next.add(account.key)
-                    else next.delete(account.key)
-                    return next
-                  })
-                }
-              />
-              <span>
-                {account.name || t('Account {{number}}', { number: index + 1 })}{' '}
-                · {account.region} · {account.auth_type} ·{' '}
-                {account.renewable
-                  ? t('Renewable')
-                  : t('Cannot renew automatically')}{' '}
-                ·{' '}
-                {account.expires_at
-                  ? new Date(account.expires_at * 1000).toLocaleString(locale)
-                  : t('Unknown expiry')}
-              </span>
-            </Label>
-          ))}
+      <Separator />
+      <Field>
+        <FieldLabel htmlFor={`${id}-files`}>
+          {t('Import sub2api or CPA JSON files')}
+        </FieldLabel>
+        <div className='flex flex-col gap-2 sm:flex-row'>
+          <Input
+            id={`${id}-files`}
+            type='file'
+            accept='.json,.jsonl,application/json'
+            multiple
+            disabled={busy}
+            className='sm:flex-1'
+            onChange={(event) => {
+              const files = [...(event.target.files ?? [])]
+              event.target.value = ''
+              if (files.length) imported.mutate(files)
+            }}
+          />
           <Button
             type='button'
             size='sm'
-            disabled={busy || selected.size === 0}
-            onClick={() => {
-              const accounts = preview.accounts.filter((account) =>
-                selected.has(account.key)
-              )
-              props.onImport({
-                key: accounts.map((account) => account.key).join('\n'),
-                count: accounts.length,
-              })
-              setPreview(null)
-              setSelected(new Set())
-            }}
+            variant='outline'
+            className='h-8'
+            disabled={busy || !props.value.trim()}
+            onClick={() => imported.mutate(null)}
           >
-            {t('Apply selected Kimi accounts')}
+            {imported.isPending ? (
+              <LoaderCircle className='animate-spin' aria-hidden='true' />
+            ) : (
+              <ClipboardPaste aria-hidden='true' />
+            )}
+            {t('Preview pasted Kimi JSON')}
           </Button>
         </div>
+        <FieldDescription className='text-xs'>
+          {t(
+            'Use Kimi Code OAuth or Coding credentials. Legacy web tokens require authorization again. PAYG keys belong in a Moonshot channel.'
+          )}{' '}
+          {t(
+            'Imported credentials are added to this form. Proxy settings and remote API addresses from backups are ignored.'
+          )}
+        </FieldDescription>
+      </Field>
+      {preview && (
+        <CredentialStep>
+          <section
+            aria-label={t('Kimi import preview')}
+            className='flex flex-col gap-3'
+          >
+            {preview.issues.length > 0 && (
+              <Alert variant='destructive'>
+                <CircleAlert aria-hidden='true' />
+                <AlertDescription>
+                  <ul className='flex flex-col gap-1'>
+                    {preview.issues.map((issue) => (
+                      <li key={issue.id} className='break-all'>
+                        <span className='font-medium'>{issue.name}</span>{' '}
+                        {t(issue.error)}
+                      </li>
+                    ))}
+                  </ul>
+                </AlertDescription>
+              </Alert>
+            )}
+            {preview.accounts.length > 0 && (
+              <ul className='bg-background divide-border/60 divide-y rounded-lg border'>
+                {preview.accounts.map((account, index) => (
+                  <li key={account.key}>
+                    <Label className='hover:bg-muted/50 flex cursor-pointer items-start gap-3 px-3 py-2.5 font-normal'>
+                      <Checkbox
+                        className='mt-0.5'
+                        disabled={busy}
+                        checked={selected.has(account.key)}
+                        onCheckedChange={(checked) =>
+                          setSelected((previous) => {
+                            const next = new Set(previous)
+                            if (checked) next.add(account.key)
+                            else next.delete(account.key)
+                            return next
+                          })
+                        }
+                      />
+                      <span className='flex min-w-0 flex-1 flex-col gap-1.5'>
+                        <span className='truncate text-sm font-medium'>
+                          {account.name ||
+                            t('Account {{number}}', { number: index + 1 })}
+                        </span>
+                        <span className='flex flex-wrap items-center gap-1.5'>
+                          <Badge variant='secondary'>
+                            {regionLabels[account.region] || account.region}
+                          </Badge>
+                          <Badge variant='outline'>
+                            {authTypeLabels[account.auth_type] ||
+                              account.auth_type}
+                          </Badge>
+                          <Badge
+                            variant={account.renewable ? 'outline' : 'warning'}
+                          >
+                            {account.renewable
+                              ? t('Renewable')
+                              : t('Cannot renew automatically')}
+                          </Badge>
+                          <span className='text-muted-foreground text-xs'>
+                            {account.expires_at
+                              ? t('Expires {{time}}', {
+                                  time: new Date(
+                                    account.expires_at * 1000
+                                  ).toLocaleString(locale),
+                                })
+                              : t('Unknown expiry')}
+                          </span>
+                        </span>
+                      </span>
+                    </Label>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className='flex items-center justify-between gap-2'>
+              <span className='text-muted-foreground text-xs'>
+                {t('{{count}} selected', { count: selected.size })}
+              </span>
+              <Button
+                type='button'
+                size='sm'
+                disabled={busy || selected.size === 0}
+                onClick={() => {
+                  const accounts = preview.accounts.filter((account) =>
+                    selected.has(account.key)
+                  )
+                  props.onImport({
+                    key: accounts.map((account) => account.key).join('\n'),
+                    count: accounts.length,
+                  })
+                  setPreview(null)
+                  setSelected(new Set())
+                }}
+              >
+                {t('Apply selected Kimi accounts')}
+              </Button>
+            </div>
+          </section>
+        </CredentialStep>
       )}
-      {props.channelId && <KimiSubscription channelId={props.channelId} />}
-      <p className='text-muted-foreground text-xs'>
-        {t(
-          'Use Kimi Code OAuth or Coding credentials. Legacy web tokens require authorization again. PAYG keys belong in a Moonshot channel.'
-        )}
-      </p>
-      <p className='text-muted-foreground text-xs'>
-        {t(
-          'Imported credentials are added to this form. Proxy settings and remote API addresses from backups are ignored.'
-        )}
-      </p>
-    </div>
+      {props.channelId && (
+        <>
+          <Separator />
+          <KimiSubscription channelId={props.channelId} />
+        </>
+      )}
+    </CredentialPanel>
   )
 }

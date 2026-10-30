@@ -17,13 +17,20 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useMutation } from '@tanstack/react-query'
+import { ClipboardPaste, KeyRound, LoaderCircle, LogIn } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { CopyButton } from '@/components/copy-button'
 import { Button } from '@/components/ui/button'
+import { Field, FieldDescription, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from '@/components/ui/input-group'
 import { handleServerError } from '@/lib/handle-server-error'
 
 import {
@@ -32,6 +39,12 @@ import {
   startAntigravityOAuth,
   type AntigravityCredentialResult,
 } from '../api'
+import {
+  AuthorizationLink,
+  CredentialNotice,
+  CredentialPanel,
+  CredentialStep,
+} from './credential-panel'
 
 export function AntigravityCredentials(props: {
   disabled: boolean
@@ -102,8 +115,11 @@ export function AntigravityCredentials(props: {
     exchange.isPending ||
     importedCredentials.isPending
   return (
-    <div className='space-y-3 rounded-lg border p-3'>
-      <p className='text-sm font-medium'>{t('Antigravity credentials')}</p>
+    <CredentialPanel
+      icon={<KeyRound />}
+      title={t('Antigravity credentials')}
+      description={t('Connect directly to Antigravity with Google OAuth')}
+    >
       <div className='flex flex-wrap items-center gap-2'>
         <Button
           type='button'
@@ -111,6 +127,11 @@ export function AntigravityCredentials(props: {
           disabled={busy}
           onClick={() => start.mutate()}
         >
+          {start.isPending ? (
+            <LoaderCircle className='animate-spin' aria-hidden='true' />
+          ) : (
+            <LogIn aria-hidden='true' />
+          )}
           {t('Sign in with Google')}
         </Button>
         <Button
@@ -120,53 +141,59 @@ export function AntigravityCredentials(props: {
           disabled={busy || !props.value.trim()}
           onClick={() => importedCredentials.mutate(null)}
         >
+          <ClipboardPaste aria-hidden='true' />
           {t('Import pasted JSON')}
         </Button>
       </div>
       {authorizationUrl && (
-        <div className='space-y-2'>
-          <div className='flex items-center gap-2'>
-            <a
-              href={authorizationUrl}
-              target='_blank'
-              rel='noopener noreferrer'
-              className='text-primary text-sm underline'
-            >
+        <CredentialStep>
+          <div className='flex flex-wrap items-center gap-2'>
+            <AuthorizationLink href={authorizationUrl}>
               {t('Open Google authorization')}
-            </a>
+            </AuthorizationLink>
             <CopyButton
               value={authorizationUrl}
-              size='sm'
+              variant='outline'
+              className='size-7'
+              tooltip={t('Copy authorization link')}
               aria-label={t('Copy authorization link')}
             />
           </div>
-          <p className='text-muted-foreground text-xs'>
-            {t(
-              'After authorization, copy the complete localhost callback URL from the address bar and paste it below. The link expires in 10 minutes.'
-            )}
-          </p>
-          <Label htmlFor={`${id}-callback`}>{t('Complete callback URL')}</Label>
-          <Input
-            id={`${id}-callback`}
-            value={callbackUrl}
-            onChange={(event) => setCallbackUrl(event.target.value)}
-            disabled={busy}
-            autoComplete='off'
-          />
-          <Button
-            type='button'
-            size='sm'
-            disabled={busy || !callbackUrl.trim()}
-            onClick={() => exchange.mutate()}
-          >
-            {t('Complete authorization')}
-          </Button>
-        </div>
+          <Field>
+            <FieldLabel htmlFor={`${id}-callback`}>
+              {t('Complete callback URL')}
+            </FieldLabel>
+            <FieldDescription className='text-xs'>
+              {t(
+                'After authorization, copy the complete localhost callback URL from the address bar and paste it below. The link expires in 10 minutes.'
+              )}
+            </FieldDescription>
+            <InputGroup>
+              <InputGroupInput
+                id={`${id}-callback`}
+                value={callbackUrl}
+                onChange={(event) => setCallbackUrl(event.target.value)}
+                disabled={busy}
+                autoComplete='off'
+                className='font-mono text-xs'
+              />
+              <InputGroupAddon align='inline-end'>
+                <InputGroupButton
+                  variant='default'
+                  disabled={busy || !callbackUrl.trim()}
+                  onClick={() => exchange.mutate()}
+                >
+                  {t('Complete authorization')}
+                </InputGroupButton>
+              </InputGroupAddon>
+            </InputGroup>
+          </Field>
+        </CredentialStep>
       )}
-      <div className='space-y-2'>
-        <Label htmlFor={`${id}-files`}>
+      <Field>
+        <FieldLabel htmlFor={`${id}-files`}>
           {t('Import sub2api or CPA JSON files')}
-        </Label>
+        </FieldLabel>
         <Input
           id={`${id}-files`}
           type='file'
@@ -179,19 +206,19 @@ export function AntigravityCredentials(props: {
             if (files.length) importedCredentials.mutate(files)
           }}
         />
-      </div>
+        <FieldDescription className='text-xs'>
+          {t(
+            'Imported credentials are added to this form. Proxy settings and remote API addresses from backups are ignored.'
+          )}
+        </FieldDescription>
+      </Field>
       {imported !== null && (
-        <p role='status' className='text-muted-foreground text-xs'>
+        <CredentialNotice tone='success'>
           {t('Imported {{count}} accounts. Save the channel to apply.', {
             count: imported,
           })}
-        </p>
+        </CredentialNotice>
       )}
-      <p className='text-muted-foreground text-xs'>
-        {t(
-          'Imported credentials are added to this form. Proxy settings and remote API addresses from backups are ignored.'
-        )}
-      </p>
-    </div>
+    </CredentialPanel>
   )
 }
