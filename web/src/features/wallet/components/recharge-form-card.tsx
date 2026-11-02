@@ -34,11 +34,13 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { toIntlLocale } from '@/i18n/languages'
 import { formatNumber } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 import {
   formatCurrency,
+  formatPaymentAmount,
   getDiscountLabel,
   getPaymentIcon,
   getMinTopupAmount,
@@ -61,6 +63,8 @@ interface RechargeFormCardProps {
   topupAmount: number
   onTopupAmountChange: (amount: number) => void
   paymentAmount: number
+  /** Gateway settlement currency for the selected method (Pancake only) */
+  paymentCurrency?: string
   calculating: boolean
   onPaymentMethodSelect: (method: PaymentMethod) => void
   paymentLoading: string | null
@@ -91,6 +95,7 @@ export function RechargeFormCard({
   topupAmount,
   onTopupAmountChange,
   paymentAmount,
+  paymentCurrency,
   calculating,
   onPaymentMethodSelect,
   paymentLoading,
@@ -112,7 +117,7 @@ export function RechargeFormCard({
   onWaffoMethodSelect,
   enableWaffoPancakeTopup,
 }: RechargeFormCardProps) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const [localAmount, setLocalAmount] = useState(topupAmount.toString())
 
   useEffect(() => {
@@ -316,7 +321,11 @@ export function RechargeFormCard({
                       <Skeleton className='h-5 w-16' />
                     ) : (
                       <span className='text-sm font-semibold'>
-                        {formatCurrency(paymentAmount)}
+                        {formatPaymentAmount(
+                          paymentAmount,
+                          paymentCurrency,
+                          toIntlLocale(i18n.resolvedLanguage || i18n.language)
+                        )}
                       </span>
                     )}
                   </div>

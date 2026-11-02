@@ -191,6 +191,11 @@ func taskBillingOther(task *model.Task) *model.LogOther {
 			other.SetPublic("model_ratio", bc.ModelRatio)
 		}
 		other.SetPublic("group_ratio", bc.GroupRatio)
+		if snap := bc.TieredSnapshot; snap != nil {
+			setPriceCurrencyLog(other, snap.CurrencyCode, snap.CurrencyUSDFactor)
+		} else {
+			setPriceCurrencyLog(other, bc.PriceCurrency, bc.CurrencyUSDFactor)
+		}
 		if priceData := taskBillingContextPriceData(bc); priceData != nil {
 			for k, v := range priceData.OtherRatios() {
 				if !other.SetPublic(k, v) {
@@ -429,6 +434,10 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 	// 只有配置了倍率(非固定价格)时才按 token 重新计费
 	if !hasRatioSetting || modelRatio <= 0 {
 		return false
+	}
+	// 币种因子在提交时冻结；旧任务缺少该字段视为 USD。
+	if bc := task.PrivateData.BillingContext; bc != nil && bc.CurrencyUSDFactor != 0 && bc.CurrencyUSDFactor != 1 {
+		modelRatio *= bc.CurrencyUSDFactor
 	}
 
 	// 获取用户和组的倍率信息

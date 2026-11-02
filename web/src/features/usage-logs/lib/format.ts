@@ -342,7 +342,33 @@ export function hasAnyCacheTokens(
   )
 }
 
+/** Frozen USD factor of a log's price currency; 1 for USD or older logs. */
+export function logCurrencyUSDFactor(
+  other: LogOtherData | null | undefined
+): number {
+  const factor = other?.currency_usd_factor
+  return typeof factor === 'number' && Number.isFinite(factor) && factor > 0
+    ? factor
+    : 1
+}
+
+/** Tier prices in USD; tier matching itself uses the raw expression. */
 export function getTieredBillingSummary(
+  other: LogOtherData | null
+): TieredBillingSummary | null {
+  const summary = getRawTieredBillingSummary(other)
+  const factor = logCurrencyUSDFactor(other)
+  if (!summary || factor === 1) return summary
+  return {
+    ...summary,
+    priceEntries: summary.priceEntries.map((entry) => ({
+      ...entry,
+      price: entry.price * factor,
+    })),
+  }
+}
+
+function getRawTieredBillingSummary(
   other: LogOtherData | null
 ): TieredBillingSummary | null {
   if (!other || other.billing_mode !== 'tiered_expr') return null
@@ -502,6 +528,7 @@ const AUDIT_TEMPLATES: Record<string, string> = {
   'option.payment_compliance': 'Confirmed payment compliance',
   'option.reset_ratio': 'Reset model ratios',
   'option.clear_affinity_cache': 'Cleared channel affinity cache',
+  'option.sync_exchange_rate': 'Synced USD exchange rate',
   // Custom OAuth
   'custom_oauth.create': 'Created a custom OAuth provider',
   'custom_oauth.update': 'Updated a custom OAuth provider',

@@ -33,6 +33,10 @@ import {
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 
+import {
+  AmountCurrencyNotice,
+  AmountCurrencySelect,
+} from '@/components/currency-amount-input'
 import { sideDrawerContentClassName } from '@/components/drawer-layout'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -69,6 +73,7 @@ import {
 import {
   getSitePricingCurrency,
   isValidPricingCurrency,
+  storedPricingCurrency,
   USD_PRICING_CURRENCY,
 } from '@/features/model-pricing/currency'
 import { pricingFromDraft, pricingRow } from '@/features/model-pricing/pricing'
@@ -87,6 +92,7 @@ import {
 } from '@/features/pricing/lib/task-expr'
 import type { BillingUsageSchema } from '@/features/pricing/types'
 import { useDebounce } from '@/hooks/use-debounce'
+import type { AmountCurrency } from '@/lib/currency'
 import { handleServerError } from '@/lib/handle-server-error'
 import { cn } from '@/lib/utils'
 import { usePricingPreferencesStore } from '@/stores/pricing-preferences-store'
@@ -206,6 +212,7 @@ export const ModelPricingEditorPanel = forwardRef<
 ) {
   const { t } = useTranslation()
   const promptPriceId = useId()
+  const priceCurrencyId = useId()
   const formElementRef = useRef<HTMLFormElement>(null)
   const currencyConfig = useSystemConfigStore((state) => state.config.currency)
   const preference = usePricingPreferencesStore((state) => state.currency)
@@ -213,10 +220,18 @@ export const ModelPricingEditorPanel = forwardRef<
     () => getSitePricingCurrency(currencyConfig),
     [currencyConfig]
   )
-  const currency =
-    preference === 'site' && isValidPricingCurrency(siteCurrency)
-      ? siteCurrency
-      : USD_PRICING_CURRENCY
+  const initialPriceCurrency: AmountCurrency = editData?.priceCurrency ?? 'USD'
+  const [priceCurrency, setPriceCurrency] =
+    useState<AmountCurrency>(initialPriceCurrency)
+  // Stored USD prices may be displayed in the site currency; prices written in
+  // CNY/CUSTOM are edited exactly as stored.
+  let currency = USD_PRICING_CURRENCY
+  if (priceCurrency !== 'USD') {
+    currency = storedPricingCurrency(priceCurrency, currencyConfig)
+  } else if (preference === 'site' && isValidPricingCurrency(siteCurrency)) {
+    currency = siteCurrency
+  }
+  const draftPriceCurrency = priceCurrency === 'USD' ? undefined : priceCurrency
   const [pricingMode, setPricingMode] = useState<PricingMode>('tiered_expr')
   const [promptPrice, setPromptPrice] = useState('')
   const [lanePrices, setLanePrices] = useState<Record<LaneKey, string>>({
@@ -288,6 +303,7 @@ export const ModelPricingEditorPanel = forwardRef<
         model_name: watchedValues.name.trim(),
         pricing: pricingFromDraft({
           ...watchedValues,
+          priceCurrency: draftPriceCurrency,
           billingMode: 'per-token',
         }),
       })
@@ -362,6 +378,7 @@ export const ModelPricingEditorPanel = forwardRef<
     setOrdinaryPricingModel(null)
     setWasConverted(false)
     setConversionPreview(null)
+    setPriceCurrency(editData?.priceCurrency ?? 'USD')
     const nextLaneState = createInitialLaneState(editData)
 
     if (editData) {
@@ -419,6 +436,7 @@ export const ModelPricingEditorPanel = forwardRef<
   useEffect(() => {
     onDirtyChange?.(
       form.formState.isDirty ||
+        priceCurrency !== initialPriceCurrency ||
         pricingMode !== initialPricingMode ||
         billingExpr !== initialBillingExpr ||
         requestRuleExpr !== (editData?.requestRuleExpr ?? '') ||
@@ -427,6 +445,8 @@ export const ModelPricingEditorPanel = forwardRef<
   }, [
     onDirtyChange,
     form.formState.isDirty,
+    priceCurrency,
+    initialPriceCurrency,
     pricingMode,
     billingExpr,
     requestRuleExpr,
@@ -688,6 +708,7 @@ export const ModelPricingEditorPanel = forwardRef<
     (values: ModelPricingFormValues) => {
       const data: ModelRatioData = {
         name: values.name.trim(),
+        ...(draftPriceCurrency ? { priceCurrency: draftPriceCurrency } : {}),
         ...(editData?.pluginBillingExpr ||
         pluginVariants?.length ||
         Object.keys(pluginExpressions).length
@@ -718,6 +739,7 @@ export const ModelPricingEditorPanel = forwardRef<
       pluginExpressions,
       editData,
       pluginVariants,
+      draftPriceCurrency,
     ]
   )
 
@@ -942,7 +964,27 @@ export const ModelPricingEditorPanel = forwardRef<
                   />
                 )}
 
-                <PricingCurrencySelector siteCurrency={siteCurrency} />
+                <Field className='gap-2'>
+                  <FieldLabel htmlFor={priceCurrencyId}>
+                    {t('Price currency')}
+                  </FieldLabel>
+                  <AmountCurrencySelect
+                    id={priceCurrencyId}
+                    aria-label={t('Price currency')}
+                    value={priceCurrency}
+                    onValueChange={setPriceCurrency}
+                  />
+                  <FieldDescription className='text-xs'>
+                    {t(
+                      'Prices, ratios and the billing expression of this model are saved in this currency and converted to USD at the current exchange rate when billed.'
+                    )}
+                  </FieldDescription>
+                  <AmountCurrencyNotice currency={priceCurrency} />
+                </Field>
+
+                {priceCurrency === 'USD' && (
+                  <PricingCurrencySelector siteCurrency={siteCurrency} />
+                )}
 
                 <TaskPluginPricingEditor
                   key={`${editorReloadToken}:${watchedValues.name}`}
@@ -1197,10 +1239,11 @@ export const ModelPricingEditorPanel = forwardRef<
                   {pricingMode === 'per-token' && !effectivePreview && (
                     <p
                       className='text-muted-foreground px-3 py-2 text-xs'
-                      role='status'
+                      role={pricePreview.isError ? 'alert' : 'status'}
                     >
                       {pricePreview.isError
-                        ? t('Failed to load model pricing')
+                        ? pricePreview.error.message ||
+                          t('Failed to load model pricing')
                         : t('Loading...')}
                     </p>
                   )}

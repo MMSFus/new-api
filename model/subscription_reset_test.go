@@ -14,6 +14,37 @@ func seedSubscriptionResetPlan(t *testing.T, plan *SubscriptionPlan) {
 	require.NoError(t, DB.Create(plan).Error)
 }
 
+// Waffo Pancake currency changes re-price every bound plan product, so the
+// lookup must return enabled and disabled plans and skip unbound ones (empty
+// or NULL product id) on every supported database.
+func TestWaffoPancakeBoundSubscriptionPlansAcrossDatabases(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+		t.Run(dialect, func(t *testing.T) {
+			db := setupChannelCostDialect(t, dialect)
+			require.NoError(t, db.AutoMigrate(&SubscriptionPlan{}))
+			t.Cleanup(func() { require.NoError(t, db.Migrator().DropTable(&SubscriptionPlan{})) })
+
+			plans := []SubscriptionPlan{
+				{Title: "unbound"},
+				{Title: "bound-b", WaffoPancakeProductId: "prod_b"},
+				{Title: "null-product"},
+				{Title: "bound-a-disabled", WaffoPancakeProductId: "prod_a"},
+			}
+			require.NoError(t, db.Create(&plans).Error)
+			require.NoError(t, db.Model(&SubscriptionPlan{}).Where("id = ?", plans[2].Id).
+				Update("waffo_pancake_product_id", nil).Error)
+			require.NoError(t, db.Model(&SubscriptionPlan{}).Where("id = ?", plans[3].Id).
+				Update("enabled", false).Error)
+
+			bound, err := GetWaffoPancakeBoundSubscriptionPlans()
+			require.NoError(t, err)
+			require.Len(t, bound, 2)
+			assert.Equal(t, []string{"bound-b", "bound-a-disabled"}, []string{bound[0].Title, bound[1].Title})
+			assert.False(t, bound[1].Enabled)
+		})
+	}
+}
+
 func seedSubscriptionResetSub(t *testing.T, sub *UserSubscription) {
 	t.Helper()
 	require.NoError(t, DB.Create(sub).Error)

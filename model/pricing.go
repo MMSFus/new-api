@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 )
@@ -48,6 +49,12 @@ type Pricing struct {
 	BillingUsageSchema     map[string]jsplugin.UsageFieldSchema `json:"billing_usage_schema,omitempty"`
 	BillingUsageExamples   []jsplugin.UsageExample              `json:"billing_usage_examples,omitempty"`
 	PricingVersion         string                               `json:"pricing_version,omitempty"`
+	// PriceCurrency is the currency the administrator configured (CNY or
+	// CUSTOM); omitted for USD. ModelRatio and ModelPrice are already the
+	// USD effective values. A configured BillingExpr keeps its coefficients
+	// in PriceCurrency; multiply them by CurrencyUSDFactor for USD.
+	PriceCurrency     string  `json:"price_currency,omitempty"`
+	CurrencyUSDFactor float64 `json:"currency_usd_factor,omitempty"`
 }
 
 type PricingVendor struct {
@@ -343,12 +350,27 @@ func updatePricing() {
 			pricing.Tags = meta.Tags
 			pricing.VendorID = meta.VendorID
 		}
+		// Public prices are USD. An unusable exchange rate leaves the raw value
+		// with price_currency set and no factor, rather than claiming USD.
+		priceCurrency, currencyFactor, currencyErr := ratio_setting.ResolveModelPriceCurrency(model)
+		if currencyErr != nil {
+			currencyFactor = 1
+		}
+		if priceCurrency != operation_setting.CurrencyUSD {
+			pricing.PriceCurrency = priceCurrency
+			if currencyErr == nil {
+				pricing.CurrencyUSDFactor = currencyFactor
+			}
+		}
 		modelPrice, findPrice := ratio_setting.GetModelPrice(model, false)
 		if findPrice {
-			pricing.ModelPrice = modelPrice
+			pricing.ModelPrice = modelPrice * currencyFactor
 			pricing.QuotaType = 1
 		} else {
-			modelRatio, _, _ := ratio_setting.GetModelRatio(model)
+			modelRatio, ratioConfigured, _ := ratio_setting.GetModelRatio(model)
+			if ratioConfigured {
+				modelRatio *= currencyFactor
+			}
 			pricing.ModelRatio = modelRatio
 			pricing.CompletionRatio = ratio_setting.GetCompletionRatio(model)
 			pricing.QuotaType = 0
@@ -374,12 +396,14 @@ func updatePricing() {
 			if expr, ok := billing_setting.GetBillingExpr(model); ok && strings.TrimSpace(expr) != "" {
 				pricing.BillingMode = billingMode
 				pricing.BillingExpr = expr
+				setPricingExprCurrency(&pricing, model)
 			}
 		} else if target, resolved := ResolveTaskModelAlias(pluginGeneration, model); resolved && target.Declared != "" {
 			if tailMode := billing_setting.GetBillingMode(target.Declared); tailMode == "tiered_expr" {
 				if expr, ok := billing_setting.GetBillingExpr(target.Declared); ok && strings.TrimSpace(expr) != "" {
 					pricing.BillingMode = tailMode
 					pricing.BillingExpr = expr
+					setPricingExprCurrency(&pricing, target.Declared)
 				}
 			}
 		}
@@ -444,6 +468,21 @@ func updatePricing() {
 	modelEnableGroupsLock.Unlock()
 
 	lastGetPricingTime = time.Now()
+}
+
+// setPricingExprCurrency labels an expression-priced entry with the currency
+// of the expression it shows. Built-in expressions are USD, so a currency mark
+// that only applies to the model's legacy price is dropped.
+func setPricingExprCurrency(pricing *Pricing, exprModel string) {
+	code, factor, err := billing_setting.ResolveBillingExprCurrency(exprModel)
+	pricing.PriceCurrency, pricing.CurrencyUSDFactor = "", 0
+	if code == operation_setting.CurrencyUSD {
+		return
+	}
+	pricing.PriceCurrency = code
+	if err == nil {
+		pricing.CurrencyUSDFactor = factor
+	}
 }
 
 // GetSupportedEndpointMap 返回全局端点到路径的映射

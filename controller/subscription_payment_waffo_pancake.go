@@ -75,6 +75,16 @@ func SubscriptionRequestWaffoPancakePay(c *gin.Context) {
 		}
 	}
 
+	// plan.PriceAmount is charged as-is in the Pancake settlement currency
+	// (same convention as Epay); reject plans that round below one minor
+	// unit (e.g. 0.4 under JPY) instead of sending "0" to Pancake.
+	cur := setting.GetWaffoPancakeCurrency()
+	priceAmount := decimal.NewFromFloat(plan.PriceAmount)
+	if priceAmount.Round(setting.WaffoPancakeCurrencyScale(cur)).LessThan(setting.WaffoPancakeMinChargeAmount(cur)) {
+		paymentError(c, common.NewMessage("Payment amount is too low"))
+		return
+	}
+
 	// WAFFO_PANCAKE_SUB- prefix (vs. wallet's WAFFO_PANCAKE-) drives webhook
 	// dispatch in WaffoPancakeWebhook.
 	tradeNo := fmt.Sprintf("WAFFO_PANCAKE_SUB-%d-%d-%s", userId, time.Now().UnixMilli(), randstr.String(6))
@@ -100,7 +110,7 @@ func SubscriptionRequestWaffoPancakePay(c *gin.Context) {
 		ProductID:     plan.WaffoPancakeProductId,
 		BuyerIdentity: service.WaffoPancakeBuyerIdentityFromUserID(user.Id),
 		PriceSnapshot: &service.WaffoPancakePriceSnapshot{
-			Amount:      decimal.NewFromFloat(plan.PriceAmount).StringFixed(2),
+			Amount:      setting.FormatWaffoPancakeAmount(priceAmount, cur),
 			TaxCategory: "saas",
 		},
 		BuyerEmail:              getWaffoPancakeBuyerEmail(user),
@@ -114,7 +124,7 @@ func SubscriptionRequestWaffoPancakePay(c *gin.Context) {
 		paymentError(c, common.NewMessage("Failed to start payment"))
 		return
 	}
-	logger.LogInfo(c.Request.Context(), common.LogText("Waffo Pancake subscription order created user_id=%d plan_id=%d trade_no=%s session_id=%s money=%.2f", userId, plan.Id, tradeNo, session.SessionID, plan.PriceAmount))
+	logger.LogInfo(c.Request.Context(), common.LogText("Waffo Pancake subscription order created user_id=%d plan_id=%d trade_no=%s session_id=%s money=%s currency=%s", userId, plan.Id, tradeNo, session.SessionID, setting.FormatWaffoPancakeAmount(priceAmount, cur), cur))
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "success",

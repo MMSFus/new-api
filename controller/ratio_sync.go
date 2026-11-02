@@ -22,6 +22,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/samber/lo"
 
@@ -196,6 +197,20 @@ func effectivePricingSyncData(data map[string]any) map[string]any {
 		}
 	}
 	return result
+}
+
+// dropForeignCurrencyExpressions removes upstream expressions that the
+// upstream marked as CNY/CUSTOM. Synced prices are treated as USD, and an
+// expression cannot be converted, so importing it would misprice the model.
+// Numeric upstream prices are exported as USD effective values.
+func dropForeignCurrencyExpressions(data map[string]any) {
+	for name, code := range valueMap(data[ratio_setting.ModelPriceCurrencyOptionSyncField]) {
+		if code == "" || code == operation_setting.CurrencyUSD {
+			continue
+		}
+		delete(valueMap(data[billing_setting.BillingExprField]), name)
+		delete(valueMap(data[billing_setting.BillingModeField]), name)
+	}
 }
 
 func modelPricingSyncValues(data map[string]any, name string) map[string]any {
@@ -463,6 +478,7 @@ func FetchUpstreamRatios(c *gin.Context) {
 				AudioCompletionRatio *float64 `json:"audio_completion_ratio"`
 				BillingMode          string   `json:"billing_mode"`
 				BillingExpr          string   `json:"billing_expr"`
+				PriceCurrency        string   `json:"price_currency"`
 			}
 			if err := common.Unmarshal(body.Data, &pricingItems); err != nil {
 				logger.LogWarn(c.Request.Context(), common.LogText("unrecognized data format from %s: %s", chItem.Name, err.Error()))
@@ -486,6 +502,11 @@ func FetchUpstreamRatios(c *gin.Context) {
 					continue
 				}
 				if item.BillingMode == billing_setting.BillingModeTieredExpr {
+					// Ratios and prices from /api/pricing are USD; an expression
+					// marked with another currency cannot be imported as USD.
+					if item.PriceCurrency != "" && item.PriceCurrency != operation_setting.CurrencyUSD {
+						continue
+					}
 					billingModeMap[item.ModelName] = billing_setting.BillingModeTieredExpr
 					billingExprMap[item.ModelName] = item.BillingExpr
 					continue
@@ -596,7 +617,10 @@ func FetchUpstreamRatios(c *gin.Context) {
 			successfulChannels = append(successfulChannels, struct {
 				name string
 				data map[string]any
-			}{name: r.Name, data: effectivePricingSyncData(r.Data)})
+			}{name: r.Name, data: func() map[string]any {
+				dropForeignCurrencyExpressions(r.Data)
+				return effectivePricingSyncData(r.Data)
+			}()})
 		}
 	}
 

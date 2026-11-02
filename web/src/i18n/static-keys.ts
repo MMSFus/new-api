@@ -1023,4 +1023,9 @@ export const STATIC_I18N_KEYS = [
   'Channel priorities changed. Refresh and try again.',
   'Invalid channel priority move',
   'Channel priority is outside the sortable range',
+  // Quick ranges of the admin log reports (LOG_RANGE_PRESET_LABELS).
+  'Last hour',
+  'Last 24 hours',
+  'Last 7 days',
+  'Last 30 days',
 ] as const

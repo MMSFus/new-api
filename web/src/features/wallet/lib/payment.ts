@@ -111,6 +111,19 @@ export function isWaffoPancakePayment(paymentType: string): boolean {
   return paymentType === PAYMENT_TYPES.WAFFO_PANCAKE
 }
 
+/**
+ * Currency the gateway actually charges in, when it differs from the site's
+ * display currency. Only Waffo Pancake has a configurable settlement
+ * currency; other gateways return undefined and keep the existing display.
+ */
+export function getPaymentSettlementCurrency(
+  paymentType: string,
+  topupInfo: TopupInfo | null
+): string | undefined {
+  if (!isWaffoPancakePayment(paymentType)) return undefined
+  return topupInfo?.waffo_pancake_currency || 'USD'
+}
+
 export interface PaymentProcessors {
   regular: (topupAmount: number, paymentType: string) => Promise<boolean>
   waffo: (topupAmount: number, payMethodIndex: number) => Promise<boolean>

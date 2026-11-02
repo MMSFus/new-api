@@ -106,6 +106,10 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 	audioOutTokens := usage.OutputTokenDetails.AudioTokens
 	groupRatio := ratio_setting.GetGroupRatio(relayInfo.UsingGroup)
 	modelRatio, _, _ := ratio_setting.GetModelRatio(modelName)
+	// Use the currency factor frozen by the pre-consume price helper.
+	if factor := relayInfo.PriceData.CurrencyUSDFactor; factor != 0 && factor != 1 {
+		modelRatio *= factor
+	}
 
 	autoGroup, exists := common.GetContextKey(ctx, constant.ContextKeyAutoGroup)
 	if exists {

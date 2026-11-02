@@ -39,6 +39,17 @@ type PriceData struct {
 	Quota                 int // 按次计费的最终额度（MJ / Task）
 	QuotaToPreConsume     int // 按量计费的预消耗额度
 	GroupRatioInfo        GroupRatioInfo
+	// PriceCurrency is the currency of the configured ModelRatio/ModelPrice and
+	// CurrencyUSDFactor converts it to USD (1 unit = factor USD). ModelRatio and
+	// ModelPrice above already include the factor. Both are frozen at
+	// pre-consume; empty/zero means USD.
+	PriceCurrency     string
+	CurrencyUSDFactor float64
+}
+
+// HasNonUSDCurrency reports whether the frozen price was written in CNY or CUSTOM.
+func (p *PriceData) HasNonUSDCurrency() bool {
+	return p.PriceCurrency != "" && p.PriceCurrency != "USD"
 }
 
 func (p *PriceData) AddOtherRatio(key string, ratio float64) {

@@ -386,6 +386,14 @@ func GetSubscriptionPlanById(id int) (*SubscriptionPlan, error) {
 	return getSubscriptionPlanByIdTx(nil, id)
 }
 
+// GetWaffoPancakeBoundSubscriptionPlans returns every plan (enabled or not)
+// that has a Waffo Pancake product bound, ordered by id.
+func GetWaffoPancakeBoundSubscriptionPlans() ([]SubscriptionPlan, error) {
+	var plans []SubscriptionPlan
+	err := DB.Where("waffo_pancake_product_id <> ?", "").Order("id asc").Find(&plans).Error
+	return plans, err
+}
+
 func getSubscriptionPlanByIdTx(tx *gorm.DB, id int) (*SubscriptionPlan, error) {
 	if id <= 0 {
 		return nil, errors.New("invalid plan id")

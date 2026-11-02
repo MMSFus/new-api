@@ -173,6 +173,10 @@ type TaskBillingContext struct {
 	OriginModelName string                       `json:"origin_model_name,omitempty"` // 模型名称，必须为OriginModelName
 	PerCallBilling  bool                         `json:"per_call_billing,omitempty"`  // 按次计费：跳过轮询阶段的差额结算
 	TieredSnapshot  *billingexpr.BillingSnapshot `json:"tiered_snapshot,omitempty"`
+	// Currency of ModelPrice/ModelRatio, frozen at submission. Missing in
+	// older tasks means USD (factor 1).
+	PriceCurrency     string  `json:"price_currency,omitempty"`
+	CurrencyUSDFactor float64 `json:"currency_usd_factor,omitempty"`
 }
 
 // BillingGroupRatio 返回提交时的分组倍率；旧任务没有计费上下文时为 0。

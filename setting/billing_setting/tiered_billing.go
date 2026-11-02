@@ -13,6 +13,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/samber/lo"
 )
@@ -107,24 +108,67 @@ func GetPluginBillingExpr(pluginKey, model string) (string, bool) {
 // ResolveTaskBillingExpr selects the executing plugin's override before the
 // model expression, retaining the model alias fallback and explicit modes.
 func ResolveTaskBillingExpr(pluginKey, model, mappedModel string) (string, bool) {
+	expression, _, ok := resolveTaskBillingExpr(pluginKey, model, mappedModel)
+	return expression, ok
+}
+
+// resolveTaskBillingExpr also returns the model whose ModelPriceCurrency mark
+// applies to the selected expression. An empty owner is a built-in USD price.
+func resolveTaskBillingExpr(pluginKey, model, mappedModel string) (string, string, bool) {
 	if pluginKey != "" {
 		if expr, ok := GetPluginBillingExpr(pluginKey, model); ok {
-			return expr, true
+			return expr, model, true
 		}
 		if mappedModel != "" && mappedModel != model {
 			if expr, ok := GetPluginBillingExpr(pluginKey, mappedModel); ok {
-				return expr, true
+				return expr, mappedModel, true
 			}
 		}
 	}
 	if GetBillingMode(model) == BillingModeTieredExpr {
-		return GetBillingExpr(model)
+		expression, ok := GetBillingExpr(model)
+		return expression, configuredExprOwner(model), ok
 	}
 	if mappedModel != "" && mappedModel != model && GetBillingMode(mappedModel) == BillingModeTieredExpr {
 		expression, ok := GetBillingExpr(mappedModel)
-		return expression, ok && strings.TrimSpace(expression) != ""
+		return expression, configuredExprOwner(mappedModel), ok && strings.TrimSpace(expression) != ""
 	}
-	return "", false
+	return "", "", false
+}
+
+// configuredExprOwner returns model when its expression is administrator
+// configured; built-in expressions are always USD and have no owner.
+func configuredExprOwner(model string) string {
+	if _, configured := billingSetting.BillingExpr[model]; configured {
+		return model
+	}
+	return ""
+}
+
+// ResolveBillingExprCurrency returns the currency of the expression that
+// GetBillingExpr(model) selects, with its USD factor. Built-in expressions
+// are USD. An invalid exchange rate is an error (fail closed).
+func ResolveBillingExprCurrency(model string) (string, float64, error) {
+	return exprOwnerCurrency(configuredExprOwner(model))
+}
+
+// ResolveTaskBillingExprWithCurrency is ResolveTaskBillingExpr plus the
+// currency of the selected expression. Plugin overrides use the currency
+// mark of the model they are keyed by.
+func ResolveTaskBillingExprWithCurrency(pluginKey, model, mappedModel string) (string, string, float64, bool, error) {
+	expression, owner, ok := resolveTaskBillingExpr(pluginKey, model, mappedModel)
+	if !ok {
+		return "", "", 0, false, nil
+	}
+	code, factor, err := exprOwnerCurrency(owner)
+	return expression, code, factor, true, err
+}
+
+func exprOwnerCurrency(owner string) (string, float64, error) {
+	if owner == "" {
+		return operation_setting.CurrencyUSD, 1, nil
+	}
+	return ratio_setting.ResolveModelPriceCurrency(owner)
 }
 
 // TaskExprCompatible checks the schema contract even for usage references in

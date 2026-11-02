@@ -38,6 +38,7 @@ import {
 import { Textarea } from '@/components/ui/textarea'
 import {
   formatPricingAmount,
+  pricingCoefficientLabel,
   USD_PRICING_CURRENCY,
   type PricingCurrency,
 } from '@/features/model-pricing/currency'
@@ -472,10 +473,20 @@ export const TaskUsagePricingEditor = memo(function TaskUsagePricingEditor(
 
       <Alert>
         <AlertDescription className='text-xs'>
-          {t(
-            'Prices are in {{currency}}, with units shown below. Use USD when editing expressions directly.',
-            { currency: (props.currency ?? USD_PRICING_CURRENCY).label }
-          )}
+          {pricingCoefficientLabel(props.currency ?? USD_PRICING_CURRENCY) ===
+          'USD'
+            ? t(
+                'Prices are in {{currency}}, with units shown below. Use USD when editing expressions directly.',
+                { currency: (props.currency ?? USD_PRICING_CURRENCY).label }
+              )
+            : t(
+                'Raw expressions and presets are written in {{currency}}, the price currency of this model.',
+                {
+                  currency: pricingCoefficientLabel(
+                    props.currency ?? USD_PRICING_CURRENCY
+                  ),
+                }
+              )}
         </AlertDescription>
       </Alert>
 

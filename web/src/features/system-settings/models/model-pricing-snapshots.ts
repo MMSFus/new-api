@@ -18,12 +18,18 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { splitBillingExprAndRequestRules } from '@/features/pricing/lib/billing-expr'
 import { splitPluginBillingExprKey } from '@/features/pricing/lib/plugin-pricing'
+import {
+  amountCurrencySymbol,
+  parseAmountCurrency,
+  type AmountCurrency,
+} from '@/lib/currency'
 
 import { safeJsonParse } from '../utils/json-parser'
 import { formatPricingNumber } from './pricing-format'
 
 export type ModelPricingSnapshotInput = {
   modelPrice: string
+  modelPriceCurrency?: string
   modelRatio: string
   cacheRatio: string
   createCacheRatio: string
@@ -39,6 +45,8 @@ export type ModelPricingSnapshotInput = {
 export type ModelPricingSnapshot = {
   pluginBillingExpr?: Record<string, string>
   name: string
+  /** Currency of price, ratio and expression; absent means USD. */
+  priceCurrency?: Exclude<AmountCurrency, 'USD'>
   price?: string
   ratio?: string
   cacheRatio?: string
@@ -108,6 +116,9 @@ const getExpressionSummary = (
   return t('Expression pricing')
 }
 
+const priceSymbol = (row: ModelPricingSnapshot) =>
+  amountCurrencySymbol(row.priceCurrency ?? 'USD')
+
 export const getPriceSummary = (
   row: ModelPricingSnapshot,
   t: (key: string) => string
@@ -115,14 +126,17 @@ export const getPriceSummary = (
   if (row.billingMode === 'tiered_expr') {
     return getExpressionSummary(row, t)
   }
+  const symbol = priceSymbol(row)
   if (row.billingMode === 'per-request') {
-    return row.price ? `$${row.price} / ${t('request')}` : t('Unset price')
+    return row.price
+      ? `${symbol}${row.price} / ${t('request')}`
+      : t('Unset price')
   }
 
   const inputPrice = ratioToPrice(row.ratio)
   if (!inputPrice) return t('Unset price')
 
-  return `${t('Input')} $${inputPrice}`
+  return `${t('Input')} ${symbol}${inputPrice}`
 }
 
 export const getPriceDetail = (
@@ -141,13 +155,14 @@ export const getPriceDetail = (
   const inputPrice = ratioToPrice(row.ratio)
   if (!inputPrice) return t('No base input price')
 
+  const symbol = priceSymbol(row)
   const details = [
     row.completionRatio &&
-      `${t('Output')} $${ratioToPrice(row.completionRatio, inputPrice)}`,
+      `${t('Output')} ${symbol}${ratioToPrice(row.completionRatio, inputPrice)}`,
     row.cacheRatio &&
-      `${t('Cache')} $${ratioToPrice(row.cacheRatio, inputPrice)}`,
+      `${t('Cache')} ${symbol}${ratioToPrice(row.cacheRatio, inputPrice)}`,
     row.createCacheRatio &&
-      `${t('Cache write')} $${ratioToPrice(row.createCacheRatio, inputPrice)}`,
+      `${t('Cache write')} ${symbol}${ratioToPrice(row.createCacheRatio, inputPrice)}`,
   ]
     .filter(Boolean)
     .slice(0, 2)
@@ -157,6 +172,7 @@ export const getPriceDetail = (
 
 export const buildModelSnapshots = ({
   modelPrice,
+  modelPriceCurrency = '{}',
   modelRatio,
   cacheRatio,
   createCacheRatio,
@@ -172,6 +188,10 @@ export const buildModelSnapshots = ({
     fallback: {},
     context: 'model prices',
   })
+  const currencyMap = safeJsonParse<Record<string, string>>(
+    modelPriceCurrency,
+    { fallback: {}, context: 'model price currencies' }
+  )
   const ratioMap = safeJsonParse<Record<string, number>>(modelRatio, {
     fallback: {},
     context: 'model ratios',
@@ -226,6 +246,7 @@ export const buildModelSnapshots = ({
   const modelNames = new Set([
     ...pluginExpressionsByModel.keys(),
     ...Object.keys(priceMap),
+    ...Object.keys(currencyMap),
     ...Object.keys(ratioMap),
     ...Object.keys(cacheMap),
     ...Object.keys(createCacheMap),
@@ -246,6 +267,8 @@ export const buildModelSnapshots = ({
     const image = imageMap[name]?.toString() || ''
     const audio = audioMap[name]?.toString() || ''
     const audioCompletion = audioCompletionMap[name]?.toString() || ''
+    const currency = parseAmountCurrency(currencyMap[name])
+    const priceCurrency = currency === 'USD' ? {} : { priceCurrency: currency }
 
     const modeForModel = billingModeMap[name]
     if (modeForModel === 'tiered_expr') {
@@ -254,6 +277,7 @@ export const buildModelSnapshots = ({
         splitBillingExprAndRequestRules(fullExpr)
       return {
         name,
+        ...priceCurrency,
         pluginBillingExpr: pluginExpressionsByModel.get(name),
         billingMode: 'tiered_expr',
         billingExpr: pureExpr,
@@ -272,6 +296,7 @@ export const buildModelSnapshots = ({
 
     return {
       name,
+      ...priceCurrency,
       pluginBillingExpr: pluginExpressionsByModel.get(name),
       price,
       ratio,
@@ -298,6 +323,7 @@ export const buildModelSnapshots = ({
 export const getSnapshotSignature = (snapshot?: ModelPricingSnapshot) => {
   if (!snapshot) return ''
   return JSON.stringify({
+    priceCurrency: snapshot.priceCurrency || 'USD',
     price: snapshot.price || '',
     ratio: snapshot.ratio || '',
     cacheRatio: snapshot.cacheRatio || '',

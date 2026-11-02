@@ -72,6 +72,8 @@ import {
   getDynamicPriceUnitLabelKey,
   getDynamicPricingSummary,
   getDynamicPricingTiers,
+  pricingCurrencyFactor,
+  scalePricingTier,
   getTaskUsageQuantityUnitLabelKey,
   isDynamicPricingModel,
   isUnconfiguredTaskUsageModel,
@@ -1149,11 +1151,12 @@ function ProviderGroupPricingSection(
   )
 
   if (isDynamicPricingModel(props.model)) {
+    const currencyFactor = pricingCurrencyFactor(props.model)
     const dynamicTiers = props.model.billing_usage_schema
       ? getTaskPricingDisplayTiers(
           props.model.billing_expr,
           props.model.billing_usage_schema
-        )
+        ).map((tier) => scalePricingTier(tier, currencyFactor))
       : getDynamicPricingTiers(props.model)
     const hasRequestPrice = dynamicTiers.some(
       (tier) => !('unitPrices' in tier) && tier.billingUnit === 'request'
@@ -1195,7 +1198,7 @@ function ProviderGroupPricingSection(
       props.model.billing_expr,
       props.model.billing_usage_schema,
       props.model.billing_usage_examples
-    )
+    ).map((row) => ({ ...row, total: row.total * currencyFactor }))
     const priceFields = getDynamicPriceFields(dynamicTiers, {
       tokenUnit: props.tokenUnit,
       showRechargePrice,
@@ -1568,6 +1571,7 @@ export function ModelDetailsContent(props: ModelDetailsContentProps) {
             {isDynamic && !simpleTaskPricing && (
               <DynamicPricingBreakdown
                 billingExpr={props.model.billing_expr}
+                currencyUSDFactor={pricingCurrencyFactor(props.model)}
                 usageSchema={props.model.billing_usage_schema}
                 taskPriceOptions={{
                   showRechargePrice,

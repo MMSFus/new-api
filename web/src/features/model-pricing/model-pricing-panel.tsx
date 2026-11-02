@@ -210,6 +210,7 @@ export function ModelPricingPanel(props: {
                 <DynamicPricingBreakdown
                   compact
                   billingExpr={effectivePricing.billing_expr}
+                  currencyUSDFactor={effectivePricing.currency_usd_factor}
                   usageSchema={effectivePricing.billing_usage_schema}
                 />
               ) : (

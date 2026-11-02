@@ -41,15 +41,34 @@ func GetExposedData() gin.H {
 		return cloneGinH(c.data)
 	}
 	newData := gin.H{
-		"model_ratio":        GetModelRatioCopy(),
-		"completion_ratio":   GetCompletionRatioCopy(),
-		"cache_ratio":        GetCacheRatioCopy(),
-		"create_cache_ratio": GetCreateCacheRatioCopy(),
-		"model_price":        GetModelPriceCopy(),
+		"model_ratio":                     usdEffectivePrices(GetModelRatioCopy()),
+		"completion_ratio":                GetCompletionRatioCopy(),
+		"cache_ratio":                     GetCacheRatioCopy(),
+		"create_cache_ratio":              GetCreateCacheRatioCopy(),
+		"model_price":                     usdEffectivePrices(GetModelPriceCopy()),
+		ModelPriceCurrencyOptionSyncField: GetModelPriceCurrencyCopy(),
 	}
 	exposedData.Store(&exposedCache{
 		data:      newData,
 		expiresAt: time.Now().Add(exposedDataTTL),
 	})
 	return cloneGinH(newData)
+}
+
+// usdEffectivePrices converts exported ratios/prices of CNY/CUSTOM-marked
+// models to USD so receivers, which treat synced prices as USD, stay correct.
+// An entry whose exchange rate is unusable is omitted rather than exported
+// with a wrong value.
+func usdEffectivePrices(values map[string]float64) map[string]float64 {
+	for name, value := range values {
+		_, factor, err := ResolveModelPriceCurrency(name)
+		if err != nil {
+			delete(values, name)
+			continue
+		}
+		if factor != 1 {
+			values[name] = value * factor
+		}
+	}
+	return values
 }

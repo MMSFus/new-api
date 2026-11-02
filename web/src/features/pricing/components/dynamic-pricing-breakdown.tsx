@@ -97,6 +97,12 @@ type DynamicPricingBreakdownProps = {
    * any synthesized combination label.
    */
   usageFacts?: Record<string, string | number>
+  /**
+   * USD per unit of the currency the expression is written in
+   * (`currency_usd_factor`). Prices are shown in USD terms; matching against
+   * the raw expression (tier labels, fixed prices) is unaffected.
+   */
+  currencyUSDFactor?: number
 }
 
 type BreakdownTier = ParsedTier | ParsedTaskTier
@@ -290,7 +296,14 @@ export function DynamicPricingBreakdown({
   usageSchema,
   taskPriceOptions,
   usageFacts,
+  currencyUSDFactor,
 }: DynamicPricingBreakdownProps) {
+  const factor =
+    typeof currencyUSDFactor === 'number' &&
+    Number.isFinite(currencyUSDFactor) &&
+    currencyUSDFactor > 0
+      ? currencyUSDFactor
+      : 1
   const { t, i18n } = useTranslation()
   const expr = billingExpr || ''
   const currency = useSystemConfigStore((s) => s.config.currency)
@@ -562,7 +575,7 @@ export function DynamicPricingBreakdown({
                               field.unit === 'image') &&
                               Number.isFinite(value))
                               ? formatBreakdownPrice(
-                                  value,
+                                  value * factor,
                                   field,
                                   symbol,
                                   rate,
@@ -679,7 +692,7 @@ export function DynamicPricingBreakdown({
                       Number.isFinite(value)) ? (
                     <span className={cn(!compact && 'font-semibold')}>
                       {formatBreakdownPrice(
-                        value,
+                        value * factor,
                         field,
                         symbol,
                         rate,

@@ -8,6 +8,8 @@ import (
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -108,4 +110,54 @@ func TestSmokeTestExprRejectsTaskUsageWithoutSchema(t *testing.T) {
 	assert.ErrorContains(t, err, "no task plugin usage schema")
 
 	require.NoError(t, SmokeTestExpr(`tier("base", p * 2 + c * 8)`))
+}
+
+// A configured expression and its plugin overrides follow the model's
+// currency mark; a built-in expression is always USD.
+func TestResolveBillingExprCurrencyOwner(t *testing.T) {
+	oldRate := operation_setting.USDExchangeRate
+	savedMarks := ratio_setting.ModelPriceCurrency2JSONString()
+	saved := billingSetting
+	t.Cleanup(func() {
+		operation_setting.USDExchangeRate = oldRate
+		require.NoError(t, ratio_setting.UpdateModelPriceCurrencyByJSONString(savedMarks))
+		billingSetting = saved
+	})
+	operation_setting.USDExchangeRate = 8
+	builtin := ""
+	for name := range builtinBillingExpr {
+		builtin = name
+		break
+	}
+	require.NotEmpty(t, builtin)
+	require.NoError(t, ratio_setting.UpdateModelPriceCurrencyByJSONString(fmt.Sprintf(`{"cny-model":"CNY",%q:"CNY"}`, builtin)))
+	billingSetting = BillingSetting{
+		BillingMode:       map[string]string{"cny-model": BillingModeTieredExpr},
+		BillingExpr:       map[string]string{"cny-model": `tier("base", u("seconds") * 1)`},
+		PluginBillingExpr: map[string]string{PluginBillingExprKey("demo", "cny-model"): `tier("base", u("seconds") * 2)`},
+	}
+
+	code, factor, err := ResolveBillingExprCurrency("cny-model")
+	require.NoError(t, err)
+	assert.Equal(t, "CNY", code)
+	assert.Equal(t, 0.125, factor)
+
+	if GetBillingMode(builtin) == BillingModeTieredExpr {
+		code, factor, err = ResolveBillingExprCurrency(builtin)
+		require.NoError(t, err)
+		assert.Equal(t, "USD", code)
+		assert.Equal(t, 1.0, factor)
+	}
+
+	expression, code, factor, ok, err := ResolveTaskBillingExprWithCurrency("demo", "cny-model", "")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, `tier("base", u("seconds") * 2)`, expression)
+	assert.Equal(t, "CNY", code)
+	assert.Equal(t, 0.125, factor)
+
+	operation_setting.USDExchangeRate = 0
+	_, _, _, ok, err = ResolveTaskBillingExprWithCurrency("demo", "cny-model", "")
+	assert.True(t, ok)
+	assert.Error(t, err)
 }

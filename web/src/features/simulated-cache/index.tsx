@@ -16,214 +16,137 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useQuery } from '@tanstack/react-query'
-import { Fragment, useState } from 'react'
+import { getRouteApi } from '@tanstack/react-router'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import {
-  DataTablePage,
-  DataTableRow,
-  useDataTable,
-} from '@/components/data-table'
 import { SectionPageLayout } from '@/components/layout'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
-import { TableCell, TableRow } from '@/components/ui/table'
-import { SimulatedCacheComparison } from '@/features/usage-logs/components/simulated-cache-comparison'
-import { parseLogOther } from '@/features/usage-logs/lib/format'
-import { getSimulatedCache } from '@/features/usage-logs/lib/simulated-cache'
-import { requireServerSuccess } from '@/lib/server-error-message'
+import { useLogRangeSearch } from '@/hooks/use-log-range-search'
 
-import {
-  getSimulatedCacheLogs,
-  getSimulatedCacheStat,
-  SIMULATED_CACHE_MAX_RANGE_SECONDS,
-  type SimulatedCacheFilters,
-} from './api'
-import { useSimulatedCacheColumns, type SimulatedCacheRow } from './columns'
+import { useSimulatedCacheColumns } from './columns'
+import { SimulatedCacheComparisonCharts } from './comparison-charts'
+import { SimulatedCacheDrillSheet } from './drill-sheet'
 import { SimulatedCacheFilterBar } from './filter-bar'
+import { SimulatedCacheLogsTable } from './logs-table'
 import { SimulatedCacheSummaryCards } from './summary-cards'
+import type { SimulatedCacheScope } from './types'
+import {
+  useSimulatedCacheData,
+  useSimulatedCacheRangeError,
+} from './use-simulated-cache-data'
+import { useSimulatedCacheTable } from './use-simulated-cache-table'
 
-const DEFAULT_RANGE_SECONDS = 24 * 3600
-const EMPTY_ROWS: SimulatedCacheRow[] = []
-
-function lastDayFilters(): SimulatedCacheFilters {
-  const now = Math.floor(Date.now() / 1000)
-  return {
-    start_timestamp: now - DEFAULT_RANGE_SECONDS,
-    end_timestamp: now,
-  }
-}
+const route = getRouteApi('/_authenticated/simulated-cache/')
+const QUICK_RANGES = ['1h', '24h', '7d'] as const
 
 /**
  * Admin audit of requests whose upstream prompt cache usage was replaced by a
- * simulated one (channel setting `simulated_cache_enabled`).
+ * simulated one (channel setting `simulated_cache_enabled`). Filters live in
+ * the URL; KPIs and charts sit above the audit table, and each of them opens
+ * the matching requests in the drill sheet.
  */
 export function SimulatedCache() {
   const { t } = useTranslation()
-  const [filters, setFilters] = useState<SimulatedCacheFilters>(lastDayFilters)
-  const [page, setPage] = useState({ p: 1, page_size: 20 })
-
-  // Mirror the backend rule: missing bounds default to the last 24h ending now.
-  const effectiveEnd = filters.end_timestamp ?? Math.floor(Date.now() / 1000)
-  const effectiveStart =
-    filters.start_timestamp ?? effectiveEnd - DEFAULT_RANGE_SECONDS
-  let rangeError = ''
-  if (effectiveStart > effectiveEnd) {
-    rangeError = t('End time must be after start time')
-  } else if (
-    effectiveEnd - effectiveStart >
-    SIMULATED_CACHE_MAX_RANGE_SECONDS
-  ) {
-    rangeError = t('Time range cannot exceed 7 days')
-  }
+  const search = useLogRangeSearch({
+    search: route.useSearch(),
+    navigate: route.useNavigate(),
+    defaultPreset: '24h',
+  })
+  const [scope, setScope] = useState<SimulatedCacheScope | null>(null)
+  const rangeError = useSimulatedCacheRangeError(search.filters)
   const canQuery = rangeError === ''
-
-  const statQuery = useQuery({
-    queryKey: ['simulated-cache', 'stat', filters],
-    queryFn: async () =>
-      requireServerSuccess(await getSimulatedCacheStat(filters)),
-    enabled: canQuery,
-    retry: false,
-  })
-  const listParams = { ...filters, ...page }
-  const listQuery = useQuery({
-    queryKey: ['simulated-cache', 'logs', listParams],
-    queryFn: async () =>
-      requireServerSuccess(await getSimulatedCacheLogs(listParams)),
-    enabled: canQuery,
-    retry: false,
-  })
-  const rows =
-    canQuery && listQuery.data
-      ? listQuery.data.items.map((log) => ({
-          log,
-          audit: getSimulatedCache(parseLogOther(log.other)),
-        }))
-      : EMPTY_ROWS
-
-  const columns = useSimulatedCacheColumns()
-  const { table } = useDataTable({
+  const data = useSimulatedCacheData(
+    search.filters,
+    search.pagination,
+    canQuery
+  )
+  const columns = useSimulatedCacheColumns(setScope)
+  const table = useSimulatedCacheTable({
     columns,
-    data: rows,
-    getRowId: (row) => String(row.log.id),
-    totalCount:
-      canQuery && !listQuery.isError ? (listQuery.data?.total ?? 0) : 0,
-    pagination: { pageIndex: page.p - 1, pageSize: page.page_size },
-    onPaginationChange: (updater) => {
-      if (listQuery.isFetching || !canQuery) return
-      setPage((previous) => {
-        const current = {
-          pageIndex: previous.p - 1,
-          pageSize: previous.page_size,
-        }
-        const next = typeof updater === 'function' ? updater(current) : updater
-        return {
-          p: next.pageSize === previous.page_size ? next.pageIndex + 1 : 1,
-          page_size: next.pageSize,
-        }
-      })
-    },
-    enableRowSelection: false,
-    enableSorting: false,
-    manualFiltering: true,
-    manualPagination: true,
+    rows: data.rows,
+    total: data.total,
+    pagination: search.pagination,
+    onPaginationChange: search.onPaginationChange,
+    locked: data.listQuery.isFetching || !canQuery,
   })
-  const updateFilters = (patch: Partial<SimulatedCacheFilters>) => {
-    setFilters((previous) => ({ ...previous, ...patch }))
-    setPage((previous) => ({ ...previous, p: 1 }))
-  }
-  const refetchAll = () => {
-    if (!canQuery) return
-    void statQuery.refetch()
-    void listQuery.refetch()
+  const openAll = (label: string) => setScope({ kind: 'all', label })
+  const stat = canQuery ? data.statQuery.data : undefined
+  const statLoading = canQuery && data.statQuery.isPending
+  const onSearch = () => {
+    if (!search.refreshNow()) data.refetch()
   }
 
   return (
     <SectionPageLayout>
       <SectionPageLayout.Title>{t('Simulated cache')}</SectionPageLayout.Title>
       <SectionPageLayout.Content>
-      <div className='space-y-4'>
-      <p className='text-muted-foreground text-sm'>
-        {t(
-          'Requests on channels with a simulated prompt cache. Original is what upstream reported; Simulated is what the client saw and billing charged.'
-        )}
-      </p>
-      <SimulatedCacheSummaryCards
-        stat={canQuery ? statQuery.data : undefined}
-        loading={canQuery && statQuery.isPending}
-        error={!canQuery || statQuery.isError}
-      />
-      <DataTablePage
-        table={table}
-        columns={columns}
-        isLoading={canQuery && listQuery.isPending}
-        isFetching={listQuery.isFetching}
-        emptyTitle={
-          listQuery.isError
-            ? t('Failed to load simulated cache logs')
-            : t('No records')
-        }
-        hideMobile
-        fixedHeight={false}
-        paginationInFooter={false}
-        applyHeaderSize
-        toolbar={
-          <div className='space-y-2'>
-            <SimulatedCacheFilterBar
-              table={table}
-              filters={filters}
-              onChange={updateFilters}
-              isFetching={listQuery.isFetching || statQuery.isFetching}
-              onSearch={refetchAll}
-              onReset={() => {
-                setFilters(lastDayFilters())
-                setPage((previous) => ({ ...previous, p: 1 }))
-              }}
-            />
-            {rangeError && (
-              <Alert variant='destructive'>
-                <AlertDescription>{rangeError}</AlertDescription>
-              </Alert>
+        <div className='space-y-4'>
+          <p className='text-muted-foreground text-sm'>
+            {t(
+              'Requests on channels with a simulated prompt cache. Original is what upstream reported; Simulated is what the client saw and billing charged.'
             )}
-            {canQuery && (listQuery.isError || statQuery.isError) && (
-              <Alert variant='destructive'>
-                <AlertDescription className='flex items-center justify-between gap-2'>
-                  <span>
-                    {(listQuery.error ?? statQuery.error)?.message ||
-                      t('Failed to load simulated cache logs')}
-                  </span>
-                  <Button size='sm' variant='outline' onClick={refetchAll}>
-                    {t('Retry')}
-                  </Button>
-                </AlertDescription>
-              </Alert>
-            )}
-          </div>
-        }
-        renderRow={(row) => (
-          <Fragment key={row.id}>
-            {/* className varies with expansion so the memoized row re-renders
-                its toggle; the row object itself stays stable. */}
-            <DataTableRow
-              row={row}
-              className={row.getIsExpanded() ? 'bg-muted/30' : undefined}
-              cellRenderColumns={table.options.columns}
-            />
-            {row.getIsExpanded() && row.original.audit && (
-              <TableRow className='hover:bg-transparent'>
-                <TableCell
-                  colSpan={row.getVisibleCells().length}
-                  className='bg-muted/30 whitespace-normal'
-                >
-                  <SimulatedCacheComparison audit={row.original.audit} />
-                </TableCell>
-              </TableRow>
-            )}
-          </Fragment>
-        )}
-      />
-      </div>
+          </p>
+          <SimulatedCacheFilterBar
+            table={table}
+            filters={search.filters}
+            onChange={search.updateFilters}
+            isFetching={data.isFetching}
+            onSearch={onSearch}
+            onReset={search.reset}
+            presets={QUICK_RANGES}
+            preset={search.preset}
+            onPresetChange={search.selectPreset}
+          />
+          {rangeError && (
+            <Alert variant='destructive'>
+              <AlertDescription>{rangeError}</AlertDescription>
+            </Alert>
+          )}
+          {data.error && (
+            <Alert variant='destructive'>
+              <AlertDescription className='flex items-center justify-between gap-2'>
+                <span>
+                  {data.error.message ||
+                    t('Failed to load simulated cache logs')}
+                </span>
+                <Button size='sm' variant='outline' onClick={data.refetch}>
+                  {t('Retry')}
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
+          <SimulatedCacheSummaryCards
+            stat={stat}
+            loading={statLoading}
+            error={!canQuery || data.statQuery.isError}
+            onDrill={stat ? openAll : undefined}
+          />
+          <SimulatedCacheComparisonCharts
+            stat={stat}
+            loading={statLoading}
+            onDrill={openAll}
+          />
+          <SimulatedCacheLogsTable
+            table={table}
+            columns={columns}
+            isLoading={canQuery && data.listQuery.isPending}
+            isFetching={data.listQuery.isFetching}
+            isError={data.listQuery.isError}
+          />
+          <SimulatedCacheDrillSheet
+            scope={scope}
+            filters={search.filters}
+            onOpenChange={(open) => {
+              if (!open) setScope(null)
+            }}
+            onApplyFilter={(patch) => {
+              setScope(null)
+              search.updateFilters(patch)
+            }}
+          />
+        </div>
       </SectionPageLayout.Content>
     </SectionPageLayout>
   )

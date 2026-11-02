@@ -23,7 +23,11 @@ import { toast } from 'sonner'
 import { handleServerError } from '@/lib/handle-server-error'
 import { requireServerSuccess } from '@/lib/server-error-message'
 
-import { updatePasskeyDomains, updateSystemOption } from '../api'
+import {
+  syncExchangeRate,
+  updatePasskeyDomains,
+  updateSystemOption,
+} from '../api'
 import type { UpdateOptionRequest, UpdatePasskeyDomainsRequest } from '../types'
 
 // Configuration keys that require status refresh
@@ -82,6 +86,28 @@ export function useUpdateOption() {
     onError: (error: Error) => {
       handleServerError(error, i18next.t('Failed to update setting'))
     },
+  })
+}
+
+export function useSyncExchangeRate() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async () => requireServerSuccess(await syncExchangeRate()),
+    // A failed attempt still records its time and reason, so refresh both ways.
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['system-options'] })
+      queryClient.invalidateQueries({ queryKey: ['status'] })
+      try {
+        window.localStorage.removeItem('status')
+      } catch {
+        /* Storage may be disabled. */
+      }
+    },
+    onSuccess: () => {
+      toast.success(i18next.t('Synced USD exchange rate'))
+    },
+    onError: (error: Error) =>
+      handleServerError(error, i18next.t('Exchange rate request failed')),
   })
 }
 

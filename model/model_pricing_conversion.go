@@ -222,6 +222,13 @@ func PreviewModelPricingConversion(name string, draft PricingValues) (*ModelPric
 	if preview.BillingDetails.ConflictingAudioPrices {
 		return &ModelPricingConversion{UnsupportedReason: "Gemini and OpenAI audio prices differ for this model. Use separate billing model names to convert them."}, nil
 	}
+	// The converted expression keeps the draft's currency mark, so its
+	// coefficients stay in that currency. Gemini's built-in audio price is
+	// USD and cannot be mixed into a CNY/CUSTOM expression.
+	if code, _ := effective[ratio_setting.ModelPriceCurrencyOption].(string); code != "" && code != operation_setting.CurrencyUSD &&
+		preview.BillingDetails.AudioInputPrice != nil && preview.BillingDetails.AudioOutputPrice == nil {
+		return &ModelPricingConversion{UnsupportedReason: "Gemini audio input prices are in USD and cannot be converted into a price in another currency."}, nil
+	}
 
 	generation := jsplugin.DefaultRegistry.Generation()
 	if _, task := generation.GetByModel(name); task {

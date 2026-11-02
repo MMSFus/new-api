@@ -635,3 +635,135 @@ export function formatLocalCurrencyAmount(
 
   return formatCurrencyValue(amount, merged, meta)
 }
+
+// ============================================================================
+// Amount currency marks
+// ============================================================================
+//
+// Administrators can write model prices and some quota amounts in USD or in
+// the site currency. Storage keeps the concrete code (CNY or CUSTOM, never
+// USD) and the backend converts with `1 / rate` USD per unit. These helpers
+// mirror setting/operation_setting/currency_conversion.go; they never fall
+// back to a rate of 1 for an invalid configuration.
+
+/** Currency an administrator-entered amount is written in. */
+export type AmountCurrency = 'USD' | 'CNY' | 'CUSTOM'
+
+type AmountCurrencyRates = Pick<
+  CurrencyConfig,
+  'usdExchangeRate' | 'customCurrencyExchangeRate' | 'customCurrencySymbol'
+>
+
+export function parseAmountCurrency(value: unknown): AmountCurrency {
+  return value === 'CNY' || value === 'CUSTOM' ? value : 'USD'
+}
+
+function rawCurrencyConfig(): CurrencyConfig {
+  return (
+    useSystemConfigStore.getState().config?.currency ?? DEFAULT_CURRENCY_CONFIG
+  )
+}
+
+/** Units of `currency` per USD, or null when the configured rate is unusable. */
+export function amountCurrencyRate(
+  currency: AmountCurrency,
+  config: AmountCurrencyRates = rawCurrencyConfig()
+): number | null {
+  if (currency === 'USD') return 1
+  const rate =
+    currency === 'CNY'
+      ? config.usdExchangeRate
+      : config.customCurrencyExchangeRate
+  return Number.isFinite(rate) && rate > 0 ? rate : null
+}
+
+/** USD per unit of `currency` (`currency_usd_factor`), or null when unusable. */
+export function amountCurrencyUSDFactor(
+  currency: AmountCurrency,
+  config: AmountCurrencyRates = rawCurrencyConfig()
+): number | null {
+  const rate = amountCurrencyRate(currency, config)
+  return rate === null ? null : 1 / rate
+}
+
+export function amountCurrencySymbol(
+  currency: AmountCurrency,
+  config: AmountCurrencyRates = rawCurrencyConfig()
+): string {
+  if (currency === 'CNY') return '¥'
+  if (currency === 'CUSTOM') {
+    return (
+      config.customCurrencySymbol?.trim() ||
+      DEFAULT_CURRENCY_CONFIG.customCurrencySymbol
+    )
+  }
+  return '$'
+}
+
+/** Site currency for amount marks; USD and TOKENS display types have none. */
+export function siteAmountCurrency(
+  displayType: CurrencyDisplayType = rawCurrencyConfig().quotaDisplayType
+): Exclude<AmountCurrency, 'USD'> | null {
+  if (displayType === 'CNY' || displayType === 'CUSTOM') return displayType
+  return null
+}
+
+/**
+ * Convert an amount between currencies at the current rates, keeping its real
+ * value. Returns null when either rate is unusable or the result is not finite.
+ */
+export function convertAmountCurrency(
+  amount: number,
+  from: AmountCurrency,
+  to: AmountCurrency,
+  config: AmountCurrencyRates = rawCurrencyConfig()
+): number | null {
+  if (!Number.isFinite(amount)) return null
+  if (from === to) return amount
+  const fromRate = amountCurrencyRate(from, config)
+  const toRate = amountCurrencyRate(to, config)
+  if (fromRate === null || toRate === null) return null
+  const converted = (amount / fromRate) * toRate
+  return Number.isFinite(converted) ? converted : null
+}
+
+/** Format a plain USD amount regardless of the site display currency. */
+export function formatUSDAmount(
+  amountUSD: number | null | undefined,
+  options?: CurrencyFormatOptions
+): string {
+  if (amountUSD == null || !Number.isFinite(amountUSD)) return '-'
+  return formatCurrencyValue(amountUSD, mergeOptions(options), {
+    kind: 'currency',
+    symbol: '$',
+    currencyCode: 'USD',
+    exchangeRate: 1,
+  })
+}
+
+/**
+ * Format an amount that a payment gateway charges in a fixed ISO 4217
+ * currency (e.g. the Waffo Pancake settlement currency), independent of the
+ * site's quota display currency. Uses the currency's own minor units, so JPY
+ * shows no decimals and BHD shows three. Unknown codes fall back to
+ * "<number> <code>".
+ */
+export function formatSettlementCurrencyAmount(
+  amount: number | null | undefined,
+  currencyCode: string,
+  options?: { locale?: Intl.LocalesArgument }
+): string {
+  if (amount == null || !Number.isFinite(amount)) return '-'
+  const code = currencyCode.trim().toUpperCase()
+  try {
+    return new Intl.NumberFormat(options?.locale, {
+      style: 'currency',
+      currency: code,
+    }).format(amount)
+  } catch {
+    const plain = new Intl.NumberFormat(options?.locale, {
+      maximumFractionDigits: 2,
+    }).format(amount)
+    return `${plain} ${code}`
+  }
+}

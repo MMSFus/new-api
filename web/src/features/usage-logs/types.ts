@@ -269,6 +269,14 @@ export interface LogOtherData {
   fixed_price?: number
   image_count?: number
   expr_b64?: string
+  /**
+   * Currency the price was written in (CNY/CUSTOM); only on non-USD logs.
+   * `model_ratio` / `model_price` are already USD; `expr_b64` and
+   * `fixed_price` are raw coefficients to multiply by `currency_usd_factor`.
+   */
+  price_currency?: string
+  /** USD per unit of `price_currency`, frozen when the request was reserved. */
+  currency_usd_factor?: number
   matched_tier?: string
   request_rules?: RequestRuleTrace[]
   usage_facts?: Record<string, string | number>

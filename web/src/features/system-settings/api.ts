@@ -20,6 +20,7 @@ import { api } from '@/lib/api'
 
 import type {
   ConfirmPaymentComplianceResponse,
+  ExchangeRateSyncResponse,
   FetchUpstreamRatiosRequest,
   LogCleanupTask,
   SystemOptionsResponse,
@@ -101,6 +102,13 @@ export async function listSystemTasks(
   const res = await api.get<SystemTaskListResponse>('/api/system-task/list', {
     params: { limit, ...filters },
   })
+  return res.data
+}
+
+export async function syncExchangeRate() {
+  const res = await api.post<ExchangeRateSyncResponse>(
+    '/api/option/exchange_rate/sync'
+  )
   return res.data
 }
 

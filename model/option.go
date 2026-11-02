@@ -125,6 +125,7 @@ func InitOptionMap() {
 	common.OptionMap["WaffoPancakeMerchantID"] = setting.WaffoPancakeMerchantID
 	common.OptionMap["WaffoPancakePrivateKey"] = setting.WaffoPancakePrivateKey
 	common.OptionMap["WaffoPancakeReturnURL"] = setting.WaffoPancakeReturnURL
+	common.OptionMap["WaffoPancakeCurrency"] = setting.WaffoPancakeCurrency
 	common.OptionMap["WaffoPancakeUnitPrice"] = strconv.FormatFloat(setting.WaffoPancakeUnitPrice, 'f', -1, 64)
 	common.OptionMap["WaffoPancakeMinTopUp"] = strconv.Itoa(setting.WaffoPancakeMinTopUp)
 	common.OptionMap["WaffoPancakeStoreID"] = setting.WaffoPancakeStoreID
@@ -159,6 +160,7 @@ func InitOptionMap() {
 	common.OptionMap["ModelRequestRateLimitPrivateGroup"] = setting.ModelRequestRateLimitPrivateGroup2JSONString()
 	common.OptionMap["ModelRatio"] = ratio_setting.ModelRatio2JSONString()
 	common.OptionMap["ModelPrice"] = ratio_setting.ModelPrice2JSONString()
+	common.OptionMap[ratio_setting.ModelPriceCurrencyOption] = ratio_setting.ModelPriceCurrency2JSONString()
 	common.OptionMap["CacheRatio"] = ratio_setting.CacheRatio2JSONString()
 	common.OptionMap["CreateCacheRatio"] = ratio_setting.CreateCacheRatio2JSONString()
 	common.OptionMap["GroupRatio"] = ratio_setting.GroupRatio2JSONString()
@@ -244,6 +246,9 @@ func validateOptionValue(key string, value string) error {
 	if err := operation_setting.ValidateQuotaOption(key, value); err != nil {
 		return err
 	}
+	if err := operation_setting.ValidateExchangeRateOption(key, value, usedCurrencies()); err != nil {
+		return err
+	}
 	if key == "EmailProvider" || key == "ResendApiKey" || key == "ResendFrom" {
 		if key == "EmailProvider" && value != "smtp" && value != "resend" {
 			return common.NewMessage("Email sending method must be SMTP or Resend")
@@ -262,6 +267,9 @@ func validateOptionValue(key string, value string) error {
 			return common.ValidateResendConfiguration(settings["ResendApiKey"], settings["ResendFrom"])
 		}
 	}
+	if key == "WaffoPancakeCurrency" && setting.ValidateWaffoPancakeCurrency(value) != nil {
+		return common.NewMessage("Invalid currency code. Use a 3-letter ISO 4217 code such as USD or JPY.")
+	}
 	if key == "ResendKeyConfigured" {
 		return common.NewMessage("Resend key configuration status is read-only")
 	}
@@ -270,6 +278,9 @@ func validateOptionValue(key string, value string) error {
 	}
 	if key == operation_setting.ChannelTestConcurrencyOptionKey {
 		return operation_setting.ValidateChannelTestConcurrency(value)
+	}
+	if key == operation_setting.ExchangeRateSyncIntervalOptionKey {
+		return operation_setting.ValidateExchangeRateSyncInterval(value)
 	}
 	if key == operation_setting.LogMaxRangeDaysOptionKey {
 		return operation_setting.ValidateLogMaxRangeDays(value)
@@ -553,6 +564,9 @@ func updateOptionMap(key string, value string) (err error) {
 		operation_setting.Price, _ = strconv.ParseFloat(value, 64)
 	case "USDExchangeRate":
 		operation_setting.USDExchangeRate, _ = strconv.ParseFloat(value, 64)
+		// Public prices of CNY-marked models depend on this rate.
+		InvalidatePricingCache()
+		ratio_setting.InvalidateExposedDataCache()
 	case "MinTopUp":
 		operation_setting.MinTopUp, _ = strconv.Atoi(value)
 	case "StripeApiSecret":
@@ -611,6 +625,8 @@ func updateOptionMap(key string, value string) (err error) {
 		setting.WaffoPancakePrivateKey = value
 	case "WaffoPancakeReturnURL":
 		setting.WaffoPancakeReturnURL = value
+	case "WaffoPancakeCurrency":
+		setting.WaffoPancakeCurrency = value
 	case "WaffoPancakeStoreID":
 		setting.WaffoPancakeStoreID = value
 	case "WaffoPancakeProductID":
@@ -653,10 +669,13 @@ func updateOptionMap(key string, value string) (err error) {
 		common.TurnstileSecretKey = value
 	case "QuotaForNewUser":
 		common.QuotaForNewUser, _ = strconv.Atoi(value)
+		operation_setting.SetRewardAmountRaw(key, value)
 	case "QuotaForInviter":
 		common.QuotaForInviter, _ = strconv.Atoi(value)
+		operation_setting.SetRewardAmountRaw(key, value)
 	case "QuotaForInvitee":
 		common.QuotaForInvitee, _ = strconv.Atoi(value)
+		operation_setting.SetRewardAmountRaw(key, value)
 	case "QuotaRemindThreshold":
 		common.QuotaRemindThreshold, _ = strconv.Atoi(value)
 	case "PreConsumedQuota":
@@ -693,6 +712,9 @@ func updateOptionMap(key string, value string) (err error) {
 		err = ratio_setting.UpdateCompletionRatioByJSONString(value)
 	case "ModelPrice":
 		err = ratio_setting.UpdateModelPriceByJSONString(value)
+	case ratio_setting.ModelPriceCurrencyOption:
+		err = ratio_setting.UpdateModelPriceCurrencyByJSONString(value)
+		InvalidatePricingCache()
 	case "CacheRatio":
 		err = ratio_setting.UpdateCacheRatioByJSONString(value)
 	case "CreateCacheRatio":
@@ -735,6 +757,14 @@ func updateOptionMap(key string, value string) (err error) {
 	return err
 }
 
+// usedCurrencies lists currencies referenced by model prices or amount fields;
+// their exchange rates must stay valid.
+func usedCurrencies() map[string]bool {
+	used := ratio_setting.UsedPriceCurrencies()
+	maps.Copy(used, operation_setting.UsedAmountCurrencies())
+	return used
+}
+
 // handleConfigUpdate 处理分层配置更新，返回是否已处理
 func handleConfigUpdate(key, value string) bool {
 	if key == operation_setting.ToolPriceOptionKey {
@@ -765,7 +795,7 @@ func handleConfigUpdate(key, value string) bool {
 	// 特定配置的后处理
 	if configName == "performance_setting" {
 		performance_setting.UpdateAndSync()
-	} else if configName == "billing_setting" {
+	} else if configName == "billing_setting" || key == operation_setting.CustomCurrencyRateOptionKey {
 		InvalidatePricingCache()
 		ratio_setting.InvalidateExposedDataCache()
 	}

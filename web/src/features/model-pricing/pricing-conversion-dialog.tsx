@@ -33,7 +33,11 @@ import {
   pricingAdjustmentRows,
 } from '@/features/system-settings/models/model-pricing-core'
 
-import { formatPricingAmount, type PricingCurrency } from './currency'
+import {
+  formatPricingAmount,
+  pricingCoefficientLabel,
+  type PricingCurrency,
+} from './currency'
 import {
   pricingRow,
   type CacheWriteMode,
@@ -182,7 +186,8 @@ export function PricingConversionDialog(props: {
           <div className='space-y-2 border-t pt-3'>
             <div className='flex items-center justify-between gap-2'>
               <h4 className='text-sm font-medium'>
-                {t('Billing expression')} (USD)
+                {t('Billing expression')} (
+                {pricingCoefficientLabel(props.currency)})
               </h4>
               <CopyButton value={props.preview.expression} />
             </div>

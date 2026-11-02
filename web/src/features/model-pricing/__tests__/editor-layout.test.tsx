@@ -291,6 +291,7 @@ function PricingFormFixture(props: {
 }) {
   const values = {
     ModelPrice: props.variant === 'default' ? '{"example-model":0.1}' : '{}',
+    ModelPriceCurrency: '{}',
     ModelRatio: '{}',
     CacheRatio: '{}',
     CreateCacheRatio: '{}',

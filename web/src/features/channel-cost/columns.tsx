@@ -17,10 +17,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { ColumnDef } from '@tanstack/react-table'
+import { PanelRightOpen } from 'lucide-react'
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { StatusBadge } from '@/components/status-badge'
+import { Button } from '@/components/ui/button'
 import { formatQuotaDelta } from '@/features/usage-logs/lib/simulated-cache'
 import { toIntlLocale } from '@/i18n/languages'
 import dayjs from '@/lib/dayjs'
@@ -30,12 +32,31 @@ import { cn } from '@/lib/utils'
 import { LOG_TYPE_REFUND, type ChannelCostLog } from './api'
 import { formatCostQuota, profitTone } from './lib'
 
-export function useChannelCostColumns(): ColumnDef<ChannelCostLog>[] {
+/** `onOpenLog` adds a leading button that opens the log's cost breakdown. */
+export function useChannelCostColumns(
+  onOpenLog: (log: ChannelCostLog) => void
+): ColumnDef<ChannelCostLog>[] {
   const { t, i18n } = useTranslation()
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
 
   return useMemo(
     () => [
+      {
+        id: 'details',
+        header: () => <span className='sr-only'>{t('Details')}</span>,
+        size: 40,
+        cell: ({ row }) => (
+          <Button
+            type='button'
+            variant='ghost'
+            size='icon-xs'
+            aria-label={t('View details')}
+            onClick={() => onOpenLog(row.original)}
+          >
+            <PanelRightOpen aria-hidden='true' />
+          </Button>
+        ),
+      },
       {
         id: 'created_at',
         header: t('Time'),
@@ -190,6 +211,6 @@ export function useChannelCostColumns(): ColumnDef<ChannelCostLog>[] {
         ),
       },
     ],
-    [t, locale]
+    [t, locale, onOpenLog]
   )
 }

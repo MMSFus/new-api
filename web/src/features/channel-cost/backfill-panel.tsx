@@ -16,84 +16,56 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useRef, useState } from 'react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Progress } from '@/components/ui/progress'
 import { toIntlLocale } from '@/i18n/languages'
-import dayjs from '@/lib/dayjs'
 import { formatNumber } from '@/lib/format'
-import { ROLE } from '@/lib/roles'
-import { useAuthStore } from '@/stores/auth-store'
 
 import {
-  getCostBackfillStatus,
   startCostBackfill,
   type ChannelCostFilters,
   type CostBackfillStatus,
 } from './api'
+import { CostBackfillTaskStatus } from './backfill-task'
+import { formatBackfillRange } from './lib'
+import {
+  COST_BACKFILL_QUERY_KEY,
+  useCostBackfillStatus,
+} from './use-cost-backfill'
 
 type BackfillPanelProps = {
   filters: ChannelCostFilters
   missing?: number
   enabled: boolean
-}
-
-const taskTitles = {
-  pending: 'Historical cost backfill submitted',
-  running: 'Backfilling historical costs',
-  succeeded: 'Historical cost backfill complete',
-  failed: 'Historical cost backfill incomplete',
-} as const
-const taskStatuses = {
-  pending: 'Pending',
-  running: 'Running',
-  succeeded: 'Completed',
-  failed: 'Failed',
-} as const
-
-function formatRange(start?: number, end?: number): string {
-  return `${dayjs.unix(start ?? 0).format('YYYY-MM-DD HH:mm')} — ${dayjs.unix(end ?? 0).format('YYYY-MM-DD HH:mm')}`
+  /**
+   * Refresh the report when the task finishes. Off when a parent that stays
+   * mounted (the header entry) already does it.
+   */
+  trackCompletion?: boolean
 }
 
 export function ChannelCostBackfillPanel(props: BackfillPanelProps) {
   const { t, i18n } = useTranslation()
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
-  const isRoot = useAuthStore(
-    (state) => state.auth.user?.role === ROLE.SUPER_ADMIN
-  )
   const queryClient = useQueryClient()
   const [confirmation, setConfirmation] = useState<{
     filters: ChannelCostFilters
     missing: number
   } | null>(null)
   const [existingTask, setExistingTask] = useState(false)
-  const lastTerminalTask = useRef('')
-  const statusQuery = useQuery({
-    queryKey: ['channel-cost-backfill'],
-    queryFn: getCostBackfillStatus,
-    enabled: isRoot,
-    retry: false,
-    refetchInterval: (query) =>
-      ['pending', 'running'].includes(query.state.data?.task?.status ?? '')
-        ? 3000
-        : 15000,
-    refetchIntervalInBackground: false,
-    meta: { errorToast: false },
+  const backfill = useCostBackfillStatus({
+    trackCompletion: props.trackCompletion ?? true,
   })
-  const task = statusQuery.data?.task
-  const active = task?.status === 'pending' || task?.status === 'running'
-  const scope = task?.payload?.filter
-  const state = task?.result ?? task?.state
+  const statusQuery = backfill.statusQuery
   const mutation = useMutation({
     mutationFn: startCostBackfill,
     onSuccess: (data) => {
-      queryClient.setQueryData<CostBackfillStatus>(['channel-cost-backfill'], {
+      queryClient.setQueryData<CostBackfillStatus>(COST_BACKFILL_QUERY_KEY, {
         supported: true,
         task: data.task,
       })
@@ -102,30 +74,15 @@ export function ChannelCostBackfillPanel(props: BackfillPanelProps) {
     },
   })
 
-  useEffect(() => {
-    if (!task || active || lastTerminalTask.current === task.task_id) return
-    lastTerminalTask.current = task.task_id
-    void queryClient.invalidateQueries({ queryKey: ['channel-cost'] })
-  }, [task, active, queryClient])
+  if (!backfill.isRoot) return null
 
-  if (!isRoot) return null
-
+  const missing = props.missing ?? 0
   const canStart =
     props.enabled &&
-    (props.missing ?? 0) > 0 &&
-    !active &&
+    missing > 0 &&
+    !backfill.active &&
     statusQuery.data?.supported === true &&
     !statusQuery.isError
-  const taskFilters = scope
-    ? [
-        scope.Channel ? `${t('Channel')} #${scope.Channel}` : '',
-        scope.ModelName ? `${t('Model')}: ${scope.ModelName}` : '',
-        scope.Username ? `${t('Username')}: ${scope.Username}` : '',
-        scope.Group ? `${t('Group')}: ${scope.Group}` : '',
-      ]
-        .filter(Boolean)
-        .join(' · ')
-    : ''
 
   return (
     <div className='space-y-4'>
@@ -152,13 +109,13 @@ export function ChannelCostBackfillPanel(props: BackfillPanelProps) {
           </AlertDescription>
         </Alert>
       )}
-      {(props.missing ?? 0) > 0 && (
+      {missing > 0 && (
         <div className='rounded-xl border border-amber-500/30 bg-amber-500/5 p-5'>
           <div className='flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between'>
             <div>
               <h2 className='text-sm font-medium'>
                 {t('The current range has {{number}} uncosted requests', {
-                  number: formatNumber(props.missing ?? 0, locale),
+                  number: formatNumber(missing, locale),
                 })}
               </h2>
               <p className='text-muted-foreground mt-1 text-sm leading-6'>
@@ -172,10 +129,7 @@ export function ChannelCostBackfillPanel(props: BackfillPanelProps) {
               disabled={!canStart || mutation.isPending}
               onClick={() => {
                 mutation.reset()
-                setConfirmation({
-                  filters: { ...props.filters },
-                  missing: props.missing ?? 0,
-                })
+                setConfirmation({ filters: { ...props.filters }, missing })
               }}
             >
               {t('Backfill historical costs')}
@@ -188,85 +142,7 @@ export function ChannelCostBackfillPanel(props: BackfillPanelProps) {
           {t('A backfill task is already active. Showing its range.')}
         </p>
       )}
-      {task && (
-        <section aria-live='polite' className='space-y-4 rounded-xl border p-5'>
-          <div className='flex flex-wrap items-start justify-between gap-3'>
-            <div>
-              <h2 className='text-sm font-medium'>
-                {t(taskTitles[task.status])}
-              </h2>
-              {scope && (
-                <p className='text-muted-foreground mt-1 text-xs'>
-                  {t('Task range')}:{' '}
-                  {formatRange(scope.StartTimestamp, scope.EndTimestamp)}
-                </p>
-              )}
-              {taskFilters && (
-                <p className='text-muted-foreground mt-1 text-xs break-all'>
-                  {taskFilters}
-                </p>
-              )}
-            </div>
-            <Badge variant='secondary'>{t(taskStatuses[task.status])}</Badge>
-          </div>
-          {state && (
-            <>
-              <div className='flex flex-wrap gap-x-5 gap-y-2 text-sm'>
-                <span>
-                  {t('Scanned')}: {formatNumber(state.processed, locale)}
-                </span>
-                <span>
-                  {t('Backfilled')}: {formatNumber(state.updated, locale)}
-                </span>
-                <span>
-                  {t('Skipped')}: {formatNumber(state.skipped, locale)}
-                </span>
-              </div>
-              {active && (
-                <Progress
-                  aria-label={t('Progress')}
-                  value={state.progress ?? 0}
-                />
-              )}
-            </>
-          )}
-          {active && (
-            <p className='text-muted-foreground text-sm'>
-              {t(
-                'The task runs in batches in the background and continues after you close this page.'
-              )}
-            </p>
-          )}
-          {task.status === 'succeeded' && (
-            <p className='text-muted-foreground text-sm'>
-              {t(
-                'Backfilled costs are estimates, marked as historical backfill in the details. The report has been refreshed.'
-              )}
-            </p>
-          )}
-          {task.status === 'failed' && (
-            <>
-              <p className='text-destructive text-sm'>
-                {t('Historical cost backfill failed. Please retry later.')}
-              </p>
-              <p className='text-muted-foreground text-sm'>
-                {t(
-                  'Completed estimates are preserved. Retry processes records that are still uncosted.'
-                )}
-              </p>
-            </>
-          )}
-          {!!state?.skipped && (
-            <ul className='text-muted-foreground space-y-1 text-sm'>
-              {Object.entries(state.reasons ?? {}).map(([reason, count]) => (
-                <li key={reason}>
-                  {t(reason)}: {formatNumber(count, locale)}
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-      )}
+      {backfill.task && <CostBackfillTaskStatus task={backfill.task} />}
       <ConfirmDialog
         open={confirmation !== null}
         onOpenChange={(open) => {
@@ -291,7 +167,7 @@ export function ChannelCostBackfillPanel(props: BackfillPanelProps) {
                 {t('Statistics period')}
               </div>
               <div className='text-xs tabular-nums'>
-                {formatRange(
+                {formatBackfillRange(
                   confirmation?.filters.start_timestamp,
                   confirmation?.filters.end_timestamp
                 )}

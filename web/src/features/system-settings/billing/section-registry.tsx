@@ -30,6 +30,7 @@ import { ConfigGroupsSection } from './config-groups-section'
 
 const getModelDefaults = (settings: BillingSettings) => ({
   ModelPrice: settings.ModelPrice,
+  ModelPriceCurrency: settings.ModelPriceCurrency,
   ModelRatio: settings.ModelRatio,
   CacheRatio: settings.CacheRatio,
   CreateCacheRatio: settings.CreateCacheRatio,
@@ -72,6 +73,7 @@ const BILLING_SECTIONS = [
               settings['quota_setting.pre_consume_multiplier'],
             enable_free_model_pre_consume:
               settings['quota_setting.enable_free_model_pre_consume'],
+            amount_currency: settings['quota_setting.amount_currency'],
           },
         }}
         complianceConfirmed={
@@ -100,6 +102,17 @@ const BILLING_SECTIONS = [
             custom_currency_exchange_rate:
               settings['general_setting.custom_currency_exchange_rate'] ?? 1,
           },
+          exchange_rate_setting: {
+            auto_sync_enabled:
+              settings['exchange_rate_setting.auto_sync_enabled'] ?? false,
+            sync_interval_hours:
+              settings['exchange_rate_setting.sync_interval_hours'] ?? 6,
+          },
+        }}
+        exchangeRateSyncStatus={{
+          lastSyncedAt: settings['exchange_rate_setting.last_synced_at'] ?? 0,
+          lastError: settings['exchange_rate_setting.last_error'] ?? '',
+          lastSource: settings['exchange_rate_setting.last_source'] ?? '',
         }}
       />
     ),
@@ -188,6 +201,7 @@ const BILLING_SECTIONS = [
           WaffoPancakeMerchantID: settings.WaffoPancakeMerchantID ?? '',
           WaffoPancakePrivateKey: settings.WaffoPancakePrivateKey ?? '',
           WaffoPancakeReturnURL: settings.WaffoPancakeReturnURL ?? '',
+          WaffoPancakeCurrency: settings.WaffoPancakeCurrency ?? 'USD',
         }}
         waffoPancakeProvisionedStoreID={settings.WaffoPancakeStoreID ?? ''}
         waffoPancakeProvisionedProductID={settings.WaffoPancakeProductID ?? ''}

@@ -16,9 +16,16 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Activity, Coins, PiggyBank, Receipt } from 'lucide-react'
+import {
+  Activity,
+  Coins,
+  PanelRightOpen,
+  PiggyBank,
+  Receipt,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { Button } from '@/components/ui/button'
 import { StatCard } from '@/features/dashboard/components/ui/stat-card'
 import { formatQuotaDelta } from '@/features/usage-logs/lib/simulated-cache'
 import { toIntlLocale } from '@/i18n/languages'
@@ -31,6 +38,8 @@ export function ChannelCostSummaryCards(props: {
   total: ChannelCostAmount | undefined
   loading: boolean
   error: boolean
+  /** Opens the totals of the whole search; absent while there is no data. */
+  onDrill?: (title: string) => void
 }) {
   const { t, i18n } = useTranslation()
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
@@ -126,6 +135,21 @@ export function ChannelCostSummaryCards(props: {
             details={card.details}
             loading={props.loading}
             error={props.error}
+            action={
+              props.onDrill && (
+                <Button
+                  type='button'
+                  variant='ghost'
+                  size='icon-xs'
+                  aria-label={t('View details of {{name}}', {
+                    name: card.title,
+                  })}
+                  onClick={() => props.onDrill?.(card.title)}
+                >
+                  <PanelRightOpen aria-hidden='true' />
+                </Button>
+              )
+            }
           />
         </div>
       ))}

@@ -22,26 +22,22 @@ import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
-import type { UsageLog } from '@/features/usage-logs/data/schema'
-import {
-  formatQuotaDelta,
-  type SimulatedCacheAudit,
-} from '@/features/usage-logs/lib/simulated-cache'
+import { formatQuotaDelta } from '@/features/usage-logs/lib/simulated-cache'
 import { toIntlLocale } from '@/i18n/languages'
 import dayjs from '@/lib/dayjs'
 import { formatLogQuota, formatNumber } from '@/lib/format'
 
-export type SimulatedCacheRow = {
-  log: UsageLog
-  /** null if the row lacks a readable marker (should not happen per API). */
-  audit: SimulatedCacheAudit | null
-}
+import { DrillCell } from './drill-cell'
+import type { SimulatedCacheRow, SimulatedCacheScope } from './types'
 
 function quotaText(value: number | null | undefined): string {
   return value == null ? '-' : formatLogQuota(value)
 }
 
-export function useSimulatedCacheColumns(): ColumnDef<SimulatedCacheRow>[] {
+/** Without `onDrill` the channel and model cells are plain text. */
+export function useSimulatedCacheColumns(
+  onDrill?: (scope: SimulatedCacheScope) => void
+): ColumnDef<SimulatedCacheRow>[] {
   const { t, i18n } = useTranslation()
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   return useMemo(() => {
@@ -95,16 +91,43 @@ export function useSimulatedCacheColumns(): ColumnDef<SimulatedCacheRow>[] {
         id: 'channel',
         header: t('Channel'),
         size: 140,
-        accessorFn: (entry) =>
-          [entry.log.channel_name, `#${entry.log.channel}`]
+        cell: ({ row }) => {
+          const log = row.original.log
+          const label = [log.channel_name, `#${log.channel}`]
             .filter(Boolean)
-            .join(' '),
+            .join(' ')
+          return (
+            <DrillCell
+              label={label}
+              title={t('View details')}
+              onClick={
+                onDrill && log.channel > 0
+                  ? () =>
+                      onDrill({ kind: 'channel', channel: log.channel, label })
+                  : undefined
+              }
+            />
+          )
+        },
       },
       {
         id: 'model_name',
         header: t('Model'),
         size: 180,
-        accessorFn: (entry) => entry.log.model_name,
+        cell: ({ row }) => {
+          const model = row.original.log.model_name
+          return (
+            <DrillCell
+              label={model || '-'}
+              title={t('View details')}
+              onClick={
+                onDrill && model
+                  ? () => onDrill({ kind: 'model', model, label: model })
+                  : undefined
+              }
+            />
+          )
+        },
       },
       {
         id: 'cache_read',
@@ -149,5 +172,5 @@ export function useSimulatedCacheColumns(): ColumnDef<SimulatedCacheRow>[] {
       },
     ]
     return columns
-  }, [t, locale])
+  }, [t, locale, onDrill])
 }

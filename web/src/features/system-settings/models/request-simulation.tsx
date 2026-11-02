@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { useId, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { CurrencyUSDReference } from '@/components/currency-amount-input'
 import { JsonCodeEditor } from '@/components/json-code-editor'
 import { JsonEditor } from '@/components/json-editor'
 import { Badge } from '@/components/ui/badge'
@@ -358,6 +359,18 @@ export function RequestSimulation(props: RequestSimulationProps) {
                 props.currency
               )}
               {success.billingUnit === 'request' && `/${t('request')}`}
+              {props.currency?.code && (
+                <>
+                  {' '}
+                  <CurrencyUSDReference
+                    amount={
+                      success.cost / (props.mode === 'token' ? 1_000_000 : 1)
+                    }
+                    currency={props.currency.code}
+                    formatOptions={{ digitsLarge: 4, digitsSmall: 6 }}
+                  />
+                </>
+              )}
             </p>
             {success.matchedTier && (
               <Badge variant='outline'>

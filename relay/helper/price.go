@@ -90,6 +90,12 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 	var audioRatio float64
 	var audioCompletionRatio float64
 	var freeModel bool
+	// Prices marked CNY/CUSTOM are converted to USD here, once per request; an
+	// invalid exchange rate fails the request instead of billing at 1.
+	priceCurrency, currencyFactor, err := ratio_setting.ResolveModelPriceCurrency(billingModelName)
+	if err != nil {
+		return hosttypes.PriceData{}, err
+	}
 	if !usePrice {
 		preConsumeMultiplier, err := operation_setting.InputPreConsumeMultiplier()
 		if err != nil {
@@ -107,6 +113,9 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 			if !acceptUnsetRatio {
 				return hosttypes.PriceData{}, modelPriceNotConfiguredError(c, matchName, info.UserId)
 			}
+		}
+		if currencyFactor != 1 {
+			modelRatio *= currencyFactor
 		}
 		completionRatio = ratio_setting.GetCompletionRatio(billingModelName)
 		cacheRatio, _ = ratio_setting.GetCacheRatio(billingModelName)
@@ -128,6 +137,9 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 			info.ImageQuotaBeforeGroup = preConsumedTokens * modelRatio
 		}
 	} else {
+		if currencyFactor != 1 {
+			modelPrice *= currencyFactor
+		}
 		if meta.ImagePriceRatio != 0 {
 			modelPrice = modelPrice * meta.ImagePriceRatio
 		}
@@ -171,6 +183,8 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		CacheCreation1hRatio:  cacheCreationRatio1h,
 		CacheCreation12hRatio: cacheCreationRatio12h,
 		QuotaToPreConsume:     preConsumedQuota,
+		PriceCurrency:         priceCurrency,
+		CurrencyUSDFactor:     currencyFactor,
 	}
 	if usePrice {
 		for name, ratio := range meta.BillingRatios {
@@ -216,6 +230,19 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (hostt
 	modelPrice, success := ratio_setting.GetModelPrice(info.OriginModelName, true)
 	usePrice := success
 	var modelRatio float64
+	// Built-in default prices are USD; only configured prices/ratios carry a
+	// currency mark. An invalid exchange rate fails closed.
+	priceCurrency, currencyFactor := operation_setting.CurrencyUSD, 1.0
+	configuredCurrency, configuredFactor, err := ratio_setting.ResolveModelPriceCurrency(info.OriginModelName)
+	if err != nil {
+		return hosttypes.PriceData{}, err
+	}
+	if success {
+		priceCurrency, currencyFactor = configuredCurrency, configuredFactor
+		if currencyFactor != 1 {
+			modelPrice *= currencyFactor
+		}
+	}
 
 	if !success {
 		defaultPrice, ok := ratio_setting.GetDefaultModelPriceMap()[info.OriginModelName]
@@ -233,6 +260,12 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (hostt
 			if !ratioSuccess && !acceptUnsetRatio {
 				return hosttypes.PriceData{}, modelPriceNotConfiguredError(c, matchName, info.UserId)
 			}
+			if ratioSuccess {
+				priceCurrency, currencyFactor = configuredCurrency, configuredFactor
+				if currencyFactor != 1 {
+					modelRatio *= currencyFactor
+				}
+			}
 		}
 	}
 
@@ -240,7 +273,6 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (hostt
 	freeModel := false
 
 	if usePrice {
-		var err error
 		quota, err = common.QuotaFromFloatStrict(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
 		if err != nil {
 			return hosttypes.PriceData{}, err
@@ -253,7 +285,6 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (hostt
 		}
 	} else {
 		// 按量计费：以模型倍率的一半作为预扣额度
-		var err error
 		quota, err = common.QuotaFromFloatStrict(modelRatio / 2 * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
 		if err != nil {
 			return hosttypes.PriceData{}, err
@@ -268,12 +299,14 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (hostt
 	}
 
 	priceData := hosttypes.PriceData{
-		FreeModel:      freeModel,
-		ModelPrice:     modelPrice,
-		ModelRatio:     modelRatio,
-		UsePrice:       usePrice,
-		Quota:          quota,
-		GroupRatioInfo: groupRatioInfo,
+		FreeModel:         freeModel,
+		ModelPrice:        modelPrice,
+		ModelRatio:        modelRatio,
+		UsePrice:          usePrice,
+		Quota:             quota,
+		GroupRatioInfo:    groupRatioInfo,
+		PriceCurrency:     priceCurrency,
+		CurrencyUSDFactor: currencyFactor,
 	}
 	return priceData, nil
 }
@@ -381,6 +414,12 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, billing
 	if err != nil {
 		return hosttypes.PriceData{}, err
 	}
+	// The currency factor is frozen in the snapshot so settlement uses the
+	// pre-consume rate. Built-in expressions are USD.
+	currencyCode, currencyFactor, err := billing_setting.ResolveBillingExprCurrency(billingModelName)
+	if err != nil {
+		return hosttypes.PriceData{}, err
+	}
 
 	requestInput, err := ResolveIncomingBillingExprRequestInput(c, info)
 	if err != nil {
@@ -403,7 +442,7 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, billing
 	}
 
 	// Expression coefficients are $/1M tokens prices; convert to quota the same way per-call billing does.
-	quotaBeforeGroup := rawCost / 1_000_000 * common.QuotaPerUnit
+	quotaBeforeGroup := rawCost / 1_000_000 * currencyFactor * common.QuotaPerUnit
 	// Scale the reservation, preserving the expression's context-length tier
 	// and leaving actual settlement and fixed request prices unchanged.
 	if trace.BillingUnit != billingexpr.BillingUnitRequest {
@@ -439,6 +478,10 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, billing
 		EstimatedFixedPrice:       trace.FixedPrice,
 		QuotaPerUnit:              common.QuotaPerUnit,
 		ExprVersion:               billingexpr.ExprVersion(exprStr),
+	}
+	if currencyCode != operation_setting.CurrencyUSD {
+		snapshot.CurrencyCode = currencyCode
+		snapshot.CurrencyUSDFactor = currencyFactor
 	}
 	info.TieredBillingSnapshot = snapshot
 	info.BillingRequestInput = &requestInput

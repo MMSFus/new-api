@@ -29,6 +29,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
+import { CurrencyUSDReference } from '@/components/currency-amount-input'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -51,6 +52,7 @@ import {
 import { Textarea } from '@/components/ui/textarea'
 import {
   formatPricingAmount,
+  pricingCoefficientLabel,
   USD_PRICING_CURRENCY,
   type PricingCurrency,
 } from '@/features/model-pricing/currency'
@@ -873,6 +875,13 @@ function CostEstimator({ effectiveExpr, fullExpr, currency }: EstimatorProps) {
               {formatPricingAmount(result.cost / 1_000_000, currency)}
               {result.billingUnit === 'request' && `/${t('request')}`}
             </span>
+            {currency.code && (
+              <CurrencyUSDReference
+                amount={result.cost / 1_000_000}
+                currency={currency.code}
+                formatOptions={{ digitsLarge: 4, digitsSmall: 6 }}
+              />
+            )}
             {result.matchedTier && (
               <Badge variant='outline' className='text-xs'>
                 {t('Hit tier')}: {result.matchedTier}
@@ -1223,9 +1232,14 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
       </div>
 
       <p className='text-muted-foreground text-xs'>
-        {t(
-          'Raw expressions and presets use USD. Currency selection only converts visual price inputs and monetary previews.'
-        )}
+        {pricingCoefficientLabel(currency) === 'USD'
+          ? t(
+              'Raw expressions and presets use USD. Currency selection only converts visual price inputs and monetary previews.'
+            )
+          : t(
+              'Raw expressions and presets are written in {{currency}}, the price currency of this model.',
+              { currency: pricingCoefficientLabel(currency) }
+            )}
       </p>
       <PresetSection applyPreset={applyPreset} />
 
