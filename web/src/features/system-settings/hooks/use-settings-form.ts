@@ -261,7 +261,14 @@ export function useSettingsForm<T extends FieldValues>({
       {}
     )
 
-    await onSubmit(data, changedFields)
+    try {
+      await onSubmit(data, changedFields)
+    } catch {
+      // A failed save keeps the form dirty so the user can retry. Callers save
+      // through useUpdateOption, whose onError already reports the failure;
+      // rethrowing would only surface as an unhandled rejection.
+      return
+    }
 
     const flattenedValues = flattenValues(data)
     baselineRef.current = flattenedValues
