@@ -18,10 +18,10 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useTranslation } from 'react-i18next'
 
+import { MetricGrid, type MetricGridItem } from '@/components/metric-grid'
 import { formatQuotaDelta } from '@/features/usage-logs/lib/simulated-cache'
 import { toIntlLocale } from '@/i18n/languages'
 import { formatLogQuota, formatNumber } from '@/lib/format'
-import { cn } from '@/lib/utils'
 
 import type { ChannelCostAmount } from './api'
 import { formatCostQuota, formatPercent, profitMargin, profitTone } from './lib'
@@ -34,7 +34,7 @@ export function ChannelCostScopeSummary(props: {
   const { t, i18n } = useTranslation()
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const amount = props.amount
-  const metrics: { label: string; value: string; className?: string }[] = [
+  const metrics: MetricGridItem[] = [
     { label: t('Requests'), value: formatNumber(amount.requests, locale) },
     { label: t('Refunds'), value: formatNumber(amount.refunds, locale) },
     {
@@ -77,27 +77,5 @@ export function ChannelCostScopeSummary(props: {
     })
   }
 
-  return (
-    <dl className='grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4'>
-      {metrics.map((metric) => (
-        <div
-          key={metric.label}
-          className='bg-muted/40 min-w-0 rounded-lg px-3 py-2'
-        >
-          <dt className='text-muted-foreground truncate text-xs'>
-            {metric.label}
-          </dt>
-          <dd
-            className={cn(
-              'mt-1 truncate font-mono text-sm font-semibold tabular-nums',
-              metric.className
-            )}
-            title={metric.value}
-          >
-            {metric.value}
-          </dd>
-        </div>
-      ))}
-    </dl>
-  )
+  return <MetricGrid metrics={metrics} />
 }

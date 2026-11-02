@@ -247,6 +247,7 @@ func TestProducerQueueFullDropsWithoutBlocking(t *testing.T) {
 
 func TestProducerWritesSpoolProtocol(t *testing.T) {
 	withStorageUsage(t, 10, 10)
+	sink := installFakeSink(t)
 	s := DefaultSettings()
 	s.SpoolRoot = filepath.Join(t.TempDir(), "spool")
 	s.StatsPath = filepath.Join(filepath.Dir(s.SpoolRoot), "stats.json")
@@ -264,11 +265,18 @@ func TestProducerWritesSpoolProtocol(t *testing.T) {
 	require.True(t, ok)
 	p.Stop(5 * time.Second)
 	require.EqualValues(t, 1, p.Counters().Written)
+	require.Len(t, sink.upserts, 1, "the index row is flushed on stop")
+	indexed := sink.upserts[0]
+	assert.Equal(t, "req-1", indexed.RecordID)
+	assert.Equal(t, "gpt-4o/jsonl/2026/09/28/05/10-"+p.instance+".jsonl", indexed.RecordPath)
+	assert.Equal(t, "primary", indexed.RootID)
+	assert.Zero(t, indexed.ArchiveBytes)
 
 	shard := filepath.Join(s.SpoolRoot, "gpt-4o", "jsonl", "2026", "09", "28", "05", "10-"+p.instance+".jsonl")
 	raw, err := os.ReadFile(shard)
 	require.NoError(t, err)
 	require.True(t, bytes.HasSuffix(raw, []byte("\n")))
+	assert.EqualValues(t, len(raw)+len(`{"model":"gpt-4o"}`)+len("data: hi\n\n"), indexed.RawBytes)
 	var rec Record
 	require.NoError(t, common.Unmarshal(bytes.TrimSpace(raw), &rec))
 	require.Len(t, rec.BodyFiles, 2)
@@ -305,6 +313,8 @@ type fakeR2 struct {
 	uploads   map[string]map[int][]byte
 	upMeta    map[string]map[string]string
 	failPuts  int
+	pageSize  int
+	lists     int
 	methods   map[string]int
 	forbidden []string
 }
@@ -335,6 +345,42 @@ func (f *fakeR2) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	key := strings.TrimPrefix(r.URL.Path, "/bucket/")
 	q := r.URL.Query()
 	switch {
+	case r.Method == http.MethodGet && q.Get("list-type") == "2":
+		f.lists++
+		prefix, after := q.Get("prefix"), q.Get("continuation-token")
+		var keys []string
+		for k := range f.objects {
+			if strings.HasPrefix(k, prefix) && k > after {
+				keys = append(keys, k)
+			}
+		}
+		sort.Strings(keys)
+		size := f.pageSize
+		if size <= 0 {
+			size = 1000
+		}
+		truncated := len(keys) > size
+		if truncated {
+			keys = keys[:size]
+		}
+		var b strings.Builder
+		b.WriteString(`<ListBucketResult>`)
+		for _, k := range keys {
+			b.WriteString(`<Contents><Key>` + k + `</Key></Contents>`)
+		}
+		if truncated {
+			b.WriteString(`<IsTruncated>true</IsTruncated><NextContinuationToken>` + keys[len(keys)-1] + `</NextContinuationToken>`)
+		}
+		b.WriteString(`</ListBucketResult>`)
+		_, _ = io.WriteString(w, b.String())
+	case r.Method == http.MethodGet:
+		data, ok := f.objects[key]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+		_, _ = w.Write(data)
 	case r.Method == http.MethodHead:
 		data, ok := f.objects[key]
 		if !ok {
@@ -585,4 +631,297 @@ func TestStoragePauseAtNinetyPercent(t *testing.T) {
 	require.False(t, p.Accepting())
 	require.False(t, p.Enqueue(&Capture{}, 0))
 	require.EqualValues(t, 1, p.Counters().DroppedStorage)
+}
+
+type fakeIndexSink struct {
+	mu      sync.Mutex
+	upserts []IndexRow
+	batches [][]IndexRow
+}
+
+func (f *fakeIndexSink) UpsertRecords(_ context.Context, rows []IndexRow) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.upserts = append(f.upserts, rows...)
+	return nil
+}
+
+func (f *fakeIndexSink) ApplyBatch(_ context.Context, rows []IndexRow) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.batches = append(f.batches, append([]IndexRow(nil), rows...))
+	return nil
+}
+
+func installFakeSink(t *testing.T) *fakeIndexSink {
+	t.Helper()
+	sink := &fakeIndexSink{}
+	SetIndexSink(sink)
+	t.Cleanup(func() { SetIndexSink(nil) })
+	return sink
+}
+
+func TestAllocateArchiveBytes(t *testing.T) {
+	cases := []struct {
+		name    string
+		raw     []int64
+		archive int64
+		want    []int64
+	}{
+		{"single record takes everything", []int64{123}, 50, []int64{50}},
+		{"proportional split", []int64{100, 300}, 40, []int64{10, 30}},
+		{"remainder goes to the last record", []int64{1, 1, 1}, 10, []int64{3, 3, 4}},
+		{"rounding down per record", []int64{2, 3, 5}, 7, []int64{1, 2, 4}},
+		{"all raw bytes zero splits by count", []int64{0, 0, 0}, 8, []int64{2, 2, 4}},
+		{"zero archive size", []int64{5, 5}, 0, []int64{0, 0}},
+		{"no overflow on large values", []int64{1 << 40, 1 << 40}, 1 << 40, []int64{1 << 39, 1 << 39}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rows := make([]IndexRow, len(tc.raw))
+			for i, r := range tc.raw {
+				rows[i].RawBytes = r
+			}
+			AllocateArchiveBytes(rows, tc.archive)
+			var got []int64
+			var sum int64
+			for _, r := range rows {
+				got = append(got, r.ArchiveBytes)
+				sum += r.ArchiveBytes
+			}
+			assert.Equal(t, tc.want, got)
+			assert.Equal(t, tc.archive, sum)
+		})
+	}
+	AllocateArchiveBytes(nil, 10) // no rows: no panic
+}
+
+func TestRevenueRulesValidationAndFirstMatch(t *testing.T) {
+	rules := []RevenueRule{
+		{ID: "off", Name: "Disabled", MatchType: RevenueMatchKeyword, Pattern: "claude", PricePerTB: 9, Enabled: false},
+		{ID: "r1", Name: "Opus", MatchType: RevenueMatchGlob, Pattern: "claude-opus-*", PricePerTB: 1200, Enabled: true},
+		{ID: "r2", Name: "GPT", MatchType: RevenueMatchKeyword, Pattern: "GPT", PricePerTB: 600, Enabled: true},
+		{ID: "r3", Name: "Gemini", MatchType: RevenueMatchRegex, Pattern: `^gemini-3(\.\d+)?-`, PricePerTB: 400, Enabled: true},
+		{ID: "r4", Name: "Claude", MatchType: RevenueMatchKeyword, Pattern: "claude", PricePerTB: 100, Enabled: true},
+	}
+	m, err := CompileRevenueRules(rules)
+	require.NoError(t, err)
+	for model, want := range map[string]string{
+		"claude-opus-4": "r1", "claude-sonnet-4": "r4", "gpt-4o": "r2", "openai/GPT-5": "r2",
+		"gemini-3.1-pro": "r3", "gemini-2.5-pro": "", "": "",
+	} {
+		rule, ok := m.Match(model)
+		assert.Equal(t, want != "", ok, model)
+		assert.Equal(t, want, rule.ID, model)
+	}
+	assert.Len(t, m.Rules(), 4, "disabled rules are not reported")
+
+	invalid := []RevenueRule{
+		{ID: "", Name: "n", MatchType: RevenueMatchKeyword, Pattern: "p"},
+		{ID: "a", Name: "", MatchType: RevenueMatchKeyword, Pattern: "p"},
+		{ID: "a", Name: "n", MatchType: "contains", Pattern: "p"},
+		{ID: "a", Name: "n", MatchType: RevenueMatchRegex, Pattern: "("},
+		{ID: "a", Name: "n", MatchType: RevenueMatchRegex, Pattern: strings.Repeat("a", 513)},
+		{ID: "a", Name: "n", MatchType: RevenueMatchGlob, Pattern: "bad[x"},
+		{ID: "a", Name: "n", MatchType: RevenueMatchKeyword, Pattern: "p", PricePerTB: -1},
+		{ID: "a", Name: "n", MatchType: RevenueMatchKeyword, Pattern: ""},
+	}
+	for _, rule := range invalid {
+		_, err := CompileRevenueRules([]RevenueRule{rule})
+		assert.Error(t, err, "%+v", rule)
+	}
+	dup := RevenueRule{ID: "a", Name: "n", MatchType: RevenueMatchKeyword, Pattern: "p"}
+	_, err = CompileRevenueRules([]RevenueRule{dup, dup})
+	require.Error(t, err)
+	_, err = CompileRevenueRules(make([]RevenueRule, MaxRevenueRules+1))
+	require.Error(t, err)
+	require.Error(t, ValidateRevenueOption(RevenueRulesOptionKey, `{"not":"array"}`))
+	require.NoError(t, ValidateRevenueOption(RevenueRulesOptionKey, ""))
+	require.Error(t, ValidateRevenueOption(RevenueCurrencyLabelOptionKey, strings.Repeat("x", 17)))
+}
+
+// writeIndexedRecord writes a record line with real record metadata and its
+// body files into a spool JSONL shard.
+func writeIndexedRecord(t *testing.T, root, model, shard, recordID string, bodies map[string]string) {
+	t.Helper()
+	rec := Record{
+		SchemaVersion: 1, RecordID: recordID, SessionID: "sess-1", StartedAt: "2026-11-02T05:10:00Z",
+		Model: model, Path: "/v1/chat/completions", StatusCode: 200, UserID: 7, Attachments: []Attachment{},
+	}
+	for _, kind := range []string{"request", "response"} {
+		content, ok := bodies[kind]
+		if !ok {
+			continue
+		}
+		ref := "body/2026/11/02/05/ab/cd/sess-1/" + recordID + "_" + kind + ".body"
+		writeSpoolFile(t, filepath.Join(root, model, filepath.FromSlash(ref)), content)
+		rec.BodyFiles = append(rec.BodyFiles, BodyFile{Kind: kind, File: ref, Size: int64(len(content)), ContentType: "application/json"})
+	}
+	line, err := common.Marshal(rec)
+	require.NoError(t, err)
+	file := filepath.Join(root, model, "jsonl", "2026", "11", "02", "05", shard)
+	var existing []byte
+	if raw, err := os.ReadFile(file); err == nil {
+		existing = raw
+	}
+	writeSpoolFile(t, file, string(existing)+string(line)+"\n")
+}
+
+func TestVerifiedBatchIndexAndContentReadback(t *testing.T) {
+	sink := installFakeSink(t)
+	fake := newFakeR2()
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	cfg := testConfig(t)
+	cfg.R2.Endpoint = srv.URL
+	root := cfg.SpoolRoots[0].Path
+	large := strings.Repeat("a", MaxContentBodyBytes+10)
+	writeIndexedRecord(t, root, "gpt-4o", "10-ab46d8fc.jsonl", "req-1", map[string]string{"request": `{"q":"hi"}`, "response": large})
+	writeIndexedRecord(t, root, "gpt-4o", "10-ab46d8fc.jsonl", "req-2", map[string]string{"request": `{"q":"again"}`})
+	writeIndexedRecord(t, root, "claude-opus-4", "10-ab46d8fc.jsonl", "req-3", nil)
+
+	settings := DefaultSettings()
+	settings.SpoolRoot, settings.RootID, settings.WorkDir = root, "primary", cfg.WorkDir
+	store := newTestStore(t, cfg)
+	loc := ContentLocation{RecordID: "req-1", RootID: "primary", RecordPath: "gpt-4o/jsonl/2026/11/02/05/10-ab46d8fc.jsonl"}
+
+	// Before upload the spool answers.
+	local, err := ReadRecordContent(context.Background(), settings, loc, store)
+	require.NoError(t, err)
+	assert.Equal(t, "local", local.Source)
+	require.NotNil(t, local.Request)
+	assert.Equal(t, `{"q":"hi"}`, local.Request.Text)
+	require.NotNil(t, local.Response)
+	assert.True(t, local.Response.Truncated)
+	assert.Len(t, local.Response.Text, MaxContentBodyBytes)
+	assert.EqualValues(t, len(large), local.Response.Size)
+
+	consumer := NewConsumer(cfg, store)
+	require.Equal(t, string(StateCleaned), consumer.RunCycle(context.Background()).State)
+	manifests, _ := filepath.Glob(filepath.Join(cfg.WorkDir, "manifests", "*.json"))
+	require.Len(t, manifests, 1)
+	m, err := LoadManifest(manifests[0])
+	require.NoError(t, err)
+
+	require.Len(t, sink.batches, 1)
+	rows := sink.batches[0]
+	require.Len(t, rows, 3)
+	var allocated int64
+	byID := map[string]IndexRow{}
+	for _, row := range rows {
+		allocated += row.ArchiveBytes
+		byID[row.RecordID] = row
+		assert.Equal(t, m.BatchID, row.BatchID)
+		assert.Equal(t, m.ObjectKey, row.ObjectKey)
+		assert.Equal(t, "sess-1", row.SessionID)
+		assert.Positive(t, row.ArchivedAt)
+	}
+	assert.Equal(t, m.ArchiveSize, allocated, "allocation sums to the archive size")
+	assert.Greater(t, byID["req-1"].RawBytes, int64(MaxContentBodyBytes), "raw bytes include body files")
+	assert.Equal(t, "gpt-4o/jsonl/2026/11/02/05/10-ab46d8fc.jsonl", byID["req-1"].RecordPath)
+	assert.Equal(t, int64(1793596200), byID["req-1"].CreatedAt)
+
+	// After cleanup the archive answers, and a second read hits the cache.
+	loc.ObjectKey = m.ObjectKey
+	archived, err := ReadRecordContent(context.Background(), settings, loc, store)
+	require.NoError(t, err)
+	assert.Equal(t, "archive", archived.Source)
+	assert.Equal(t, local.Request, archived.Request)
+	assert.Equal(t, local.Response, archived.Response)
+	assert.JSONEq(t, string(local.Record), string(archived.Record))
+	gets := fake.methods[http.MethodGet]
+	_, err = ReadRecordContent(context.Background(), settings, loc, store)
+	require.NoError(t, err)
+	assert.Equal(t, gets, fake.methods[http.MethodGet], "cached archive is reused")
+	missing := loc
+	missing.RecordID = "nope"
+	_, err = ReadRecordContent(context.Background(), settings, missing, store)
+	require.ErrorIs(t, err, ErrRecordContentUnavailable)
+
+	// Backfill works from the R2 listing alone: drop the local manifest and
+	// add objects that must be listed across pages or left out.
+	require.NoError(t, os.Remove(manifests[0]))
+	fake.mu.Lock()
+	for _, extra := range []string{"standalone-v1/_checks/probe.tar.gz", "standalone-v1/site-a/notes.txt", "other-prefix/x/y.tar.gz",
+		"standalone-v1/site-a/host-1/2026/11/02/05/zz.tar.gz.tmp"} {
+		fake.objects[extra] = []byte("x")
+	}
+	fake.pageSize = 2
+	fake.mu.Unlock()
+	keys, err := ListArchiveObjects(context.Background(), store, "/standalone-v1/")
+	require.NoError(t, err)
+	assert.Equal(t, []string{m.ObjectKey}, keys)
+	assert.GreaterOrEqual(t, fake.lists, 2, "the listing follows continuation tokens")
+	batchID, backfilled, err := IndexArchiveObject(context.Background(), store, m.ObjectKey)
+	require.NoError(t, err)
+	assert.Equal(t, m.BatchID, batchID, "batch id comes from the manifest inside the archive")
+	assert.Equal(t, m.BatchID, BatchIDFromObjectKey(m.ObjectKey))
+	require.Len(t, backfilled, len(rows))
+	var backfilledBytes int64
+	for _, row := range backfilled {
+		backfilledBytes += row.ArchiveBytes
+		live := byID[row.RecordID]
+		assert.Positive(t, row.ArchivedAt)
+		row.ArchivedAt = live.ArchivedAt // archive time vs plan time
+		assert.Equal(t, live, row)
+	}
+	assert.EqualValues(t, len(fake.objects[m.ObjectKey]), backfilledBytes, "archive bytes sum to the object size")
+	checkpoint := LoadBackfillCheckpoint(cfg.WorkDir)
+	checkpoint.Done[m.ObjectKey] = true
+	require.NoError(t, SaveBackfillCheckpoint(cfg.WorkDir, checkpoint))
+	assert.True(t, LoadBackfillCheckpoint(cfg.WorkDir).Done[m.ObjectKey])
+	fake.mu.Lock()
+	fake.meta[m.ObjectKey][metaSHA256] = strings.Repeat("0", 64)
+	fake.mu.Unlock()
+	_, _, err = IndexArchiveObject(context.Background(), store, m.ObjectKey)
+	require.Error(t, err, "a corrupted download is rejected")
+	_, _, err = IndexArchiveObject(context.Background(), store, "standalone-v1/missing.tar.gz")
+	require.ErrorIs(t, err, ErrObjectNotFound)
+	require.Empty(t, fake.forbidden)
+}
+
+func tarGz(t *testing.T, entries ...*tar.Header) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for _, hdr := range entries {
+		require.NoError(t, tw.WriteHeader(hdr))
+		if hdr.Typeflag == tar.TypeReg {
+			_, err := tw.Write(make([]byte, hdr.Size))
+			require.NoError(t, err)
+		}
+	}
+	require.NoError(t, tw.Close())
+	require.NoError(t, gz.Close())
+	return buf.Bytes()
+}
+
+func TestWalkArchiveRejectsUnsafeArchives(t *testing.T) {
+	visit := func(string, string, int64, io.Reader) error { return nil }
+	for _, hdr := range []*tar.Header{
+		{Name: "roots/primary/../../etc/passwd", Typeflag: tar.TypeReg, Size: 1},
+		{Name: "/etc/passwd", Typeflag: tar.TypeReg, Size: 1},
+		{Name: "roots/primary/m/link", Typeflag: tar.TypeSymlink, Linkname: "/etc/passwd"},
+		{Name: "roots/../x", Typeflag: tar.TypeReg, Size: 1},
+		{Name: "other/file", Typeflag: tar.TypeReg, Size: 1},
+	} {
+		err := walkArchive(bytes.NewReader(tarGz(t, hdr)), visit)
+		require.ErrorIs(t, err, errUnsafeArchive, hdr.Name)
+	}
+	ok := tarGz(t, &tar.Header{Name: "roots/primary/m/jsonl/a.jsonl", Typeflag: tar.TypeReg, Size: 3},
+		&tar.Header{Name: ArchiveManifestName, Typeflag: tar.TypeReg, Size: 2})
+	var names []string
+	require.NoError(t, walkArchive(bytes.NewReader(ok), func(root, rel string, _ int64, _ io.Reader) error {
+		names = append(names, root+":"+rel)
+		return nil
+	}))
+	assert.Equal(t, []string{"primary:m/jsonl/a.jsonl", ":" + ArchiveManifestName}, names, "the manifest is passed with an empty root id")
+
+	// A body larger than any capture is refused before it is read.
+	_, err := readBodyEntry(BodyFile{}, maxArchiveEntryBytes+1, strings.NewReader("x"))
+	require.ErrorIs(t, err, errUnsafeArchive)
+	// Decompressed output is bounded (gzip bomb).
+	_, err = io.ReadAll(&expandLimitReader{r: strings.NewReader("0123456789"), left: 4})
+	require.ErrorIs(t, err, errArchiveTooBig)
 }

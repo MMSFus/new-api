@@ -22,6 +22,12 @@ const (
 	SystemTaskTypeMidjourneyPoll      = "midjourney_poll"
 	SystemTaskTypeAsyncTaskPoll       = "async_task_poll"
 	SystemTaskTypeChannelCostBackfill = "channel_cost_backfill"
+
+	SystemTaskTypeSessionRecorderBackfill = "session_recorder_backfill"
+
+	// systemTaskCancelMarker is stored in result while a task is active to
+	// ask its handler to stop. FinishSystemTask replaces it with the result.
+	systemTaskCancelMarker = `{"cancel_requested":true}`
 )
 
 var ErrSystemTaskLockLost = errors.New("system task lock lost")
@@ -465,6 +471,30 @@ func FinishSystemTask(taskID string, lockedBy string, status SystemTaskStatus, r
 		return ErrSystemTaskLockLost
 	}
 	return ReleaseSystemTaskLock(taskID, lockedBy)
+}
+
+// RequestSystemTaskCancel asks the active task of a type to stop. Handlers
+// that support cancellation poll SystemTaskCancelRequested. It returns the
+// task that was asked, or nil when none is active.
+func RequestSystemTaskCancel(taskType string) (*SystemTask, error) {
+	task, err := GetActiveSystemTask(taskType)
+	if err != nil || task == nil {
+		return task, err
+	}
+	err = DB.Model(&SystemTask{}).
+		Where("task_id = ? AND status IN ?", task.TaskID, activeSystemTaskStatuses()).
+		Update("result", systemTaskCancelMarker).Error
+	return task, err
+}
+
+// SystemTaskCancelRequested reports whether RequestSystemTaskCancel was
+// called for a still active task.
+func SystemTaskCancelRequested(taskID string) (bool, error) {
+	var results []string
+	err := DB.Model(&SystemTask{}).
+		Where("task_id = ? AND status IN ?", taskID, activeSystemTaskStatuses()).
+		Limit(1).Pluck("result", &results).Error
+	return len(results) > 0 && results[0] == systemTaskCancelMarker, err
 }
 
 func (task *SystemTask) DecodePayload(v any) error {

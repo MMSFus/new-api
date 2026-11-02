@@ -16,8 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { type LinkProps } from '@tanstack/react-router'
-import { type TFunction } from 'i18next'
+import type { LinkProps } from '@tanstack/react-router'
+import type { TFunction } from 'i18next'
 
 /**
  * Base navigation item type
@@ -39,6 +39,11 @@ type BaseNavItem = {
    * always passes. Route-level guards still enforce access independently.
    */
   requiredPermission?: { resource: string; action: string }
+  /**
+   * Shows the item when the user holds at least one of these permissions;
+   * for pages whose sections are guarded separately.
+   */
+  requiredAnyPermission?: { resource: string; action: string }[]
 }
 
 /**

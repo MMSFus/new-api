@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import { useTableUrlState, type NavigateFn } from '@/hooks/use-table-url-state'
 import {
@@ -111,4 +112,24 @@ export function useLogRangeSearch(options: {
     refreshNow,
     reset,
   }
+}
+
+/**
+ * Client-side copy of a report's range rule: '' when the range is valid,
+ * otherwise the message to show instead of querying.
+ */
+export function useLogRangeError(
+  filters: Pick<LogRangeFilters, 'start_timestamp' | 'end_timestamp'>,
+  maxSeconds: number
+): string {
+  const { t } = useTranslation()
+  const end = filters.end_timestamp ?? 0
+  const start = filters.start_timestamp ?? 0
+  if (start > end) return t('End time must be after start time')
+  if (end - start > maxSeconds) {
+    return t('Time range cannot exceed {{days}} days', {
+      days: maxSeconds / (24 * 3600),
+    })
+  }
+  return ''
 }

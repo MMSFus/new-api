@@ -161,6 +161,7 @@ func main() {
 	// switch are enforced inside the runner and each handler's Enabled().
 	controller.RegisterScheduledSystemTasks()
 	service.StartSystemTaskRunner()
+	sessionrecorder.SetIndexSink(model.SessionRecorderIndexSink{})
 	sessionrecorder.Start()
 
 	if os.Getenv("BATCH_UPDATE_ENABLED") == "true" {

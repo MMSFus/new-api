@@ -18,8 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
 import type { PaginationState } from '@tanstack/react-table'
-import { useTranslation } from 'react-i18next'
 
+import { useLogRangeError } from '@/hooks/use-log-range-search'
 import { requireServerSuccess } from '@/lib/server-error-message'
 
 import {
@@ -34,16 +34,7 @@ const EMPTY_LOGS: ChannelCostLog[] = []
 
 /** Client-side copy of the backend range rule; '' when the range is valid. */
 export function useChannelCostRangeError(filters: ChannelCostFilters): string {
-  const { t } = useTranslation()
-  const end = filters.end_timestamp ?? 0
-  const start = filters.start_timestamp ?? 0
-  if (start > end) return t('End time must be after start time')
-  if (end - start > CHANNEL_COST_MAX_RANGE_SECONDS) {
-    return t('Time range cannot exceed {{days}} days', {
-      days: CHANNEL_COST_MAX_RANGE_SECONDS / (24 * 3600),
-    })
-  }
-  return ''
+  return useLogRangeError(filters, CHANNEL_COST_MAX_RANGE_SECONDS)
 }
 
 export function useChannelCostReport(

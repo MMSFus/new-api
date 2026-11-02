@@ -21,9 +21,10 @@ import (
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 )
 
-// The R2 client deliberately implements only HEAD, single PUT and the three
-// multipart calls (initiate/upload part/complete). It has no code path that
-// can delete, copy or overwrite a remote object.
+// The R2 client deliberately implements only GET (objects and
+// ListObjectsV2), HEAD, single PUT and the three multipart calls
+// (initiate/upload part/complete). It has no code path that can delete, copy
+// or overwrite a remote object.
 
 const (
 	metaSHA256       = "session-recorder-sha256"
@@ -138,7 +139,7 @@ func (s *R2Store) objectURL(key string, query url.Values) *url.URL {
 
 func (s *R2Store) do(ctx context.Context, method, key string, query url.Values, header http.Header, body io.Reader, size int64, payloadHash string) (*http.Response, error) {
 	switch method {
-	case http.MethodHead, http.MethodPut, http.MethodPost:
+	case http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPost:
 	default:
 		return nil, fmt.Errorf("r2: method %s is not allowed", method)
 	}
@@ -198,6 +199,83 @@ func (s *R2Store) Head(ctx context.Context, key string) (ObjectMetadata, error) 
 		size = resp.ContentLength
 	}
 	return ObjectMetadata{Exists: true, Size: size, Metadata: meta}, nil
+}
+
+// ErrObjectNotFound is returned by Get for a missing object.
+var ErrObjectNotFound = errors.New("r2 object not found")
+
+// Get streams an object. The caller must close the body.
+func (s *R2Store) Get(ctx context.Context, key string) (io.ReadCloser, int64, error) {
+	resp, err := s.do(ctx, http.MethodGet, key, nil, nil, nil, 0, emptyPayloadHash)
+	if err != nil {
+		return nil, 0, err
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		resp.Body.Close()
+		return nil, 0, ErrObjectNotFound
+	}
+	if resp.StatusCode/100 != 2 {
+		defer resp.Body.Close()
+		return nil, 0, statusError("get", resp)
+	}
+	return resp.Body, resp.ContentLength, nil
+}
+
+// ObjectPage is one page of a ListObjectsV2 call.
+type ObjectPage struct {
+	Keys             []string
+	NextContinuation string
+}
+
+type listBucketResult struct {
+	Contents []struct {
+		Key string `xml:"Key"`
+	} `xml:"Contents"`
+	IsTruncated           bool   `xml:"IsTruncated"`
+	NextContinuationToken string `xml:"NextContinuationToken"`
+}
+
+// maxListResponseBytes bounds one ListObjectsV2 response (1000 keys).
+const maxListResponseBytes = 8 << 20
+
+// ListObjects returns one page of object keys under prefix. Pass the
+// previous page's NextContinuation to continue; an empty NextContinuation
+// means the listing is complete.
+func (s *R2Store) ListObjects(ctx context.Context, prefix, continuation string) (ObjectPage, error) {
+	query := url.Values{"list-type": {"2"}, "prefix": {prefix}}
+	if continuation != "" {
+		query.Set("continuation-token", continuation)
+	}
+	resp, err := s.do(ctx, http.MethodGet, "", query, nil, nil, 0, emptyPayloadHash)
+	if err != nil {
+		return ObjectPage{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return ObjectPage{}, statusError("list", resp)
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxListResponseBytes+1))
+	if err != nil {
+		return ObjectPage{}, err
+	}
+	if len(raw) > maxListResponseBytes {
+		return ObjectPage{}, errors.New("r2 list: response too large")
+	}
+	var parsed listBucketResult
+	if err := xml.Unmarshal(raw, &parsed); err != nil {
+		return ObjectPage{}, errors.New("r2 list: malformed response")
+	}
+	page := ObjectPage{Keys: make([]string, 0, len(parsed.Contents))}
+	for _, c := range parsed.Contents {
+		page.Keys = append(page.Keys, c.Key)
+	}
+	if parsed.IsTruncated {
+		if parsed.NextContinuationToken == "" || parsed.NextContinuationToken == continuation {
+			return ObjectPage{}, errors.New("r2 list: missing continuation token")
+		}
+		page.NextContinuation = parsed.NextContinuationToken
+	}
+	return page, nil
 }
 
 // PutBytes performs a conditional single PUT of a small in-memory body.
