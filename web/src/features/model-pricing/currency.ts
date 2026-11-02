@@ -17,12 +17,19 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { formatPricingNumber } from '@/features/system-settings/models/pricing-format'
+import { amountCurrencySymbol, type AmountCurrency } from '@/lib/currency'
 import type { CurrencyConfig } from '@/stores/system-config-store'
 
 export type PricingCurrency = {
   label: string
   symbol: string
+  /** Display units per unit of the stored value. */
   exchangeRate: number
+  /**
+   * Currency the stored values are written in. Absent means USD. When set to
+   * CNY or CUSTOM, the editor shows the stored values unchanged (rate 1).
+   */
+  code?: AmountCurrency
 }
 
 export const USD_PRICING_CURRENCY: PricingCurrency = {
@@ -66,4 +73,23 @@ export function formatPricingAmount(
   const amount = Number(value) * currency.exchangeRate
   if (!Number.isFinite(amount)) return '—'
   return `${currency.symbol}${formatPricingNumber(amount)}`
+}
+
+/** Edit values exactly as stored in a model's price currency. */
+export function storedPricingCurrency(
+  code: Exclude<AmountCurrency, 'USD'>,
+  config: CurrencyConfig
+): PricingCurrency {
+  const symbol = amountCurrencySymbol(code, config)
+  return {
+    label: code === 'CNY' ? 'CNY' : symbol,
+    symbol,
+    exchangeRate: 1,
+    code,
+  }
+}
+
+/** Label of the currency that raw expression coefficients are written in. */
+export function pricingCoefficientLabel(currency: PricingCurrency): string {
+  return currency.code && currency.code !== 'USD' ? currency.label : 'USD'
 }

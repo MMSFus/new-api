@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -45,12 +46,13 @@ func RequestWaffoPancakeAmount(c *gin.Context) {
 	}
 
 	payMoney := getWaffoPancakePayMoney(req.Amount, group)
-	if payMoney <= 0.01 {
+	cur := setting.GetWaffoPancakeCurrency()
+	if decimal.NewFromFloat(payMoney).LessThanOrEqual(setting.WaffoPancakeMinChargeAmount(cur)) {
 		paymentError(c, common.NewMessage("Payment amount is too low"))
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "success", "data": fmt.Sprintf("%.2f", payMoney)})
+	c.JSON(http.StatusOK, gin.H{"message": "success", "data": formatWaffoPancakeAmount(payMoney)})
 }
 
 func getWaffoPancakePayMoney(amount int64, group string) float64 {
@@ -92,7 +94,8 @@ func normalizeWaffoPancakeTopUpAmount(amount int64) int64 {
 }
 
 func formatWaffoPancakeAmount(payMoney float64) string {
-	return decimal.NewFromFloat(payMoney).StringFixed(2)
+	cur := setting.GetWaffoPancakeCurrency()
+	return setting.FormatWaffoPancakeAmount(decimal.NewFromFloat(payMoney), cur)
 }
 
 func getWaffoPancakeBuyerEmail(user *model.User) string {
@@ -110,6 +113,7 @@ type saveWaffoPancakeRequest struct {
 	MerchantID string `json:"merchant_id"`
 	PrivateKey string `json:"private_key"`
 	ReturnURL  string `json:"return_url"`
+	Currency   string `json:"currency"`
 	StoreID    string `json:"store_id"`
 	ProductID  string `json:"product_id"`
 }
@@ -120,7 +124,7 @@ type createWaffoPancakePairRequest struct {
 	ReturnURL  string `json:"return_url"`
 }
 
-// SaveWaffoPancake atomically persists all five operator-controlled fields.
+// SaveWaffoPancake atomically persists all operator-controlled fields.
 // Catalog / pair endpoints are transient — only this one writes the OptionMap.
 func SaveWaffoPancake(c *gin.Context) {
 	var req saveWaffoPancakeRequest
@@ -128,19 +132,29 @@ func SaveWaffoPancake(c *gin.Context) {
 		paymentError(c, common.NewMessage("Invalid parameters"))
 		return
 	}
-	if err := service.SaveWaffoPancakeConfig(
+	syncResult, err := service.SaveWaffoPancakeConfig(
 		c.Request.Context(),
 		req.MerchantID,
 		req.PrivateKey,
 		req.ReturnURL,
+		req.Currency,
 		req.StoreID,
 		req.ProductID,
-	); err != nil {
+	)
+	if err != nil {
 		logger.LogError(c.Request.Context(), common.LogText(
 			"Waffo Pancake failed to save config store_id=%q product_id=%q error=%q",
 			req.StoreID, req.ProductID, err.Error(),
 		))
-		paymentError(c, common.NewMessage("Failed to save configuration"))
+		var syncErr *service.WaffoPancakePriceSyncError
+		switch {
+		case errors.Is(err, service.ErrWaffoPancakeInvalidCurrency):
+			paymentError(c, common.NewMessage("Invalid currency code. Use a 3-letter ISO 4217 code such as USD or JPY."))
+		case errors.As(err, &syncErr):
+			paymentError(c, common.NewMessage("Could not add the new currency price to Waffo Pancake products, so the currency was not changed: {{reason}}", map[string]any{"reason": syncErr.Err.Error()}))
+		default:
+			paymentError(c, common.NewMessage("Failed to save configuration"))
+		}
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -148,6 +162,8 @@ func SaveWaffoPancake(c *gin.Context) {
 		"data": gin.H{
 			"product_id": setting.WaffoPancakeProductID,
 			"store_id":   setting.WaffoPancakeStoreID,
+			"currency":   setting.GetWaffoPancakeCurrency(),
+			"price_sync": syncResult,
 		},
 	})
 }
@@ -372,7 +388,8 @@ func RequestWaffoPancakePay(c *gin.Context) {
 	}
 
 	payMoney := getWaffoPancakePayMoney(req.Amount, group)
-	if payMoney < 0.01 {
+	cur := setting.GetWaffoPancakeCurrency()
+	if decimal.NewFromFloat(payMoney).LessThan(setting.WaffoPancakeMinChargeAmount(cur)) {
 		paymentError(c, common.NewMessage("Payment amount is too low"))
 		return
 	}
@@ -413,7 +430,7 @@ func RequestWaffoPancakePay(c *gin.Context) {
 		paymentError(c, common.NewMessage("Failed to start payment"))
 		return
 	}
-	logger.LogInfo(c.Request.Context(), common.LogText("Waffo Pancake top-up order created user_id=%d trade_no=%s session_id=%s amount=%d money=%.2f", id, tradeNo, session.SessionID, req.Amount, payMoney))
+	logger.LogInfo(c.Request.Context(), common.LogText("Waffo Pancake top-up order created user_id=%d trade_no=%s session_id=%s amount=%d money=%s currency=%s", id, tradeNo, session.SessionID, req.Amount, formatWaffoPancakeAmount(payMoney), cur))
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "success",

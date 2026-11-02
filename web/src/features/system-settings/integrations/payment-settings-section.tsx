@@ -178,6 +178,7 @@ const paymentSchema = z.object({
   WaffoPancakeMerchantID: z.string(),
   WaffoPancakePrivateKey: z.string(),
   WaffoPancakeReturnURL: z.string(),
+  WaffoPancakeCurrency: z.string(),
 })
 
 type PaymentFormValues = z.infer<typeof paymentSchema>
@@ -459,6 +460,10 @@ export function PaymentSettingsSection({
       WaffoPancakeReturnURL: removeTrailingSlash(
         values.WaffoPancakeReturnURL.trim()
       ),
+      WaffoPancakeCurrency:
+        values.WaffoPancakeCurrency.trim().toUpperCase() ||
+        initialRef.current.WaffoPancakeCurrency.trim() ||
+        'USD',
     }
 
     const initial = {
@@ -506,6 +511,8 @@ export function PaymentSettingsSection({
       WaffoPancakeReturnURL: removeTrailingSlash(
         initialRef.current.WaffoPancakeReturnURL.trim()
       ),
+      WaffoPancakeCurrency:
+        initialRef.current.WaffoPancakeCurrency.trim() || 'USD',
     }
 
     const updates: Array<{ key: string; value: string | number | boolean }> = []
@@ -707,6 +714,7 @@ export function PaymentSettingsSection({
       sanitized.WaffoPancakeMerchantID !== initial.WaffoPancakeMerchantID ||
       sanitized.WaffoPancakePrivateKey.length > 0 ||
       sanitized.WaffoPancakeReturnURL !== initial.WaffoPancakeReturnURL ||
+      sanitized.WaffoPancakeCurrency !== initial.WaffoPancakeCurrency ||
       waffoPancakeSelection.storeID !== waffoPancakeSavedBinding.storeID ||
       waffoPancakeSelection.productID !== waffoPancakeSavedBinding.productID
 
@@ -738,6 +746,7 @@ export function PaymentSettingsSection({
         merchantID: sanitized.WaffoPancakeMerchantID,
         privateKey: sanitized.WaffoPancakePrivateKey,
         returnURL: sanitized.WaffoPancakeReturnURL,
+        currency: sanitized.WaffoPancakeCurrency,
         storeID: waffoPancakeSelection.storeID,
         productID: waffoPancakeSelection.productID,
       })
@@ -747,7 +756,7 @@ export function PaymentSettingsSection({
         typeof body.data === 'object' &&
         body.data
       ) {
-        const saved = body.data as { product_id: string; store_id: string }
+        const saved = body.data
         const savedBinding = {
           storeID: saved.store_id,
           productID: saved.product_id,
@@ -755,7 +764,15 @@ export function PaymentSettingsSection({
         setWaffoPancakeSavedBinding(savedBinding)
         setWaffoPancakeSelection(savedBinding)
         queryClient.invalidateQueries({ queryKey: ['system-options'] })
-        toast.success(t('Waffo Pancake settings saved'))
+        const updatedCount = saved.price_sync?.updated_products?.length ?? 0
+        toast.success(
+          updatedCount > 0
+            ? t(
+                'Waffo Pancake settings saved. Added a {{currency}} price to {{count}} Pancake products.',
+                { currency: saved.currency, count: updatedCount }
+              )
+            : t('Waffo Pancake settings saved')
+        )
         return
       }
 
@@ -799,6 +816,7 @@ export function PaymentSettingsSection({
     WaffoPancakeMerchantID: currentFormValues.WaffoPancakeMerchantID,
     WaffoPancakePrivateKey: currentFormValues.WaffoPancakePrivateKey,
     WaffoPancakeReturnURL: currentFormValues.WaffoPancakeReturnURL,
+    WaffoPancakeCurrency: currentFormValues.WaffoPancakeCurrency,
   }
 
   return (

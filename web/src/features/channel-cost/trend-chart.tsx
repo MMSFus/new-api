@@ -17,7 +17,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { VChart } from '@visactor/react-vchart'
-import dayjs from '@/lib/dayjs'
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -26,45 +25,37 @@ import { useChartTheme } from '@/lib/use-chart-theme'
 import { VCHART_OPTION } from '@/lib/vchart'
 
 import type { ChannelCostAmount, ChannelCostBucket } from './api'
-import { addAmounts, formatCostQuota } from './lib'
-
-/** Ranges up to this long plot hours; longer ones fold hours into days. */
-const HOURLY_RANGE_SECONDS = 2 * 24 * 3600
-
-/** Folds hourly buckets into days in the viewer's time zone when needed. */
-function trendPoints(trend: ChannelCostBucket[], rangeSeconds: number) {
-  const hourly = rangeSeconds <= HOURLY_RANGE_SECONDS
-  const format = hourly ? 'MM-DD HH:00' : 'YYYY-MM-DD'
-  const points = new Map<string, ChannelCostAmount>()
-  for (const bucket of trend) {
-    const key = dayjs.unix(bucket.time).format(format)
-    const previous = points.get(key)
-    points.set(key, previous ? addAmounts(previous, bucket) : bucket)
-  }
-  return [...points.entries()]
-}
+import { formatCostQuota, trendPoints, type TrendPoint } from './lib'
 
 export function ChannelCostTrendChart(props: {
   trend: ChannelCostBucket[]
-  rangeSeconds: number
+  range: { start: number; end: number }
   loading: boolean
+  /** Opens the clicked hour or day. */
+  onSelectPoint: (point: TrendPoint) => void
 }) {
   const { t } = useTranslation()
   const { resolvedTheme, themeReady } = useChartTheme()
+  const points = useMemo(
+    () => trendPoints(props.trend, props.range),
+    [props.trend, props.range]
+  )
 
   const spec = useMemo(() => {
     const series = [
-      { label: t('Revenue'), value: (a: ChannelCostAmount) => a.costed_revenue },
+      {
+        label: t('Revenue'),
+        value: (a: ChannelCostAmount) => a.costed_revenue,
+      },
       { label: t('Upstream cost'), value: (a: ChannelCostAmount) => a.cost },
       { label: t('Gross profit'), value: (a: ChannelCostAmount) => a.profit },
     ]
-    const values = trendPoints(props.trend, props.rangeSeconds).flatMap(
-      ([time, amount]) =>
-        series.map((item) => ({
-          Time: time,
-          Metric: item.label,
-          Value: item.value(amount),
-        }))
+    const values = points.flatMap((point) =>
+      series.map((item) => ({
+        Time: point.label,
+        Metric: item.label,
+        Value: item.value(point.amount),
+      }))
     )
     const formatValue = (datum: Record<string, unknown>) =>
       formatCostQuota(Number(datum?.Value) || 0)
@@ -87,20 +78,39 @@ export function ChannelCostTrendChart(props: {
         },
       ],
       tooltip: {
-        mark: { content: [{ key: (d: Record<string, unknown>) => d?.Metric, value: formatValue }] },
-        dimension: { content: [{ key: (d: Record<string, unknown>) => d?.Metric, value: formatValue }] },
+        mark: {
+          content: [
+            {
+              key: (d: Record<string, unknown>) => d?.Metric,
+              value: formatValue,
+            },
+          ],
+        },
+        dimension: {
+          content: [
+            {
+              key: (d: Record<string, unknown>) => d?.Metric,
+              value: formatValue,
+            },
+          ],
+        },
       },
     }
-  }, [props.trend, props.rangeSeconds, t])
+  }, [points, t])
+
+  const selectByLabel = (label: unknown) => {
+    const point = points.find((item) => item.label === label)
+    if (point) props.onSelectPoint(point)
+  }
 
   return (
     <PanelWrapper
       title={t('Revenue and cost trend')}
       description={t(
-        'Revenue counts only requests whose cost is known, so the three lines are comparable'
+        'Revenue counts only requests whose cost is known, so the three lines are comparable. Click a point for its details.'
       )}
       loading={props.loading || !themeReady}
-      empty={props.trend.length === 0}
+      empty={points.length === 0}
       height='h-72'
     >
       <div className='h-72'>
@@ -111,6 +121,12 @@ export function ChannelCostTrendChart(props: {
             background: 'transparent',
           }}
           option={VCHART_OPTION}
+          onClick={(event: { datum?: Record<string, unknown> }) =>
+            selectByLabel(event.datum?.Time)
+          }
+          onDimensionClick={(event: {
+            dimensionInfo?: { value?: unknown }[]
+          }) => selectByLabel(event.dimensionInfo?.[0]?.value)}
         />
       </div>
     </PanelWrapper>

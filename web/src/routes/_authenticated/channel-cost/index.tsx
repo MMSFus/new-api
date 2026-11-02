@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { createFileRoute, redirect } from '@tanstack/react-router'
 
 import { ChannelCost } from '@/features/channel-cost'
+import { channelCostSearchSchema } from '@/features/channel-cost/lib'
 import {
   ADMIN_PERMISSION_ACTIONS,
   ADMIN_PERMISSION_RESOURCES,
@@ -39,5 +40,6 @@ export const Route = createFileRoute('/_authenticated/channel-cost/')({
       throw redirect({ to: '/403' })
     }
   },
+  validateSearch: channelCostSearchSchema,
   component: ChannelCost,
 })

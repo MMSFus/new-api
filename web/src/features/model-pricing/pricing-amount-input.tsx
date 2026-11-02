@@ -19,8 +19,9 @@ For commercial licensing, please contact support@quantumnous.com
 import { useId, useState, type ComponentProps } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { CurrencyUSDReference } from '@/components/currency-amount-input'
 import { Input } from '@/components/ui/input'
-import { InputGroupInput } from '@/components/ui/input-group'
+import { InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
 import { formatPricingNumber } from '@/features/system-settings/models/pricing-format'
 
 import { USD_PRICING_CURRENCY, type PricingCurrency } from './currency'
@@ -35,7 +36,7 @@ type PricingAmountInputProps = Omit<
   grouped?: boolean
 }
 
-/** The parent owns USD; only this input owns the uncommitted display string. */
+/** The parent owns the stored amount; only this input owns the uncommitted display string. */
 export function PricingAmountInput({
   value,
   onChange,
@@ -127,6 +128,24 @@ export function PricingAmountInput({
           }
         }}
       />
+      {currency.code &&
+        currency.code !== 'USD' &&
+        (grouped ? (
+          <InputGroupAddon align='inline-end' className='pr-0'>
+            <CurrencyUSDReference
+              amount={value}
+              currency={currency.code}
+              formatOptions={{ digitsLarge: 4, digitsSmall: 6 }}
+            />
+          </InputGroupAddon>
+        ) : (
+          <CurrencyUSDReference
+            amount={value}
+            currency={currency.code}
+            formatOptions={{ digitsLarge: 4, digitsSmall: 6 }}
+            className='block'
+          />
+        ))}
       {invalid && (
         <span
           id={errorId}

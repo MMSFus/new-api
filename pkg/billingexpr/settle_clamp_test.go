@@ -50,3 +50,39 @@ func TestComputeTieredQuota_NoClampInRange(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, result.Clamp, "in-range settlement must not report a clamp")
 }
+
+// The frozen currency factor scales both token and task conversion; a snapshot
+// serialized before the fields existed has no factor and settles as USD.
+func TestComputeTieredQuotaCurrencyFactor(t *testing.T) {
+	tokenExpr := `tier("base", p * 16)`
+	taskExpr := `tier("base", u("seconds") * 0.8)`
+	legacyJSON := `{"billing_mode":"tiered_expr","expr_string":"tier(\"base\", p * 16)","group_ratio":1,"quota_per_unit":500000,"expr_version":1}`
+
+	var legacy billingexpr.BillingSnapshot
+	require.NoError(t, common.UnmarshalJsonStr(legacyJSON, &legacy))
+	legacy.ExprHash = billingexpr.ExprHashString(legacy.ExprString)
+
+	tests := []struct {
+		name      string
+		snap      *billingexpr.BillingSnapshot
+		params    billingexpr.TokenParams
+		request   billingexpr.RequestInput
+		wantQuota int
+	}{
+		{"legacy snapshot without currency fields", &legacy, billingexpr.TokenParams{P: 1000}, billingexpr.RequestInput{}, 8000},
+		{"token CNY factor", &billingexpr.BillingSnapshot{ExprString: tokenExpr, ExprHash: billingexpr.ExprHashString(tokenExpr), GroupRatio: 1, QuotaPerUnit: 500_000, CurrencyCode: "CNY", CurrencyUSDFactor: 0.125},
+			billingexpr.TokenParams{P: 1000}, billingexpr.RequestInput{}, 1000},
+		{"task USD", &billingexpr.BillingSnapshot{ExprString: taskExpr, ExprHash: billingexpr.ExprHashString(taskExpr), GroupRatio: 1, QuotaPerUnit: 500_000, TaskUsageBilling: true},
+			billingexpr.TokenParams{}, billingexpr.RequestInput{Usage: map[string]any{"seconds": 10.0}}, 4_000_000},
+		{"task CUSTOM factor", &billingexpr.BillingSnapshot{ExprString: taskExpr, ExprHash: billingexpr.ExprHashString(taskExpr), GroupRatio: 1, QuotaPerUnit: 500_000, TaskUsageBilling: true, CurrencyCode: "CUSTOM", CurrencyUSDFactor: 0.5},
+			billingexpr.TokenParams{}, billingexpr.RequestInput{Usage: map[string]any{"seconds": 10.0}}, 2_000_000},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := billingexpr.ComputeTieredQuotaWithRequest(tt.snap, tt.params, tt.request)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantQuota, result.ActualQuotaAfterGroup)
+		})
+	}
+	assert.Equal(t, 1.0, legacy.EffectiveCurrencyUSDFactor())
+}

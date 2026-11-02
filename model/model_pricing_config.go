@@ -65,7 +65,7 @@ var ErrModelPricingConflict = errors.New("model pricing changed; reload before s
 // the transaction also serializes the first write to an unconfigured database.
 var modelPricingOptionKeys = []string{
 	"AudioCompletionRatio", "AudioRatio", "CacheRatio", "CompletionRatio",
-	"CreateCacheRatio", "ImageRatio", "ModelPrice", "ModelRatio",
+	"CreateCacheRatio", "ImageRatio", "ModelPrice", ratio_setting.ModelPriceCurrencyOption, "ModelRatio",
 	"billing_setting.billing_expr", "billing_setting.billing_mode", billing_setting.PluginBillingExprOption,
 }
 
@@ -137,6 +137,7 @@ func modelPricingValues(values map[string]map[string]any, name string) PricingVa
 			}
 			continue
 		}
+		// ModelPriceCurrency is 1:1 model->code, not flattened.
 		if value, exists := values[key][name]; exists {
 			result[key] = value
 		}
@@ -160,6 +161,15 @@ func replaceModelPricing(values map[string]map[string]any, name string, draft Pr
 			}
 			continue
 		}
+		// ModelPriceCurrency stores CNY/CUSTOM; omitting USD from the JSON
+		// keeps it tidy. An explicit USD value is discarded here.
+		if key == ratio_setting.ModelPriceCurrencyOption {
+			delete(values[key], name)
+			if code, exists := draft[key].(string); exists && code != "" && code != operation_setting.CurrencyUSD {
+				values[key][name] = code
+			}
+			continue
+		}
 		delete(values[key], name)
 		if value, exists := draft[key]; exists {
 			values[key][name] = value
@@ -171,7 +181,7 @@ func effectiveModelPricing(values map[string]map[string]any, name string) Pricin
 	result := modelPricingValues(values, name)
 	// Legacy wildcard aliases are resolved by the same normalization as relay.
 	alias := ratio_setting.FormatMatchingModelName(name)
-	for _, key := range []string{"ModelPrice", "ModelRatio", "CompletionRatio", "AudioRatio", "AudioCompletionRatio"} {
+	for _, key := range []string{"ModelPrice", ratio_setting.ModelPriceCurrencyOption, "ModelRatio", "CompletionRatio", "AudioRatio", "AudioCompletionRatio"} {
 		delete(result, key)
 		if value, exists := values[key][alias]; exists {
 			result[key] = value
@@ -190,6 +200,8 @@ func effectiveModelPricing(values map[string]map[string]any, name string) Pricin
 		if _, exists := result["billing_setting.billing_expr"]; !exists {
 			if expression, ok := billing_setting.GetBuiltinBillingExpr(name); ok {
 				result["billing_setting.billing_expr"] = expression
+				// Built-in expressions are always USD.
+				delete(result, ratio_setting.ModelPriceCurrencyOption)
 			}
 		}
 		return result
@@ -403,6 +415,25 @@ func validateModelPricing(name string, values, previous PricingValues) error {
 		if !IsModelPricingOption(key) {
 			return fmt.Errorf("unsupported pricing field: %s", key)
 		}
+		if key == ratio_setting.ModelPriceCurrencyOption {
+			code, ok := value.(string)
+			if !ok {
+				return fmt.Errorf("model %s: price currency must be a string", name)
+			}
+			if code == operation_setting.CurrencyUSD {
+				continue
+			}
+			if err := operation_setting.ValidateCurrency(code); err != nil {
+				return fmt.Errorf("model %s: %w", name, err)
+			}
+			// Only a new mark needs a usable rate; an unchanged one stays saveable.
+			if previous[key] != code {
+				if err := operation_setting.ValidateCurrencyRateAvailable(code); err != nil {
+					return err
+				}
+			}
+			continue
+		}
 		if key == "billing_setting.billing_mode" {
 			if value != "ratio" && value != "tiered_expr" {
 				return errors.New("invalid billing mode")
@@ -521,6 +552,14 @@ func UpdateModelPricingOptions(updates map[string]string) error {
 			}
 			if entries == nil {
 				return fmt.Errorf("%s must be a JSON object", key)
+			}
+			if key == ratio_setting.ModelPriceCurrencyOption {
+				// USD is the absence of a mark; it is never stored.
+				for name, code := range entries {
+					if code == operation_setting.CurrencyUSD || code == "" {
+						delete(entries, name)
+					}
+				}
 			}
 			for _, entriesForKey := range []map[string]any{values[key], entries} {
 				for name := range entriesForKey {

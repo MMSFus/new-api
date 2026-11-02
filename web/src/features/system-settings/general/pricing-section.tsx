@@ -54,6 +54,14 @@ import { SettingsSection } from '../components/settings-section'
 import { useSettingsForm } from '../hooks/use-settings-form'
 import { useUpdateOption } from '../hooks/use-update-option'
 import { safeNumberFieldProps } from '../utils/numeric-field'
+import {
+  ExchangeRateSyncStatus,
+  type ExchangeRateSyncStatusValue,
+} from './exchange-rate-sync-status'
+
+// Mirrors MinExchangeRateSyncIntervalHours / MaxExchangeRateSyncIntervalHours on the server.
+const MIN_SYNC_INTERVAL_HOURS = 1
+const MAX_SYNC_INTERVAL_HOURS = 168
 
 const createPricingSchema = (t: (key: string) => string) =>
   z
@@ -71,6 +79,20 @@ const createPricingSchema = (t: (key: string) => string) =>
           .number()
           .min(0.0001, t('Exchange rate must be greater than 0'))
           .optional(),
+      }),
+      exchange_rate_setting: z.object({
+        auto_sync_enabled: z.boolean(),
+        sync_interval_hours: z.coerce
+          .number()
+          .int(t('Sync interval must be between 1 and 168 hours'))
+          .min(
+            MIN_SYNC_INTERVAL_HOURS,
+            t('Sync interval must be between 1 and 168 hours')
+          )
+          .max(
+            MAX_SYNC_INTERVAL_HOURS,
+            t('Sync interval must be between 1 and 168 hours')
+          ),
       }),
     })
     .superRefine((data, ctx) => {
@@ -99,9 +121,13 @@ type PricingFormValues = z.infer<ReturnType<typeof createPricingSchema>>
 
 type PricingSectionProps = {
   defaultValues: PricingFormValues
+  exchangeRateSyncStatus: ExchangeRateSyncStatusValue
 }
 
-export function PricingSection({ defaultValues }: PricingSectionProps) {
+export function PricingSection({
+  defaultValues,
+  exchangeRateSyncStatus,
+}: PricingSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
 
@@ -138,6 +164,7 @@ export function PricingSection({ defaultValues }: PricingSectionProps) {
 
   const displayType = form.watch('general_setting.quota_display_type') ?? 'USD'
   const displayInCurrencyEnabled = form.watch('DisplayInCurrencyEnabled')
+  const autoSyncEnabled = form.watch('exchange_rate_setting.auto_sync_enabled')
   const showTokensOnlyOption = displayType === 'TOKENS'
   const showQuotaPerUnit =
     displayType === 'TOKENS' ||
@@ -238,9 +265,7 @@ export function PricingSection({ defaultValues }: PricingSectionProps) {
                     <FormLabel>
                       {displayType === 'CNY'
                         ? t('CNY per USD')
-                        : displayType === 'USD'
-                          ? t('USD Exchange Rate')
-                          : t('USD Exchange Rate')}
+                        : t('USD Exchange Rate')}
                     </FormLabel>
                     <FormControl>
                       <Input
@@ -258,6 +283,69 @@ export function PricingSection({ defaultValues }: PricingSectionProps) {
                   </FormItem>
                 )}
               />
+            )}
+
+            {displayType !== 'TOKENS' && (
+              <>
+                <FormField
+                  control={form.control}
+                  name='exchange_rate_setting.auto_sync_enabled'
+                  render={({ field }) => (
+                    <SettingsSwitchItem>
+                      <SettingsSwitchContent>
+                        <FormLabel>
+                          {t('Automatically sync USD exchange rate')}
+                        </FormLabel>
+                        <FormDescription>
+                          {t(
+                            'Fetch 1 USD in CNY from open.er-api.com on a schedule. Each successful sync overwrites the USD exchange rate.'
+                          )}
+                        </FormDescription>
+                      </SettingsSwitchContent>
+                      <FormControl>
+                        <Switch
+                          checked={field.value}
+                          onCheckedChange={field.onChange}
+                        />
+                      </FormControl>
+                    </SettingsSwitchItem>
+                  )}
+                />
+
+                {autoSyncEnabled && (
+                  <FormField
+                    control={form.control}
+                    name='exchange_rate_setting.sync_interval_hours'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('Sync interval (hours)')}</FormLabel>
+                        <FormControl>
+                          <Input
+                            type='number'
+                            step='1'
+                            min={MIN_SYNC_INTERVAL_HOURS}
+                            max={MAX_SYNC_INTERVAL_HOURS}
+                            {...safeNumberFieldProps(field)}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                )}
+
+                <div className='space-y-1'>
+                  <ExchangeRateSyncStatus
+                    status={exchangeRateSyncStatus}
+                    disabled={isDirty}
+                  />
+                  {isDirty && (
+                    <p className='text-muted-foreground text-sm'>
+                      {t('Save or discard your changes before syncing.')}
+                    </p>
+                  )}
+                </div>
+              </>
             )}
 
             {displayType === 'CUSTOM' && (

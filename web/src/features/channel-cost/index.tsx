@@ -16,122 +16,90 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { getRouteApi } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 
-import { DataTablePage, useDataTable } from '@/components/data-table'
 import { SectionPageLayout } from '@/components/layout'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { SimulatedCacheFilterBar } from '@/features/simulated-cache/filter-bar'
-import { requireServerSuccess } from '@/lib/server-error-message'
+import { useLogRangeSearch } from '@/hooks/use-log-range-search'
 
-import {
-  CHANNEL_COST_MAX_RANGE_SECONDS,
-  getChannelCostLogs,
-  getChannelCostReport,
-  type ChannelCostFilters,
-  type ChannelCostLog,
-} from './api'
-import { ChannelCostBackfillPanel } from './backfill-panel'
+import { ChannelCostBackfillEntry } from './backfill-entry'
 import { ChannelCostBreakdown } from './breakdown'
 import { useChannelCostColumns } from './columns'
+import { ChannelCostDrillSheet } from './drill-sheet'
+import { ChannelCostLogsTable } from './logs-table'
 import { ChannelCostSummaryCards } from './summary-cards'
 import { ChannelCostTrendChart } from './trend-chart'
+import {
+  useChannelCostLogs,
+  useChannelCostRangeError,
+  useChannelCostReport,
+} from './use-channel-cost-data'
+import { useChannelCostDrill } from './use-channel-cost-drill'
+import { useChannelCostTable } from './use-channel-cost-table'
 
-const DEFAULT_RANGE_SECONDS = 7 * 24 * 3600
-const EMPTY_LOGS: ChannelCostLog[] = []
-
-function lastWeekFilters(): ChannelCostFilters {
-  const now = Math.floor(Date.now() / 1000)
-  return {
-    start_timestamp: now - DEFAULT_RANGE_SECONDS,
-    end_timestamp: now,
-  }
-}
+const route = getRouteApi('/_authenticated/channel-cost/')
+const QUICK_RANGES = ['24h', '7d', '30d'] as const
 
 /**
  * Revenue, upstream cost and gross profit from consume and refund logs. The
  * cost of each log is the snapshot taken with the channel's
- * `upstream_cost_ratio` when the log was written.
+ * `upstream_cost_ratio` when the log was written. Filters live in the URL;
+ * KPIs, charts and the breakdown open their slice in the drill sheet.
  */
 export function ChannelCost() {
   const { t } = useTranslation()
-  const [filters, setFilters] = useState<ChannelCostFilters>(lastWeekFilters)
-  const [page, setPage] = useState({ p: 1, page_size: 20 })
-
-  // Mirror the backend rule: a missing end is now, a missing start 24h before.
-  const effectiveEnd = filters.end_timestamp ?? Math.floor(Date.now() / 1000)
-  const effectiveStart = filters.start_timestamp ?? effectiveEnd - 24 * 3600
-  let rangeError = ''
-  if (effectiveStart > effectiveEnd) {
-    rangeError = t('End time must be after start time')
-  } else if (effectiveEnd - effectiveStart > CHANNEL_COST_MAX_RANGE_SECONDS) {
-    rangeError = t('Time range cannot exceed {{days}} days', {
-      days: CHANNEL_COST_MAX_RANGE_SECONDS / (24 * 3600),
-    })
-  }
+  const routeSearch = route.useSearch()
+  const navigate = route.useNavigate()
+  const search = useLogRangeSearch({
+    search: routeSearch,
+    navigate,
+    defaultPreset: '7d',
+  })
+  const dimension = routeSearch.dimension ?? 'channel'
+  const drill = useChannelCostDrill(dimension)
+  const filters = search.filters
+  const rangeError = useChannelCostRangeError(filters)
   const canQuery = rangeError === ''
-
-  const reportQuery = useQuery({
-    queryKey: ['channel-cost', 'report', filters],
-    queryFn: async () =>
-      requireServerSuccess(await getChannelCostReport(filters)),
-    enabled: canQuery,
-    retry: false,
-  })
-  const listParams = { ...filters, ...page }
-  const listQuery = useQuery({
-    queryKey: ['channel-cost', 'logs', listParams],
-    queryFn: async () =>
-      requireServerSuccess(await getChannelCostLogs(listParams)),
-    enabled: canQuery,
-    retry: false,
-  })
+  const reportQuery = useChannelCostReport(filters, canQuery)
+  const logs = useChannelCostLogs(filters, search.pagination, canQuery)
   const report = canQuery ? reportQuery.data : undefined
-
-  const columns = useChannelCostColumns()
-  const { table } = useDataTable({
+  const columns = useChannelCostColumns(drill.openLog)
+  const table = useChannelCostTable({
     columns,
-    data: canQuery && listQuery.data ? listQuery.data.items : EMPTY_LOGS,
-    getRowId: (log) => String(log.id),
-    totalCount:
-      canQuery && !listQuery.isError ? (listQuery.data?.total ?? 0) : 0,
-    pagination: { pageIndex: page.p - 1, pageSize: page.page_size },
-    onPaginationChange: (updater) => {
-      if (listQuery.isFetching || !canQuery) return
-      setPage((previous) => {
-        const current = {
-          pageIndex: previous.p - 1,
-          pageSize: previous.page_size,
-        }
-        const next = typeof updater === 'function' ? updater(current) : updater
-        return {
-          p: next.pageSize === previous.page_size ? next.pageIndex + 1 : 1,
-          page_size: next.pageSize,
-        }
-      })
-    },
-    enableRowSelection: false,
-    enableSorting: false,
-    manualFiltering: true,
-    manualPagination: true,
+    logs: logs.logs,
+    total: logs.total,
+    pagination: search.pagination,
+    onPaginationChange: search.onPaginationChange,
+    locked: logs.query.isFetching || !canQuery,
   })
-  const updateFilters = (patch: Partial<ChannelCostFilters>) => {
-    setFilters((previous) => ({ ...previous, ...patch }))
-    setPage((previous) => ({ ...previous, p: 1 }))
-  }
   const refetchAll = () => {
     if (!canQuery) return
     void reportQuery.refetch()
-    void listQuery.refetch()
+    void logs.query.refetch()
   }
-  const queryError = canQuery && (reportQuery.isError || listQuery.isError)
+  const onSearch = () => {
+    if (!search.refreshNow()) refetchAll()
+  }
+  const queryError = canQuery ? (reportQuery.error ?? logs.query.error) : null
+  const reportLoading = canQuery && reportQuery.isPending
+  const range = {
+    start: filters.start_timestamp ?? 0,
+    end: filters.end_timestamp ?? 0,
+  }
 
   return (
     <SectionPageLayout>
       <SectionPageLayout.Title>{t('Cost & Billing')}</SectionPageLayout.Title>
+      <SectionPageLayout.Actions>
+        <ChannelCostBackfillEntry
+          filters={filters}
+          missing={report?.total.uncosted_requests}
+          enabled={canQuery && !reportQuery.isFetching && !reportQuery.isError}
+        />
+      </SectionPageLayout.Actions>
       <SectionPageLayout.Content>
         <div className='space-y-4'>
           <p className='text-muted-foreground text-sm'>
@@ -142,14 +110,14 @@ export function ChannelCost() {
           <SimulatedCacheFilterBar
             table={table}
             filters={filters}
-            onChange={updateFilters}
+            onChange={search.updateFilters}
             withGroup
-            isFetching={reportQuery.isFetching || listQuery.isFetching}
-            onSearch={refetchAll}
-            onReset={() => {
-              setFilters(lastWeekFilters())
-              setPage((previous) => ({ ...previous, p: 1 }))
-            }}
+            isFetching={reportQuery.isFetching || logs.query.isFetching}
+            onSearch={onSearch}
+            onReset={search.reset}
+            presets={QUICK_RANGES}
+            preset={search.preset}
+            onPresetChange={search.selectPreset}
           />
           {rangeError && (
             <Alert variant='destructive'>
@@ -160,8 +128,7 @@ export function ChannelCost() {
             <Alert variant='destructive'>
               <AlertDescription className='flex items-center justify-between gap-2'>
                 <span>
-                  {(reportQuery.error ?? listQuery.error)?.message ||
-                    t('Failed to load cost report')}
+                  {queryError.message || t('Failed to load cost report')}
                 </span>
                 <Button size='sm' variant='outline' onClick={refetchAll}>
                   {t('Retry')}
@@ -171,57 +138,53 @@ export function ChannelCost() {
           )}
           <ChannelCostSummaryCards
             total={report?.total}
-            loading={canQuery && reportQuery.isPending}
+            loading={reportLoading}
             error={!canQuery || reportQuery.isError}
-          />
-          <ChannelCostBackfillPanel
-            filters={{
-              ...filters,
-              start_timestamp: effectiveStart,
-              end_timestamp: effectiveEnd,
-            }}
-            missing={report?.total.uncosted_requests}
-            enabled={
-              canQuery && !reportQuery.isFetching && !reportQuery.isError
+            onDrill={
+              report
+                ? (title) => drill.openTotal(title, report.total)
+                : undefined
             }
           />
           <ChannelCostTrendChart
             trend={report?.trend ?? []}
-            rangeSeconds={effectiveEnd - effectiveStart}
-            loading={canQuery && reportQuery.isPending}
+            range={range}
+            loading={reportLoading}
+            onSelectPoint={drill.openPoint}
           />
           <ChannelCostBreakdown
             report={report}
-            loading={canQuery && reportQuery.isPending}
-            onSelect={(dimension, row) => {
-              if (dimension === 'channel') {
-                updateFilters({ channel: Number(row.key) || undefined })
-              } else if (dimension === 'model') {
-                updateFilters({ model_name: row.key || undefined })
-              } else if (dimension === 'group') {
-                updateFilters({ group: row.key || undefined })
-              } else {
-                const user = report?.users?.find(
-                  (item) => String(item.user_id) === row.key
-                )
-                updateFilters({ username: user?.username || undefined })
-              }
-            }}
+            loading={reportLoading}
+            dimension={dimension}
+            onDimensionChange={(next) =>
+              navigate({
+                replace: true,
+                search: (prev) => ({
+                  ...prev,
+                  dimension: next === 'channel' ? undefined : next,
+                }),
+              })
+            }
+            onDrill={drill.openRow}
+            onFilter={(row) => row.patch && search.updateFilters(row.patch)}
           />
-          <DataTablePage
+          <ChannelCostLogsTable
             table={table}
             columns={columns}
-            isLoading={canQuery && listQuery.isPending}
-            isFetching={listQuery.isFetching}
-            emptyTitle={
-              listQuery.isError
-                ? t('Failed to load cost logs')
-                : t('No records')
-            }
-            hideMobile
-            fixedHeight={false}
-            paginationInFooter={false}
-            applyHeaderSize
+            isLoading={canQuery && logs.query.isPending}
+            isFetching={logs.query.isFetching}
+            isError={logs.query.isError}
+          />
+          <ChannelCostDrillSheet
+            target={drill.target}
+            filters={filters}
+            onOpenChange={(open) => {
+              if (!open) drill.close()
+            }}
+            onApplyFilter={(patch) => {
+              drill.close()
+              search.updateFilters(patch)
+            }}
           />
         </div>
       </SectionPageLayout.Content>

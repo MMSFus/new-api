@@ -16,18 +16,23 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useQuery } from '@tanstack/react-query'
+import { AlertTriangle } from 'lucide-react'
 import * as React from 'react'
 import type { SetStateAction } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Combobox } from '@/components/ui/combobox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { getAdminPlans } from '@/features/subscriptions/api'
 import { getPaymentErrorTranslation } from '@/features/wallet/lib/payment'
 import { handleServerError } from '@/lib/handle-server-error'
+import { requireServerSuccess } from '@/lib/server-error-message'
 
 import { removeTrailingSlash } from './utils'
 import {
@@ -42,6 +47,7 @@ export type WaffoPancakeSettingsValues = {
   WaffoPancakeMerchantID: string
   WaffoPancakePrivateKey: string
   WaffoPancakeReturnURL: string
+  WaffoPancakeCurrency: string
 }
 
 export interface WaffoPancakeBinding {
@@ -65,6 +71,9 @@ const PANCAKE_DASHBOARD_URL = 'https://pancake.waffo.ai/merchant/dashboard'
 const DEFAULT_NEW_STORE_NAME = 'new-api-store'
 const DEFAULT_NEW_PRODUCT_NAME = 'new-api-charge-product'
 const DEFAULT_NEW_PAIR_NAME = `${DEFAULT_NEW_STORE_NAME} + ${DEFAULT_NEW_PRODUCT_NAME}`
+const COMMON_CURRENCY_OPTIONS = ['USD', 'EUR', 'GBP', 'JPY', 'CNY', 'KRW'].map(
+  (code) => ({ label: code, value: code })
+)
 
 export function WaffoPancakeSettingsSection({
   defaultValues,
@@ -345,6 +354,22 @@ export function WaffoPancakeSettingsSection({
 
   const verifying = phase === 'verifying'
 
+  const savedCurrency = defaultValues.WaffoPancakeCurrency.trim() || 'USD'
+  const selectedCurrency =
+    values.WaffoPancakeCurrency.trim().toUpperCase() || savedCurrency
+  const currencyChanged = selectedCurrency !== savedCurrency
+  // Plans whose Pancake product will get a price in the new currency on save.
+  const boundPlansQuery = useQuery({
+    queryKey: ['admin-subscription-plans', 'waffo-pancake-bound'],
+    queryFn: async () => {
+      const result = requireServerSuccess(await getAdminPlans())
+      return (result.data ?? []).filter((record) =>
+        Boolean(record.plan.waffo_pancake_product_id?.trim())
+      ).length
+    },
+    enabled: currencyChanged,
+  })
+
   // "Not edited" = MerchantID unchanged AND PrivateKey field blank, in
   // which case the backend falls back to persisted creds. Otherwise we
   // require both fields filled (mixed states would fail signature check).
@@ -433,6 +458,74 @@ export function WaffoPancakeSettingsSection({
             }
           />
         </div>
+
+        <div className='grid gap-1.5'>
+          <Label htmlFor='waffo-pancake-currency'>{t('Currency')}</Label>
+          <Combobox
+            id='waffo-pancake-currency'
+            placeholder={t('Select currency')}
+            emptyText={t('No currency found')}
+            allowCustomValue
+            options={COMMON_CURRENCY_OPTIONS}
+            value={values.WaffoPancakeCurrency}
+            onValueChange={(newValue) =>
+              onValueChange(
+                'WaffoPancakeCurrency',
+                (newValue ?? '').trim().toUpperCase().slice(0, 3)
+              )
+            }
+          />
+          <p className='text-muted-foreground text-xs'>
+            {t(
+              'Settlement currency (ISO 4217 code) for Pancake top-ups and subscription checkouts. The top-up unit price is an amount in this currency.'
+            )}
+          </p>
+        </div>
+
+        {currencyChanged ? (
+          <Alert className='lg:col-span-2'>
+            <AlertTriangle aria-hidden='true' />
+            <AlertTitle>
+              {t('Settlement currency will change from {{from}} to {{to}}', {
+                from: savedCurrency,
+                to: selectedCurrency,
+              })}
+            </AlertTitle>
+            <AlertDescription>
+              <p>
+                {t(
+                  'On save, new-api adds a {{currency}} price to the bound top-up product and to the Pancake product of every subscription plan, then publishes them. Existing prices in other currencies are kept. If any product fails, nothing is saved and the current currency stays in effect.',
+                  { currency: selectedCurrency }
+                )}
+              </p>
+              <p>
+                {boundPlansQuery.isSuccess
+                  ? t(
+                      'Affected subscription plans with a Pancake product: {{count}}',
+                      { count: boundPlansQuery.data }
+                    )
+                  : t('Counting affected subscription plans...')}
+              </p>
+            </AlertDescription>
+          </Alert>
+        ) : null}
+
+        {selectedCurrency !== 'USD' ? (
+          <Alert variant='destructive' className='lg:col-span-2'>
+            <AlertTriangle aria-hidden='true' />
+            <AlertTitle>
+              {t('Subscription prices are charged as {{currency}}', {
+                currency: selectedCurrency,
+              })}
+            </AlertTitle>
+            <AlertDescription>
+              {t(
+                'Pancake charges a subscription plan price as the same number in {{currency}} (a 10 plan is charged 10 {{currency}}), while balance purchases of the same plan are priced in USD. Review every plan price before going live.',
+                { currency: selectedCurrency }
+              )}
+            </AlertDescription>
+          </Alert>
+        ) : null}
 
         <div className='grid gap-1.5'>
           <Label>{t('API Private Key')}</Label>

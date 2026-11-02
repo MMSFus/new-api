@@ -210,6 +210,16 @@ func UpdateOption(c *gin.Context) {
 			common.ApiErrorT(c, "Compliance confirmation fields cannot be changed through the general settings API")
 			return
 		}
+		if operation_setting.IsExchangeRateSyncStatusOption(option.Key) {
+			common.ApiErrorT(c, "Exchange rate sync status is read-only")
+			return
+		}
+	}
+	// Changing the Pancake currency must go through SaveWaffoPancake, which
+	// first adds the new currency price to the bound Pancake products.
+	if option.Key == "WaffoPancakeCurrency" {
+		common.ApiErrorT(c, "Change the Waffo Pancake currency from the Waffo Pancake payment settings")
+		return
 	}
 	if option.Key == "TaskPublicAddress" && option.Value.(string) != "" {
 		if err := service.ValidateTaskArtifactBaseURL(option.Value.(string)); err != nil {
@@ -451,4 +461,19 @@ func UpdateOption(c *gin.Context) {
 		"success": true,
 		"message": "",
 	})
+}
+
+// SyncExchangeRate fetches USDExchangeRate from the default source now. A
+// failed attempt keeps the old rate and still returns the recorded status.
+func SyncExchangeRate(c *gin.Context) {
+	result, err := service.SyncUSDExchangeRate(c.Request.Context(), service.DefaultExchangeRateSource)
+	if err != nil {
+		if result == nil {
+			common.ApiError(c, err)
+			return
+		}
+		common.ApiErrorStatus(c, http.StatusOK, err, gin.H{"data": result})
+		return
+	}
+	common.ApiSuccess(c, result)
 }

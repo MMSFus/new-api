@@ -64,6 +64,7 @@ import {
   formatModelName,
   decodeBillingExprB64,
   getTieredBillingSummary,
+  logCurrencyUSDFactor,
   hasAnyCacheTokens,
   parseLogOther,
   isViolationFeeLog,
@@ -201,7 +202,9 @@ function buildTypeDetailSegments(
           normalizeTierLabel(other.matched_tier)
     )
     if (tier) {
-      const prices = Object.entries(tier.unitPrices).map(([field, price]) => {
+      const factor = logCurrencyUSDFactor(other)
+      const prices = Object.entries(tier.unitPrices).map(([field, raw]) => {
+        const price = raw * factor
         const definition = usageSchema?.[field]
         const unitKey = getTaskUsagePriceUnitLabelKey(definition?.unit)
         const unitLabel = taskUsageUnitLabel(definition, language, t(unitKey))
@@ -209,7 +212,7 @@ function buildTypeDetailSegments(
       })
       if (tier.constant > 0) {
         prices.push(
-          `${t('Additional charge')} ${formatTaskUsageUnitPrice(tier.constant, { tokenUnit: 'M' })}/${t('request')}`
+          `${t('Additional charge')} ${formatTaskUsageUnitPrice(tier.constant * factor, { tokenUnit: 'M' })}/${t('request')}`
         )
       }
       segments.push({

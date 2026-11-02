@@ -4,6 +4,14 @@ Mandatory conventions for quota, pricing, pre-consume, settlement, refund, and u
 
 **Billing expression system:** When working on tiered/dynamic billing (expression-based pricing), MUST read `pkg/billingexpr/expr.md` first. It documents the design philosophy, expression language, full architecture, token normalization rules, quota conversion, and expression versioning. All billing expression changes must follow that document.
 
+**Price currency (mandatory):** Model prices can be written in `USD` (default), `CNY`, or `CUSTOM` through the `ModelPriceCurrency` option. The currency factor (USD per unit) is defined in `pkg/billingexpr/expr.md` and resolved only by `setting/operation_setting/currency_conversion.go`.
+
+- Every billing read of `ModelRatio`, `ModelPrice`, a configured `ModelBillingExpr`, or a `plugin_billing_expr` override MUST go through the shared resolvers: `ratio_setting.ResolveModelPriceCurrency`, `billing_setting.ResolveBillingExprCurrency`, or `billing_setting.ResolveTaskBillingExprWithCurrency`. Do not read the raw maps or the exchange-rate globals for billing. Administrator editing reads raw stored values. Display surfaces return the USD effective price together with the original `price_currency`.
+- An invalid exchange rate (not a finite positive number) MUST fail the request closed. Do not fall back to a factor of 1. Reward amounts are skipped and logged, and the trust-bypass threshold becomes 0.
+- The factor MUST be resolved once at pre-consume and frozen: in `BillingSnapshot.CurrencyUSDFactor` for expressions, in `PriceData.CurrencyUSDFactor` for ratio and per-call pricing, and in `TaskBillingContext` for asynchronous tasks. Settlement, refunds, and deltas use the frozen value. A missing value means 1 (USD), which keeps older snapshots and unmarked models bit-for-bit unchanged.
+- Built-in expressions (`setting/billing_setting/builtin_billing.go`) are always USD. Completion, cache, image, and audio ratios are relative and are not converted.
+- Any new billing path (relay format, task platform, adjustment hook) MUST apply the frozen factor at its quota conversion, using the `common/quota_math.go` helpers, and MUST write `price_currency` / `currency_usd_factor` to the consume log for non-USD prices only.
+
 **Built-in model pricing:** New built-in model prices MUST be defined as self-contained billing expressions in `setting/billing_setting/builtin_billing.go`, using real USD per million tokens. Do not add new built-in prices to the legacy model/completion/cache ratio tables. Preserve explicit administrator pricing overrides. Existing legacy prices are migrated only when explicitly requested. Verify published prices and cover applicable context-length thresholds and cache categories.
 
 **Billing safety invariants:** Quota/billing code MUST never produce a negative charge (a credit) from arithmetic overflow or unvalidated input. Apply defense in depth:

@@ -136,6 +136,9 @@ func main() {
 	// Subscription quota reset task (daily/weekly/monthly/custom)
 	service.StartSubscriptionQuotaResetTask()
 
+	// USDExchangeRate auto-sync; idle until enabled in exchange_rate_setting
+	service.StartExchangeRateAutoSyncTask()
+
 	// Report this process as a system instance so the System Info page can show
 	// all currently alive nodes in multi-instance deployments.
 	service.StartSystemInstanceReporter()

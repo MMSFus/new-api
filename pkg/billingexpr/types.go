@@ -81,6 +81,11 @@ type BillingSnapshot struct {
 	ExprVersion               int            `json:"expr_version"`
 	TaskUsageBilling          bool           `json:"task_usage_billing,omitempty"`
 	UsageFacts                map[string]any `json:"usage_facts,omitempty"`
+	// Price currency and its USD conversion factor, frozen at pre-consume time.
+	// Empty code or factor=1 means USD. Older snapshots without these fields
+	// also mean USD (factor defaults to 1 in conversion).
+	CurrencyCode      string  `json:"currency_code,omitempty"`
+	CurrencyUSDFactor float64 `json:"currency_usd_factor,omitempty"`
 }
 
 // TieredResult holds everything needed after running tiered settlement.
@@ -102,6 +107,15 @@ type TieredResult struct {
 	// clamping occurred. Not serialized: the marker is attached separately via
 	// the shared quota-saturation audit path.
 	Clamp *common.QuotaClamp `json:"-"`
+}
+
+// EffectiveCurrencyUSDFactor returns the frozen currency factor, treating a
+// missing (zero) value from USD or older snapshots as 1.
+func (s *BillingSnapshot) EffectiveCurrencyUSDFactor() float64 {
+	if s.CurrencyUSDFactor == 0 {
+		return 1
+	}
+	return s.CurrencyUSDFactor
 }
 
 // ExprHashString returns the SHA-256 hex digest of an expression string.

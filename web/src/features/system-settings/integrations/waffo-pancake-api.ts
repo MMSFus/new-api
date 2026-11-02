@@ -58,7 +58,19 @@ interface BackendBody<T> {
 
 export type CatalogResponse = BackendBody<{ stores: CatalogStore[] }>
 export type PairResponse = BackendBody<PairResult>
-export type SaveResponse = BackendBody<{ product_id: string; store_id: string }>
+export interface PriceSyncResult {
+  currency: string
+  updated_products: string[] | null
+  skipped_products: string[] | null
+  plan_count: number
+}
+
+export type SaveResponse = BackendBody<{
+  product_id: string
+  store_id: string
+  currency: string
+  price_sync: PriceSyncResult | null
+}>
 
 export async function listWaffoPancakeCatalog(
   merchantID: string,
@@ -88,6 +100,7 @@ export async function saveWaffoPancakeConfig(params: {
   merchantID: string
   privateKey: string
   returnURL: string
+  currency: string
   storeID: string
   productID: string
 }): Promise<SaveResponse> {
@@ -95,6 +108,7 @@ export async function saveWaffoPancakeConfig(params: {
     merchant_id: params.merchantID,
     private_key: params.privateKey,
     return_url: params.returnURL,
+    currency: params.currency,
     store_id: params.storeID,
     product_id: params.productID,
   })

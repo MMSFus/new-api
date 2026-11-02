@@ -24,6 +24,7 @@ import {
   ADMIN_PERMISSION_RESOURCES,
   hasPermission,
 } from '@/lib/admin-permissions'
+import { logRangeSearchSchema } from '@/lib/log-range-search'
 import { useAuthStore } from '@/stores/auth-store'
 
 export const Route = createFileRoute('/_authenticated/simulated-cache/')({
@@ -39,5 +40,6 @@ export const Route = createFileRoute('/_authenticated/simulated-cache/')({
       throw redirect({ to: '/403' })
     }
   },
+  validateSearch: logRangeSearchSchema,
   component: SimulatedCache,
 })

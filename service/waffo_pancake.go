@@ -2,11 +2,13 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/shopspring/decimal"
 	pancake "github.com/waffo-com/waffo-pancake-sdk-go"
 )
 
@@ -80,8 +82,13 @@ func newWaffoPancakeClient() (*pancake.Client, error) {
 	return pancake.New(pancake.Config{
 		MerchantID: setting.WaffoPancakeMerchantID,
 		PrivateKey: setting.WaffoPancakePrivateKey,
+		BaseURL:    waffoPancakeBaseURL,
 	})
 }
+
+// waffoPancakeBaseURL is empty in production (SDK default host); tests point
+// it at an httptest server.
+var waffoPancakeBaseURL string
 
 func newWaffoPancakeClientFromCreds(merchantID, privateKey string) (*pancake.Client, error) {
 	if strings.TrimSpace(merchantID) == "" || strings.TrimSpace(privateKey) == "" {
@@ -90,6 +97,7 @@ func newWaffoPancakeClientFromCreds(merchantID, privateKey string) (*pancake.Cli
 	return pancake.New(pancake.Config{
 		MerchantID: merchantID,
 		PrivateKey: privateKey,
+		BaseURL:    waffoPancakeBaseURL,
 	})
 }
 
@@ -117,7 +125,7 @@ func CreateWaffoPancakeCheckoutSession(ctx context.Context, params *WaffoPancake
 	sdkParams := pancake.AuthenticatedCheckoutParams{
 		CreateCheckoutSessionParams: pancake.CreateCheckoutSessionParams{
 			ProductID:               params.ProductID,
-			Currency:                "USD",
+			Currency:                setting.GetWaffoPancakeCurrency(),
 			BuyerEmail:              optionalString(params.BuyerEmail),
 			ExpiresInSeconds:        params.ExpiresInSeconds,
 			OrderMerchantExternalID: optionalString(params.OrderMerchantExternalID),
@@ -278,8 +286,8 @@ func CreateWaffoPancakePrimaryStore(ctx context.Context, merchantID, privateKey 
 }
 
 // CreateWaffoPancakeProductForPlan mints (and publishes) a Pancake
-// OnetimeProduct priced at `amount` USD, used as a subscription plan's
-// SubscriptionPlan.WaffoPancakeProductId.
+// OnetimeProduct priced at `amount` in the configured WaffoPancakeCurrency,
+// used as a subscription plan's SubscriptionPlan.WaffoPancakeProductId.
 //
 // OnetimeProduct (not SubscriptionProduct) because new-api has no renewal-
 // event handling; Pancake auto-renewing without new-api extending user
@@ -301,11 +309,12 @@ func CreateWaffoPancakeProductForPlan(ctx context.Context, merchantID, privateKe
 	if err != nil {
 		return "", err
 	}
+	cur := setting.GetWaffoPancakeCurrency()
 	prodRes, err := client.OnetimeProducts.Create(ctx, pancake.CreateOnetimeProductParams{
 		StoreID: storeID,
 		Name:    name,
 		Prices: pancake.Prices{
-			"USD": {
+			cur: {
 				Amount:      amount,
 				TaxCategory: pancake.TaxCategory("saas"),
 			},
@@ -323,8 +332,9 @@ func CreateWaffoPancakeProductForPlan(ctx context.Context, merchantID, privateKe
 }
 
 // CreateWaffoPancakePrimaryProduct mints (and publishes) the wallet-top-up
-// OnetimeProduct under storeID. Per-checkout price overrides via PriceSnapshot
-// are what make the "1.00" seed price irrelevant at runtime.
+// OnetimeProduct under storeID, using the configured WaffoPancakeCurrency.
+// Per-checkout price overrides via PriceSnapshot are what make the one-unit
+// seed price irrelevant at runtime.
 func CreateWaffoPancakePrimaryProduct(ctx context.Context, merchantID, privateKey, storeID, returnURL string) (string, error) {
 	storeID = strings.TrimSpace(storeID)
 	if storeID == "" {
@@ -334,12 +344,14 @@ func CreateWaffoPancakePrimaryProduct(ctx context.Context, merchantID, privateKe
 	if err != nil {
 		return "", err
 	}
+	cur := setting.GetWaffoPancakeCurrency()
 	prodRes, err := client.OnetimeProducts.Create(ctx, pancake.CreateOnetimeProductParams{
 		StoreID: storeID,
 		Name:    defaultWaffoPancakeProductName,
 		Prices: pancake.Prices{
-			"USD": {
-				Amount:      "1.00", // overridden at checkout via PriceSnapshot
+			cur: {
+				// Overridden at checkout via PriceSnapshot; "1" for JPY, "1.00" for USD.
+				Amount:      setting.FormatWaffoPancakeAmount(decimal.NewFromInt(1), cur),
 				TaxCategory: pancake.TaxCategory("saas"),
 			},
 		},
@@ -390,20 +402,64 @@ func CreateWaffoPancakePrimaryPair(ctx context.Context, merchantID, privateKey, 
 	}, nil
 }
 
+// ErrWaffoPancakeInvalidCurrency and WaffoPancakePriceSyncError let the
+// controller show a specific reason instead of a generic save failure.
+var ErrWaffoPancakeInvalidCurrency = errors.New("invalid Waffo Pancake currency")
+
+// WaffoPancakePriceSyncError means the currency was not saved because at
+// least one bound product could not get a price in the new currency.
+type WaffoPancakePriceSyncError struct {
+	Err error
+}
+
+func (e *WaffoPancakePriceSyncError) Error() string {
+	return "failed to add the new currency price to Waffo Pancake products: " + e.Err.Error()
+}
+
+func (e *WaffoPancakePriceSyncError) Unwrap() error { return e.Err }
+
 // SaveWaffoPancakeConfig persists the operator-controlled fields atomically
 // at the end of the configuration flow via model.UpdateOptionsBulk (single
 // DB transaction). A blank privateKey is treated as "keep current"
-// (Stripe-style API-secret UX) and is omitted from the bulk payload.
-func SaveWaffoPancakeConfig(ctx context.Context, merchantID, privateKey, returnURL, storeID, productID string) error {
+// (Stripe-style API-secret UX) and is omitted from the bulk payload; a blank
+// currency also keeps the current value.
+//
+// When the currency changes, every bound Pancake product (the top-up product
+// and each SubscriptionPlan.WaffoPancakeProductId) first gets a price in the
+// new currency and is published. If any of them fails, nothing is saved and
+// the old currency stays in effect.
+func SaveWaffoPancakeConfig(ctx context.Context, merchantID, privateKey, returnURL, currency, storeID, productID string) (*WaffoPancakePriceSyncResult, error) {
 	merchantID = strings.TrimSpace(merchantID)
 	storeID = strings.TrimSpace(storeID)
 	productID = strings.TrimSpace(productID)
+	currency = strings.TrimSpace(currency)
 	if merchantID == "" || storeID == "" || productID == "" {
-		return fmt.Errorf("merchant id, store id, and product id are required to save")
+		return nil, fmt.Errorf("merchant id, store id, and product id are required to save")
 	}
+	if currency == "" {
+		currency = setting.GetWaffoPancakeCurrency()
+	}
+	if err := setting.ValidateWaffoPancakeCurrency(currency); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrWaffoPancakeInvalidCurrency, err)
+	}
+
+	var syncResult *WaffoPancakePriceSyncResult
+	if currency != setting.GetWaffoPancakeCurrency() {
+		key := strings.TrimSpace(privateKey)
+		if key == "" {
+			key = setting.WaffoPancakePrivateKey
+		}
+		result, err := SyncWaffoPancakeProductPrices(ctx, merchantID, key, productID, currency)
+		if err != nil {
+			return result, &WaffoPancakePriceSyncError{Err: err}
+		}
+		syncResult = result
+	}
+
 	values := map[string]string{
 		"WaffoPancakeMerchantID": merchantID,
 		"WaffoPancakeReturnURL":  strings.TrimSpace(returnURL),
+		"WaffoPancakeCurrency":   currency,
 		"WaffoPancakeStoreID":    storeID,
 		"WaffoPancakeProductID":  productID,
 	}
@@ -411,9 +467,132 @@ func SaveWaffoPancakeConfig(ctx context.Context, merchantID, privateKey, returnU
 		values["WaffoPancakePrivateKey"] = pk
 	}
 	if err := model.UpdateOptionsBulk(values); err != nil {
-		return fmt.Errorf("persist Waffo Pancake config: %w", err)
+		return syncResult, fmt.Errorf("persist Waffo Pancake config: %w", err)
 	}
-	return nil
+	return syncResult, nil
+}
+
+// WaffoPancakePriceSyncResult reports what SyncWaffoPancakeProductPrices did
+// so the admin UI can say how many products were updated.
+type WaffoPancakePriceSyncResult struct {
+	Currency        string   `json:"currency"`
+	UpdatedProducts []string `json:"updated_products"`
+	SkippedProducts []string `json:"skipped_products"`
+	PlanCount       int      `json:"plan_count"`
+}
+
+// SyncWaffoPancakeProductPrices makes sure the top-up product and every
+// subscription-plan product carry a price in currency. Pancake's update
+// endpoint takes the full price map, so existing prices (e.g. USD) are read
+// first and kept. A product that already has the currency is left alone.
+// Each update creates a new immutable version that must be published.
+//
+// Products are updated one by one; a failure does not undo earlier updates.
+// That is safe because adding a price in another currency changes nothing
+// for checkouts that still use the old currency, and a retry skips products
+// that already have it.
+func SyncWaffoPancakeProductPrices(ctx context.Context, merchantID, privateKey, topUpProductID, currency string) (*WaffoPancakePriceSyncResult, error) {
+	client, err := newWaffoPancakeClientFromCreds(merchantID, privateKey)
+	if err != nil {
+		return nil, err
+	}
+	plans, err := model.GetWaffoPancakeBoundSubscriptionPlans()
+	if err != nil {
+		return nil, fmt.Errorf("load subscription plans: %w", err)
+	}
+
+	type priceTarget struct {
+		productID string
+		label     string
+		amount    string
+	}
+	targets := []priceTarget{{
+		productID: topUpProductID,
+		label:     "top-up product",
+		amount:    setting.FormatWaffoPancakeAmount(decimal.NewFromInt(1), currency),
+	}}
+	seen := map[string]bool{topUpProductID: true}
+	for _, plan := range plans {
+		id := strings.TrimSpace(plan.WaffoPancakeProductId)
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		targets = append(targets, priceTarget{
+			productID: id,
+			label:     fmt.Sprintf("plan %d", plan.Id),
+			amount:    setting.FormatWaffoPancakeAmount(decimal.NewFromFloat(plan.PriceAmount), currency),
+		})
+	}
+
+	type queryShape struct {
+		Stores []struct {
+			OnetimeProducts []struct {
+				ID     string `json:"id"`
+				Prices []struct {
+					Currency  string `json:"currency"`
+					PriceInfo struct {
+						Amount      string `json:"amount"`
+						TaxCategory string `json:"taxCategory"`
+					} `json:"priceInfo"`
+				} `json:"prices"`
+			} `json:"onetimeProducts"`
+		} `json:"stores"`
+	}
+	resp, err := pancake.GraphQLQuery[queryShape](ctx, client, pancake.GraphQLParams{
+		Query: `query {
+			stores(limit: 100) {
+				onetimeProducts {
+					id
+					prices { currency priceInfo { amount taxCategory } }
+				}
+			}
+		}`,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("query Waffo Pancake product prices: %w", err)
+	}
+	if len(resp.Errors) > 0 {
+		return nil, fmt.Errorf("waffo pancake price query returned %d errors: %s", len(resp.Errors), resp.Errors[0].Message)
+	}
+	current := map[string]pancake.Prices{}
+	for _, store := range resp.Data.Stores {
+		for _, product := range store.OnetimeProducts {
+			prices := pancake.Prices{}
+			for _, p := range product.Prices {
+				prices[p.Currency] = pancake.PriceInfo{Amount: p.PriceInfo.Amount, TaxCategory: pancake.TaxCategory(p.PriceInfo.TaxCategory)}
+			}
+			current[product.ID] = prices
+		}
+	}
+
+	result := &WaffoPancakePriceSyncResult{Currency: currency, PlanCount: len(plans)}
+	var failures []string
+	for _, target := range targets {
+		prices, ok := current[target.productID]
+		if !ok {
+			failures = append(failures, fmt.Sprintf("%s %s: product not found in this merchant's stores", target.label, target.productID))
+			continue
+		}
+		if _, has := prices[currency]; has {
+			result.SkippedProducts = append(result.SkippedProducts, target.productID)
+			continue
+		}
+		prices[currency] = pancake.PriceInfo{Amount: target.amount, TaxCategory: pancake.TaxCategory("saas")}
+		if _, err := client.OnetimeProducts.Update(ctx, pancake.UpdateOnetimeProductParams{ID: target.productID, Prices: prices}); err != nil {
+			failures = append(failures, fmt.Sprintf("%s %s: update: %v", target.label, target.productID, err))
+			continue
+		}
+		if _, err := client.OnetimeProducts.Publish(ctx, pancake.PublishOnetimeProductParams{ID: target.productID}); err != nil {
+			failures = append(failures, fmt.Sprintf("%s %s: publish: %v", target.label, target.productID, err))
+			continue
+		}
+		result.UpdatedProducts = append(result.UpdatedProducts, target.productID)
+	}
+	if len(failures) > 0 {
+		return result, errors.New(strings.Join(failures, "; "))
+	}
+	return result, nil
 }
 
 type WaffoPancakeCatalogProduct struct {

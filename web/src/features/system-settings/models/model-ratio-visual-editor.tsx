@@ -77,6 +77,7 @@ import {
 
 type ModelRatioVisualEditorProps = {
   savedModelPrice: string
+  savedModelPriceCurrency?: string
   savedModelRatio: string
   savedCacheRatio: string
   savedCreateCacheRatio: string
@@ -88,6 +89,7 @@ type ModelRatioVisualEditorProps = {
   savedBillingExpr: string
   savedPluginBillingExpr?: string
   modelPrice: string
+  modelPriceCurrency?: string
   modelRatio: string
   cacheRatio: string
   createCacheRatio: string
@@ -118,6 +120,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
 >(function ModelRatioVisualEditor(
   {
     savedModelPrice,
+    savedModelPriceCurrency = '{}',
     savedModelRatio,
     savedCacheRatio,
     savedCreateCacheRatio,
@@ -129,6 +132,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
     savedBillingExpr,
     savedPluginBillingExpr = '{}',
     modelPrice,
+    modelPriceCurrency = '{}',
     modelRatio,
     cacheRatio,
     createCacheRatio,
@@ -230,6 +234,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
   const models = useMemo(() => {
     const savedRows = buildModelSnapshots({
       modelPrice: savedModelPrice,
+      modelPriceCurrency: savedModelPriceCurrency,
       modelRatio: savedModelRatio,
       cacheRatio: savedCacheRatio,
       createCacheRatio: savedCreateCacheRatio,
@@ -243,6 +248,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
     })
     const draftRows = buildModelSnapshots({
       modelPrice,
+      modelPriceCurrency,
       modelRatio,
       cacheRatio,
       createCacheRatio,
@@ -287,6 +293,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
     candidateModelNames,
     filterMode,
     savedModelPrice,
+    savedModelPriceCurrency,
     savedModelRatio,
     savedCacheRatio,
     savedCreateCacheRatio,
@@ -298,6 +305,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
     savedBillingExpr,
     savedPluginBillingExpr,
     modelPrice,
+    modelPriceCurrency,
     modelRatio,
     cacheRatio,
     createCacheRatio,
@@ -346,6 +354,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
       }
       setEditData({
         name: editableModel.name,
+        priceCurrency: editableModel.priceCurrency,
         price: editableModel.price,
         ratio: editableModel.ratio,
         cacheRatio: editableModel.cacheRatio,
@@ -429,6 +438,11 @@ const ModelRatioVisualEditorComponent = forwardRef<
         { fallback: {}, silent: true }
       )
 
+      const currencyMap = safeJsonParse<Record<string, string>>(
+        modelPriceCurrency,
+        { fallback: {}, silent: true }
+      )
+      delete currencyMap[name]
       delete priceMap[name]
       delete ratioMap[name]
       delete cacheMap[name]
@@ -454,6 +468,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
       )
 
       onChange('ModelPrice', JSON.stringify(priceMap, null, 2))
+      onChange('ModelPriceCurrency', JSON.stringify(currencyMap, null, 2))
       onChange('ModelRatio', JSON.stringify(ratioMap, null, 2))
       onChange('CacheRatio', JSON.stringify(cacheMap, null, 2))
       onChange('CreateCacheRatio', JSON.stringify(createCacheMap, null, 2))
@@ -481,6 +496,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
     },
     [
       modelPrice,
+      modelPriceCurrency,
       modelRatio,
       cacheRatio,
       createCacheRatio,
@@ -544,6 +560,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
     (data: ModelRatioData, targetNames: string[] = [data.name]) => {
       const options = pricingOptions({
         ModelPrice: modelPrice,
+        ModelPriceCurrency: modelPriceCurrency,
         ModelRatio: modelRatio,
         CompletionRatio: completionRatio,
         CacheRatio: cacheRatio,
@@ -560,6 +577,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
     },
     [
       modelPrice,
+      modelPriceCurrency,
       modelRatio,
       completionRatio,
       cacheRatio,
@@ -823,6 +841,8 @@ export const ModelRatioVisualEditor = memo(
   (prevProps, nextProps) => {
     return (
       prevProps.savedModelPrice === nextProps.savedModelPrice &&
+      prevProps.savedModelPriceCurrency === nextProps.savedModelPriceCurrency &&
+      prevProps.modelPriceCurrency === nextProps.modelPriceCurrency &&
       prevProps.savedModelRatio === nextProps.savedModelRatio &&
       prevProps.savedCacheRatio === nextProps.savedCacheRatio &&
       prevProps.savedCreateCacheRatio === nextProps.savedCreateCacheRatio &&

@@ -2,6 +2,7 @@ package helper
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -802,3 +803,168 @@ func (s *priceTestReservation) GetPreConsumedQuota() int { return s.held }
 func (s *priceTestReservation) Reserve(quota int) error  { s.held = max(s.held, quota); return nil }
 
 func (s *priceTestReservation) ReserveBeforeSubmit(quota int) error { return s.Reserve(quota) }
+
+// withCurrencyRates fixes both exchange rates for a test and restores them.
+func withCurrencyRates(t *testing.T, cny, custom float64) {
+	t.Helper()
+	oldCNY := operation_setting.USDExchangeRate
+	oldCustom := operation_setting.GetGeneralSetting().CustomCurrencyExchangeRate
+	t.Cleanup(func() {
+		operation_setting.USDExchangeRate = oldCNY
+		operation_setting.GetGeneralSetting().CustomCurrencyExchangeRate = oldCustom
+	})
+	operation_setting.USDExchangeRate = cny
+	operation_setting.GetGeneralSetting().CustomCurrencyExchangeRate = custom
+}
+
+func withModelPriceCurrencies(t *testing.T, marks map[string]string) {
+	t.Helper()
+	saved := ratio_setting.ModelPriceCurrency2JSONString()
+	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateModelPriceCurrencyByJSONString(saved)) })
+	encoded, err := common.Marshal(marks)
+	require.NoError(t, err)
+	require.NoError(t, ratio_setting.UpdateModelPriceCurrencyByJSONString(string(encoded)))
+}
+
+func newCurrencyTestInfo(model string) (*gin.Context, *relaycommon.RelayInfo) {
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	ctx.Set("group", "default")
+	return ctx, &relaycommon.RelayInfo{
+		OriginModelName: model,
+		UserGroup:       "default",
+		UsingGroup:      "default",
+		RequestHeaders:  map[string]string{},
+		BillingRequestInput: &billingexpr.RequestInput{
+			Headers: map[string]string{},
+			Body:    []byte(`{}`),
+		},
+	}
+}
+
+// Prices written in CNY/CUSTOM are converted with 1 unit = 1/rate USD in the
+// ratio, per-call and expression modes. Unmarked models keep USD semantics.
+func TestModelPriceHelperConvertsPriceCurrency(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	withCurrencyRates(t, 8, 2)
+	savedPrices := ratio_setting.ModelPrice2JSONString()
+	savedRatios := ratio_setting.ModelRatio2JSONString()
+	savedConfig := map[string]string{}
+	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
+		savedConfig[key] = value
+		return nil
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(savedPrices))
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(savedRatios))
+		require.NoError(t, config.GlobalConfig.LoadFromDB(savedConfig))
+	})
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"price-usd":1,"price-cny":8,"price-custom":2}`))
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"ratio-usd":2,"ratio-cny":16,"ratio-custom":4}`))
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+		"billing_setting.billing_mode": `{"expr-usd":"tiered_expr","expr-cny":"tiered_expr","expr-custom":"tiered_expr"}`,
+		"billing_setting.billing_expr": `{"expr-usd":"tier(\"base\", p * 16)","expr-cny":"tier(\"base\", p * 16)","expr-custom":"tier(\"base\", p * 16)"}`,
+	}))
+	withModelPriceCurrencies(t, map[string]string{
+		"price-cny": "CNY", "price-custom": "CUSTOM",
+		"ratio-cny": "CNY", "ratio-custom": "CUSTOM",
+		"expr-cny": "CNY", "expr-custom": "CUSTOM",
+	})
+
+	tests := []struct {
+		model        string
+		wantQuota    int
+		wantCurrency string
+		wantFactor   float64
+	}{
+		// per-call: 1 USD = 8 CNY = 2 CUSTOM = 500000 quota
+		{"price-usd", 500000, "USD", 1},
+		{"price-cny", 500000, "CNY", 0.125},
+		{"price-custom", 500000, "CUSTOM", 0.5},
+		// ratio: 1000 prompt tokens * ratio * factor
+		{"ratio-usd", 2000, "USD", 1},
+		{"ratio-cny", 2000, "CNY", 0.125},
+		{"ratio-custom", 2000, "CUSTOM", 0.5},
+		// expression: 1000 * 16 / 1e6 * factor * 500000
+		{"expr-usd", 8000, "", 0},
+		{"expr-cny", 1000, "CNY", 0.125},
+		{"expr-custom", 4000, "CUSTOM", 0.5},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			ctx, info := newCurrencyTestInfo(tt.model)
+			priceData, err := ModelPriceHelper(ctx, info, 1000, &types.TokenCountMeta{})
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantQuota, priceData.QuotaToPreConsume)
+			if snap := info.TieredBillingSnapshot; snap != nil {
+				assert.Equal(t, tt.wantCurrency, snap.CurrencyCode)
+				assert.Equal(t, tt.wantFactor, snap.CurrencyUSDFactor)
+				return
+			}
+			assert.Equal(t, tt.wantCurrency, priceData.PriceCurrency)
+			assert.Equal(t, tt.wantFactor, priceData.CurrencyUSDFactor)
+		})
+	}
+
+	// Per-call (MJ/task) helper applies the same conversion.
+	ctx, info := newCurrencyTestInfo("price-cny")
+	priceData, err := ModelPriceHelperPerCall(ctx, info)
+	require.NoError(t, err)
+	assert.Equal(t, 500000, priceData.Quota)
+	assert.Equal(t, 1.0, priceData.ModelPrice)
+}
+
+// An invalid exchange rate fails the request; it never bills at a factor of 1.
+func TestModelPriceHelperCurrencyFailsClosed(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	savedPrices := ratio_setting.ModelPrice2JSONString()
+	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(savedPrices)) })
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"price-cny":8,"price-usd":1}`))
+	withModelPriceCurrencies(t, map[string]string{"price-cny": "CNY"})
+
+	for _, rate := range []float64{0, -7.3, math.NaN(), math.Inf(1)} {
+		t.Run(fmt.Sprint(rate), func(t *testing.T) {
+			withCurrencyRates(t, rate, 1)
+			ctx, info := newCurrencyTestInfo("price-cny")
+			_, err := ModelPriceHelper(ctx, info, 1000, &types.TokenCountMeta{})
+			require.Error(t, err)
+			_, err = ModelPriceHelperPerCall(ctx, info)
+			require.Error(t, err)
+
+			// Unmarked models do not depend on the rate.
+			ctx, info = newCurrencyTestInfo("price-usd")
+			priceData, err := ModelPriceHelper(ctx, info, 1000, &types.TokenCountMeta{})
+			require.NoError(t, err)
+			assert.Equal(t, 500000, priceData.QuotaToPreConsume)
+		})
+	}
+}
+
+// The factor frozen at pre-consume decides settlement even if the rate changes.
+func TestTieredCurrencyFactorFrozenInSnapshot(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	withCurrencyRates(t, 8, 1)
+	savedConfig := map[string]string{}
+	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
+		savedConfig[key] = value
+		return nil
+	}))
+	t.Cleanup(func() { require.NoError(t, config.GlobalConfig.LoadFromDB(savedConfig)) })
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+		"billing_setting.billing_mode": `{"expr-cny":"tiered_expr"}`,
+		"billing_setting.billing_expr": `{"expr-cny":"tier(\"base\", p * 16 + c * 32)"}`,
+	}))
+	withModelPriceCurrencies(t, map[string]string{"expr-cny": "CNY"})
+
+	ctx, info := newCurrencyTestInfo("expr-cny")
+	_, err := ModelPriceHelper(ctx, info, 1000, &types.TokenCountMeta{})
+	require.NoError(t, err)
+	snap := info.TieredBillingSnapshot
+	require.NotNil(t, snap)
+
+	operation_setting.USDExchangeRate = 4
+	result, err := billingexpr.ComputeTieredQuota(snap, billingexpr.TokenParams{P: 1000, C: 1000, Len: 1000})
+	require.NoError(t, err)
+	// (1000*16 + 1000*32) / 1e6 * 0.125 * 500000
+	assert.Equal(t, 3000, result.ActualQuotaAfterGroup)
+}

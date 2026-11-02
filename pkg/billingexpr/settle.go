@@ -10,12 +10,16 @@ import (
 // expression version. This is the central dispatch point for future versions
 // that may use a different conversion formula.
 func quotaConversion(exprOutput float64, snap *BillingSnapshot) float64 {
+	// The currency factor converts prices written in CNY/CUSTOM to USD. It is
+	// frozen in the snapshot; a missing factor (USD or older snapshots) is 1.
+	// Multiplying by exactly 1 leaves USD results bit-for-bit unchanged.
+	factor := snap.EffectiveCurrencyUSDFactor()
 	if snap.TaskUsageBilling {
-		return exprOutput * snap.QuotaPerUnit
+		return exprOutput * factor * snap.QuotaPerUnit
 	}
 	switch snap.ExprVersion {
 	default: // v1: coefficients are $/1M tokens prices
-		return exprOutput / 1_000_000 * snap.QuotaPerUnit
+		return exprOutput / 1_000_000 * factor * snap.QuotaPerUnit
 	}
 }
 

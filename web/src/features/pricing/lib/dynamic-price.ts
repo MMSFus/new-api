@@ -246,6 +246,50 @@ export function formatTaskUsageUnitPrice(
   })
 }
 
+/**
+ * USD per unit of the currency an expression is written in. Expression text
+ * is never rewritten by the backend, so its coefficients are multiplied by
+ * this factor for display. A missing or unusable factor means 1: the pricing
+ * API then reports the raw value together with `price_currency`.
+ */
+export function pricingCurrencyFactor(model: PricingModel): number {
+  const factor = model.currency_usd_factor
+  return typeof factor === 'number' && Number.isFinite(factor) && factor > 0
+    ? factor
+    : 1
+}
+
+/** Scale every price of a parsed tier; conditions and labels are unchanged. */
+export function scalePricingTier<T extends DynamicPricingTier>(
+  tier: T,
+  factor: number
+): T {
+  if (factor === 1) return tier
+  if (isTaskPricingTier(tier)) {
+    return {
+      ...tier,
+      constant: tier.constant * factor,
+      unitPrices: Object.fromEntries(
+        Object.entries(tier.unitPrices).map(([field, price]) => [
+          field,
+          price * factor,
+        ])
+      ),
+    }
+  }
+  const scaled: ParsedTier = { ...tier }
+  if (typeof tier.fixedPrice === 'number') {
+    scaled.fixedPrice = tier.fixedPrice * factor
+  }
+  for (const variable of BILLING_PRICING_VARS) {
+    const field = variable.field as string | undefined
+    if (!field) continue
+    const price = tier[field]
+    if (typeof price === 'number') scaled[field] = price * factor
+  }
+  return scaled as T
+}
+
 export function getDynamicPricingTiers(
   model: PricingModel
 ): DynamicPricingTier[] {
@@ -258,10 +302,11 @@ export function getDynamicPricingTiers(
   const { billingExpr } = splitBillingExprAndRequestRules(
     model.billing_expr || ''
   )
-  if (isTaskUsagePricingModel(model)) {
-    return getTaskPricingDisplayTiers(billingExpr, model.billing_usage_schema)
-  }
-  return parseTiersFromExpr(billingExpr)
+  const factor = pricingCurrencyFactor(model)
+  const tiers: DynamicPricingTier[] = isTaskUsagePricingModel(model)
+    ? getTaskPricingDisplayTiers(billingExpr, model.billing_usage_schema)
+    : parseTiersFromExpr(billingExpr)
+  return tiers.map((tier) => scalePricingTier(tier, factor))
 }
 
 export function hasDynamicRequestRules(model: PricingModel): boolean {
@@ -505,7 +550,11 @@ export function getDynamicPricingSummary(
   ).billingExpr
   const timeTiers = isTaskUsage
     ? null
-    : getCurrentTimePricingTiers(baseExpression, options.now ?? new Date())
+    : (getCurrentTimePricingTiers(
+        baseExpression,
+        options.now ?? new Date()
+      )?.map((item) => scalePricingTier(item, pricingCurrencyFactor(model))) ??
+      null)
   const summaryTiers = timeTiers ?? tiers
   const tier = isTaskUsage
     ? (summaryTiers.at(-1) ?? null)
@@ -621,10 +670,11 @@ export function getCardExamplePrice(
 
   const result = evaluateTaskVisualConfig(config, firstExample.facts, schema)
   if (!result) return null
+  const total = result.total * pricingCurrencyFactor(model)
 
   return {
     label: firstExample.label,
-    total: result.total,
-    formatted: formatTaskUsageUnitPrice(result.total, options),
+    total,
+    formatted: formatTaskUsageUnitPrice(total, options),
   }
 }

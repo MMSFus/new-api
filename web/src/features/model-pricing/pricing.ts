@@ -29,11 +29,13 @@ import {
   buildModelSnapshots,
   type ModelPricingSnapshot,
 } from '@/features/system-settings/models/model-pricing-snapshots'
+import { amountCurrencyUSDFactor, parseAmountCurrency } from '@/lib/currency'
 
 import type { ModelPricingEntry } from './api'
 
 export const PRICING_KEYS = [
   'ModelPrice',
+  'ModelPriceCurrency',
   'ModelRatio',
   'CompletionRatio',
   'CacheRatio',
@@ -76,19 +78,33 @@ export function modelPricingDisplay(
     >
 ): PricingModel {
   const values = entry.effective
+  // Admin values are raw; present them like GET /api/pricing (USD effective
+  // ratio/price, expression coefficients scaled by currency_usd_factor).
+  const priceCurrency = parseAmountCurrency(values.ModelPriceCurrency)
+  const factor =
+    priceCurrency === 'USD' ? 1 : amountCurrencyUSDFactor(priceCurrency)
+  const usd = (value: number) => value * (factor ?? 1)
   return {
     id: 0,
     model_name: entry.model_name,
+    ...(priceCurrency === 'USD'
+      ? {}
+      : {
+          price_currency: priceCurrency,
+          ...(factor === null ? {} : { currency_usd_factor: factor }),
+        }),
     enable_groups: [],
     quota_type:
       values.ModelPrice !== undefined &&
       values['billing_setting.billing_mode'] !== 'tiered_expr'
         ? 1
         : 0,
-    model_ratio: Number(values.ModelRatio ?? Number.NaN),
+    model_ratio: usd(Number(values.ModelRatio ?? Number.NaN)),
     completion_ratio: Number(values.CompletionRatio ?? Number.NaN),
     model_price:
-      values.ModelPrice === undefined ? undefined : Number(values.ModelPrice),
+      values.ModelPrice === undefined
+        ? undefined
+        : usd(Number(values.ModelPrice)),
     cache_ratio:
       values.CacheRatio === undefined || Number(values.CacheRatio) === 1
         ? undefined
@@ -161,6 +177,7 @@ export function pricingOptions(
 export function pricingRows(options: PricingOptions): ModelPricingSnapshot[] {
   return buildModelSnapshots({
     modelPrice: options.ModelPrice,
+    modelPriceCurrency: options.ModelPriceCurrency,
     modelRatio: options.ModelRatio,
     completionRatio: options.CompletionRatio,
     cacheRatio: options.CacheRatio,
@@ -221,6 +238,10 @@ export function pricingFromDraft(data: ModelRatioData): PricingValues {
     'billing_setting.billing_mode':
       data.billingMode === 'tiered_expr' ? 'tiered_expr' : 'ratio',
   }
+  // One mark covers the ratio/price and the configured expression; USD is
+  // the absence of a mark.
+  const priceCurrency = parseAmountCurrency(data.priceCurrency)
+  if (priceCurrency !== 'USD') values.ModelPriceCurrency = priceCurrency
   for (const [field, key] of Object.entries(pricingFieldMap)) {
     const value = data[field as keyof typeof pricingFieldMap]
     if (value === undefined || value === '') continue
@@ -364,12 +385,15 @@ export function applyPriceSyncSelections(
           .join('') as PricingKey
         if (
           PRICING_KEYS.includes(key) &&
-          key !== 'billing_setting.plugin_billing_expr'
+          key !== 'billing_setting.plugin_billing_expr' &&
+          key !== 'ModelPriceCurrency'
         ) {
           next[key] = value
         }
       }
     }
+    // Upstream prices are USD. The draft carries no ModelPriceCurrency, so
+    // applyPricingValues removes this model's mark together with its prices.
     const validated = pricingFromDraft(pricingRow(name, next))
     if (expression) {
       // Sync is a literal import. The editor may normalize request-rule

@@ -12,6 +12,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -36,6 +37,7 @@ func attachQuotaSaturation(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, o
 	if relayInfo == nil {
 		return
 	}
+	appendPriceCurrencyInfo(relayInfo, other)
 	clamp := relayInfo.QuotaClamp
 	if clamp == nil {
 		return
@@ -43,6 +45,28 @@ func attachQuotaSaturation(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, o
 	attachQuotaSaturationToOther(other, clamp)
 	logger.LogWarn(ctx, common.LogText("quota saturation on consume log: op=%s kind=%s original=%g clamped=%d user=%d model=%s",
 		clamp.Op, clamp.Kind, clamp.Original, clamp.Clamped, relayInfo.UserId, relayInfo.GetBillingModelName()))
+}
+
+// appendPriceCurrencyInfo records the frozen price currency and USD factor on
+// consume logs. Only non-USD prices write these fields, so USD logs keep their
+// existing shape. The expression snapshot takes precedence over PriceData.
+func appendPriceCurrencyInfo(relayInfo *relaycommon.RelayInfo, other *model.LogOther) {
+	if relayInfo == nil {
+		return
+	}
+	if snap := relayInfo.TieredBillingSnapshot; snap != nil {
+		setPriceCurrencyLog(other, snap.CurrencyCode, snap.CurrencyUSDFactor)
+		return
+	}
+	setPriceCurrencyLog(other, relayInfo.PriceData.PriceCurrency, relayInfo.PriceData.CurrencyUSDFactor)
+}
+
+func setPriceCurrencyLog(other *model.LogOther, code string, factor float64) {
+	if other == nil || code == "" || code == operation_setting.CurrencyUSD || factor == 0 {
+		return
+	}
+	other.SetPublic("price_currency", code)
+	other.SetPublic("currency_usd_factor", factor)
 }
 
 func appendRequestPath(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other *model.LogOther) {
@@ -324,6 +348,7 @@ func GenerateMjOtherInfo(relayInfo *relaycommon.RelayInfo, priceData hosttypes.P
 	if priceData.GroupRatioInfo.HasSpecialRatio {
 		other.SetPublic("user_group_ratio", priceData.GroupRatioInfo.GroupSpecialRatio)
 	}
+	setPriceCurrencyLog(other, priceData.PriceCurrency, priceData.CurrencyUSDFactor)
 	appendRequestPath(nil, relayInfo, other)
 	return other
 }

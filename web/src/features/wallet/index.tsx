@@ -46,6 +46,7 @@ import {
 import {
   getDefaultPaymentType,
   getMinTopupAmount,
+  getPaymentSettlementCurrency,
   dispatchSelectedPayment,
 } from './lib'
 import type {
@@ -308,6 +309,10 @@ export function Wallet(props: WalletProps) {
                   topupAmount={topupAmount}
                   onTopupAmountChange={handleTopupAmountChange}
                   paymentAmount={paymentAmount}
+                  paymentCurrency={getPaymentSettlementCurrency(
+                    getCurrentPaymentType(),
+                    topupInfo
+                  )}
                   calculating={calculating}
                   onPaymentMethodSelect={handlePaymentMethodSelect}
                   paymentLoading={paymentLoading}
@@ -360,6 +365,10 @@ export function Wallet(props: WalletProps) {
         onConfirm={handlePaymentConfirm}
         topupAmount={topupAmount}
         paymentAmount={paymentAmount}
+        paymentCurrency={getPaymentSettlementCurrency(
+          getCurrentPaymentType(),
+          topupInfo
+        )}
         paymentMethod={selectedPaymentMethod}
         calculating={calculating}
         processing={processing || waffoProcessing || pancakeProcessing}

@@ -21,6 +21,7 @@ import * as z from 'zod'
 import type { ModelPricingPluginVariant } from '@/features/model-pricing/api'
 import {
   formatPricingAmount,
+  pricingCoefficientLabel,
   USD_PRICING_CURRENCY,
   type PricingCurrency,
 } from '@/features/model-pricing/currency'
@@ -36,6 +37,7 @@ import {
 import { formatBillingCondition } from '@/features/pricing/lib/billing-expression/condition-display'
 import { compileBillingExpression } from '@/features/pricing/lib/billing-expression/parser'
 import type { BillingUsageSchema } from '@/features/pricing/types'
+import type { AmountCurrency } from '@/lib/currency'
 
 import { formatPricingNumber } from './pricing-format'
 
@@ -69,6 +71,8 @@ export type LaneKey =
 export type ModelRatioData = {
   pluginBillingExpr?: Record<string, string>
   name: string
+  /** Currency of every price of this model; absent means USD. */
+  priceCurrency?: Exclude<AmountCurrency, 'USD'>
   price?: string
   ratio?: string
   cacheRatio?: string
@@ -271,7 +275,7 @@ export function buildPreviewRows(
       { key: 'mode', label: t('Pricing'), value: t('Expression') },
       {
         key: 'expr',
-        label: `${t('Expression')} (USD)`,
+        label: `${t('Expression')} (${pricingCoefficientLabel(currency)})`,
         value: effectiveExpr || t('Empty'),
         multiline: true,
       },

@@ -8,11 +8,13 @@ The expression is the billing contract between the administrator and the system.
 
 ### Core Principles
 
-1. **Expression is self-contained** — The expression string alone determines billing. No external ratio tables, no implicit completion multipliers, no hidden conversion factors. Given the same token counts and request context, the same expression always produces the same cost.
+1. **Expression is self-contained** — The expression string alone determines billing. No external ratio tables and no implicit completion multipliers. The only conversion factor outside the expression is the explicit currency factor (see below). Given the same token counts, request context, and frozen currency factor, the same expression always produces the same cost.
 
 2. **Variables are opt-in** — `p` (prompt) and `c` (completion) are the base. Cache (`cr`, `cc`, `cc1h`, `cc12h`), image (`img`), and audio (`ai`, `ao`) variables are optional. If omitted, those tokens are included in `p`/`c` and priced at their rate; an omitted long-lived cache write keeps its fixed multiple of the short write price. The system automatically detects which variables the expression uses (via AST introspection) and adjusts token normalization accordingly.
 
-3. **Prices are real prices** — Token coefficients are actual $/1M tokens prices as published by providers. `p * 2.5` means $2.50 per 1M prompt tokens; `fixed(0.01)` means $0.01 per request. No ratio conversion or `/2` convention is required.
+3. **Prices are real prices** — Token coefficients are actual prices per 1M tokens as published by providers, in the model's price currency (USD unless marked). `p * 2.5` means 2.50 per 1M prompt tokens; `fixed(0.01)` means 0.01 per request. No ratio conversion or `/2` convention is required.
+
+   **Currency factor.** An administrator can mark a model's price as `CNY` or `CUSTOM` in the `ModelPriceCurrency` option. The mark applies to the model's legacy ratio, legacy per-call price, configured expression, and plugin expression overrides keyed by that model. Built-in expressions are always USD. The currency factor is the USD value of one unit: `1 / USDExchangeRate` for `CNY`, `1 / general_setting.custom_currency_exchange_rate` for `CUSTOM`, and exactly 1 for USD. It is resolved only through `setting/operation_setting/currency_conversion.go`. A rate that is not a finite positive number fails the request; it never falls back to 1. The factor is frozen in the snapshot at pre-consume. An unmarked model multiplies by exactly 1, so its result is bit-for-bit unchanged.
 
 4. **Upstream-agnostic** — The expression doesn't need to know whether the upstream API is OpenAI-format (prompt_tokens includes cache) or Claude-format (input_tokens excludes cache). The system normalizes token counts before evaluation based on the upstream response format.
 
@@ -109,6 +111,8 @@ Anthropic 的独立缓存计数语义不采用这一 OpenAI 图片拆分。
 倍率转换以 `ModelRatio * 1000000 / QuotaPerUnit` 得到 USD/百万 tokens 的基础单价，
 保留输出、缓存读取、适用的缓存创建和图片输入的生效倍率及显式零值。
 常规按次价格转换为 `tier("request", fixed(price))`。旧价格字段继续保存，供切回旧模式使用。
+转换保留草稿的 `ModelPriceCurrency` 标记，表达式系数沿用该币种，不按当前汇率折算。
+Gemini 内置音频输入价格是 USD，标记为 CNY 或 CUSTOM 的这类模型返回不支持原因。
 转换后的预扣及舍入采用表达式规则，不保证旧模式每笔舍入结果完全一致。
 迁移、已保存价格展示与草稿价格预览共用生效价格解析：输出使用模型族的硬编码兜底/强制倍率；
 缺少配置的缓存读取、缓存创建、图片输入分别使用运行时的 1、1.25、1 倍。
@@ -364,11 +368,11 @@ Task usage billing has a deliberately different conversion rule from token
 billing:
 
 ```
-task quota = expression output in USD * QuotaPerUnit * groupRatio
-token quota = expression output in $/1M tokens / 1,000,000 * QuotaPerUnit * groupRatio
+task quota = expression output * currencyFactor * QuotaPerUnit * groupRatio
+token quota = expression output per 1M tokens / 1,000,000 * currencyFactor * QuotaPerUnit * groupRatio
 ```
 
-In other words, a task expression already returns the request's dollar cost.
+In other words, a task expression already returns the request's cost in the price currency (USD unless the model is marked).
 For example, `u("seconds") * 0.4` means $0.40 per second. Engine semantics do
 not divide task output by one million.
 
@@ -452,6 +456,8 @@ Two option maps stored in the `options` DB table:
 - `ModelBillingMode`: `{ "model-name": "tiered_expr" }` — activates tiered billing for a model
 - `ModelBillingExpr`: `{ "model-name": "tier(\"base\", p * 2.5 + c * 15)" }` — the expression
 
+`ModelPriceCurrency` (`{ "model-name": "CNY" }`) holds the price currency. Only `CNY` and `CUSTOM` are stored; a missing entry is USD. It is saved through the same model pricing path, and a new mark requires a valid exchange rate.
+
 On save, the expression is validated:
 1. Compiled via `billingexpr.CompileFromCache()` — syntax check
 2. Smoke-tested with sample token vectors — ensures non-negative results
@@ -464,10 +470,10 @@ When a request arrives and the model uses `tiered_expr` billing:
 1. Loads expression from `billing_setting.GetBillingExpr()`
 2. Builds `RequestInput` (headers + body) for `param()` / `header()` functions
 3. Runs the expression with locally estimated input tokens (`P` and `Len`) and zero output tokens (`C=0`). Client output limits do not affect the reservation. If request token estimation is disabled, the estimated input is zero.
-4. Converts output to quota: `rawCost / 1,000,000 * QuotaPerUnit`. For token-priced leaves, multiplies this reservation by `quota_setting.pre_consume_multiplier` (default 1; any finite positive decimal). The multiplier does not change context-length tier selection, actual settlement, or request-priced leaves. The snapshot freezes the multiplier for image quantity retries; group retries reuse the multiplied reservation. Older snapshots with no multiplier retain a factor of 1.
-5. Creates `BillingSnapshot` and stores it on `RelayInfo`. Expression and request state stay frozen for settlement. An auto-group retry refreshes group-dependent fields from the selected group before the next upstream attempt. If a free initial group skipped pre-consume and the retry selects a paid group, the billing session is created before that attempt. If an existing session moves to a more expensive group, its reservation is raised to that group's estimate before sending; cheaper groups are refunded only after actual usage is settled.
+4. Resolves the currency factor (`billing_setting.ResolveBillingExprCurrency`) and converts output to quota: `rawCost / 1,000,000 * currencyFactor * QuotaPerUnit`. For token-priced leaves, multiplies this reservation by `quota_setting.pre_consume_multiplier` (default 1; any finite positive decimal). The multiplier does not change context-length tier selection, actual settlement, or request-priced leaves. The snapshot freezes the multiplier for image quantity retries; group retries reuse the multiplied reservation. Older snapshots with no multiplier retain a factor of 1.
+5. Creates `BillingSnapshot` and stores it on `RelayInfo`. Expression, request state, and the currency factor (`currency_code`, `currency_usd_factor`, written only for non-USD prices) stay frozen for settlement; an exchange-rate change during the request does not affect it. An auto-group retry refreshes group-dependent fields from the selected group before the next upstream attempt. If a free initial group skipped pre-consume and the retry selects a paid group, the billing session is created before that attempt. If an existing session moves to a more expensive group, its reservation is raised to that group's estimate before sending; cheaper groups are refunded only after actual usage is settled.
 
-Wallet trust bypass uses `quota_setting.trust_quota_usd` (default 10 USD; 0 disables bypass). Both the wallet and any limited API token must exceed the threshold. The wallet must still cover the estimated reservation before bypass is considered. Subscriptions and asynchronous tasks do not use this bypass. Legacy token-ratio pricing also reserves estimated input cost times the multiplier, without the former `PreConsumedQuota` floor or output-token estimate. Task usage pricing is unchanged.
+Wallet trust bypass uses `quota_setting.trust_quota_usd` (default 10 USD; 0 disables bypass). When `quota_setting.amount_currency` marks it `CNY` or `CUSTOM`, the stored amount is in that currency and is converted at the current rate; an invalid rate disables the bypass. Both the wallet and any limited API token must exceed the threshold. The wallet must still cover the estimated reservation before bypass is considered. Subscriptions and asynchronous tasks do not use this bypass. Legacy token-ratio pricing also reserves estimated input cost times the multiplier, without the former `PreConsumedQuota` floor or output-token estimate. Task usage pricing is unchanged.
 
 ### 4. Settlement (Actual Billing)
 
@@ -483,14 +489,14 @@ After the upstream response returns with actual token usage:
 2. `TryTieredSettle(relayInfo, params)`:
    - Uses the captured `BillingSnapshot`, whose group-dependent fields have been refreshed from the final selected group
    - Re-runs the expression with actual token counts
-   - Converts via `quotaConversion()` (version-dispatched)
+   - Converts via `quotaConversion()` (version-dispatched), multiplying by the snapshot's frozen currency factor
    - Returns actual quota
 
 ### 5. Log Display
 
 **Files**: `service/log_info_generate.go`, `web/src/helpers/render.jsx`
 
-Backend: `InjectTieredBillingInfo()` adds `billing_mode`, `expr_b64` (base64 expression), `matched_tier`, and the structured `request_rules` trace list to the log's `other` JSON.
+Backend: `InjectTieredBillingInfo()` adds `billing_mode`, `expr_b64` (base64 expression), `matched_tier`, and the structured `request_rules` trace list to the log's `other` JSON. For non-USD prices, every consume and task log also records `price_currency` and `currency_usd_factor` from the snapshot (expressions) or `PriceData` (ratio and per-call). USD logs carry neither field.
 
 Frontend: Detects `billing_mode === "tiered_expr"`, decodes `expr_b64`, parses tiers via shared `parseTiersFromExpr()`, and renders request multipliers from `request_rules` when present. Without log traces, it falls back to parsing the stored expression.
 
@@ -522,13 +528,16 @@ This ensures that heavy cache usage doesn't cause the tier condition to incorrec
 
 ### Quota Conversion
 
-Expression coefficients are $/1M tokens. Conversion to internal quota:
+Expression coefficients are prices per 1M tokens in the model's price currency. Conversion to internal quota:
 
 ```
-quota = exprOutput / 1,000,000 * QuotaPerUnit * groupRatio
+quota = exprOutput / 1,000,000 * currencyFactor * QuotaPerUnit * groupRatio
+task quota = exprOutput * currencyFactor * QuotaPerUnit * groupRatio
 ```
 
-This matches the per-call billing pattern: `quota = modelPrice * QuotaPerUnit * groupRatio`.
+This matches the per-call billing pattern: `quota = modelPrice * currencyFactor * QuotaPerUnit * groupRatio`. Ratio mode applies the same factor to `ModelRatio`. Completion, cache, image, and audio ratios are relative and are not converted.
+
+`currencyFactor` is read from the snapshot. A snapshot written before the field existed has no factor and settles as 1 (USD); no migration is needed.
 
 ### Expression Versioning
 
@@ -548,7 +557,8 @@ This enables future evolution without breaking existing expressions.
 | Layer | Files |
 |-------|-------|
 | Expression engine | `pkg/billingexpr/compile.go`, `run.go`, `settle.go`, `round.go`, `types.go` |
-| Storage | `setting/billing_setting/tiered_billing.go` |
+| Storage | `setting/billing_setting/tiered_billing.go`, `setting/ratio_setting/model_price_currency.go` |
+| Currency factor | `setting/operation_setting/currency_conversion.go` |
 | Pre-consume | `relay/helper/price.go`, `relay/helper/billing_expr_request.go` |
 | Settlement | `service/tiered_settle.go`, `service/quota.go` |
 | Log injection | `service/log_info_generate.go` |

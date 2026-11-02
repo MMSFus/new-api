@@ -18,6 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import type { TFunction } from 'i18next'
 
+import { formatSettlementCurrencyAmount } from '@/lib/currency'
+
 import { DEFAULT_DISCOUNT_RATE } from '../constants'
 
 // ============================================================================
@@ -61,6 +63,20 @@ export function formatCurrency(amount: number | string): string {
     minimumFractionDigits: 0,
     maximumFractionDigits: Math.abs(numeric) >= 1 ? 2 : 4,
   }).format(numeric)
+}
+
+/**
+ * Format the amount the user will pay. When the gateway settles in its own
+ * currency (see getPaymentSettlementCurrency) the amount is shown in that
+ * currency; otherwise the existing plain formatting is kept.
+ */
+export function formatPaymentAmount(
+  amount: number,
+  settlementCurrency: string | undefined,
+  locale: string | undefined
+): string {
+  if (!settlementCurrency) return formatCurrency(amount)
+  return formatSettlementCurrencyAmount(amount, settlementCurrency, { locale })
 }
 
 /**

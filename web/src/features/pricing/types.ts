@@ -90,6 +90,14 @@ export type PricingModel = {
   /** Pricing version returned by backend, useful for cache busting */
   pricing_version?: string
   /**
+   * Currency the administrator wrote this price in (CNY/CUSTOM); omitted for
+   * USD. `model_ratio` / `model_price` are already USD; expression
+   * coefficients (including plugin variants) stay in this currency.
+   */
+  price_currency?: string
+  /** USD per unit of `price_currency`; omitted when the rate is invalid. */
+  currency_usd_factor?: number
+  /**
    * Optional model metadata fields reserved for backend-provided catalog data.
    * Keep them data-driven; do not synthesize display values on the client.
    */

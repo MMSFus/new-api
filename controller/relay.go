@@ -679,6 +679,10 @@ func executeTaskSubmissionWith(
 		PerCallBilling:  common.StringsContains(constant.TaskPricePatches, relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice,
 		TieredSnapshot:  relayInfo.TieredBillingSnapshot,
 	}
+	if relayInfo.PriceData.HasNonUSDCurrency() {
+		task.PrivateData.BillingContext.PriceCurrency = relayInfo.PriceData.PriceCurrency
+		task.PrivateData.BillingContext.CurrencyUSDFactor = relayInfo.PriceData.CurrencyUSDFactor
+	}
 	task.Quota = result.Quota
 	task.Data = result.TaskData
 	if len(result.PluginState) > 0 {

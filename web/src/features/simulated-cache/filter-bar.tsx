@@ -19,12 +19,17 @@ For commercial licensing, please contact support@quantumnous.com
 import type { Table } from '@tanstack/react-table'
 import { useTranslation } from 'react-i18next'
 
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { CompactDateTimeRangePicker } from '@/features/usage-logs/components/compact-date-time-range-picker'
 import {
   LogsFilterField,
   LogsFilterInput,
   LogsFilterToolbar,
 } from '@/features/usage-logs/components/logs-filter-toolbar'
+import {
+  LOG_RANGE_PRESET_LABELS,
+  type LogRangePreset,
+} from '@/lib/log-range-search'
 
 import type { SimulatedCacheFilters } from './api'
 
@@ -40,8 +45,32 @@ export function SimulatedCacheFilterBar<TData>(props: {
   isFetching: boolean
   onSearch: () => void
   onReset: () => void
+  /** Quick ranges offered next to the search button. */
+  presets: readonly LogRangePreset[]
+  /** Highlighted quick range; undefined for a custom range. */
+  preset: LogRangePreset | undefined
+  onPresetChange: (preset: LogRangePreset) => void
 }) {
   const { t } = useTranslation()
+  const quickRanges = (
+    <ToggleGroup
+      className='max-w-full overflow-x-auto'
+      variant='outline'
+      size='sm'
+      aria-label={t('Quick range')}
+      value={props.preset ? [props.preset] : []}
+      onValueChange={(values) => {
+        const next = values[0] as LogRangePreset | undefined
+        if (next) props.onPresetChange(next)
+      }}
+    >
+      {props.presets.map((preset) => (
+        <ToggleGroupItem key={preset} value={preset}>
+          {t(LOG_RANGE_PRESET_LABELS[preset])}
+        </ToggleGroupItem>
+      ))}
+    </ToggleGroup>
+  )
   const dateFilter = (
     <LogsFilterField wide>
       <CompactDateTimeRangePicker
@@ -132,6 +161,7 @@ export function SimulatedCacheFilterBar<TData>(props: {
           {textFilters}
         </>
       }
+      stats={quickRanges}
       mobilePinnedFilters={dateFilter}
       mobileFilters={textFilters}
       mobileFilterCount={filterCount}

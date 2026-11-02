@@ -80,6 +80,7 @@ import {
   parseAuditLine,
   decodeBillingExprB64,
   getTieredBillingSummary,
+  logCurrencyUSDFactor,
   hasAnyCacheTokens,
   isViolationFeeLog,
   getFirstResponseTimeColor,
@@ -177,7 +178,7 @@ function BillingBreakdown(props: {
   other: LogOtherData
   isAdmin: boolean
 }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const { log, other, isAdmin } = props
   const isPerCall = isPerCallBilling(other.model_price)
   const isClaude = other.claude === true
@@ -235,6 +236,25 @@ function BillingBreakdown(props: {
       rows.push({
         label: t('Output'),
         value: `${fmtPrice(baseInputUSD * other.completion_ratio)}/M`,
+      })
+    }
+  }
+
+  if (other.price_currency) {
+    const currencyLabel =
+      other.price_currency === 'CUSTOM'
+        ? t('Custom currency')
+        : other.price_currency
+    rows.push({ label: t('Price currency'), value: currencyLabel })
+    const factor = other.currency_usd_factor
+    if (typeof factor === 'number' && Number.isFinite(factor) && factor > 0) {
+      const rate = new Intl.NumberFormat(
+        toIntlLocale(i18n.resolvedLanguage || i18n.language),
+        { maximumFractionDigits: 6 }
+      ).format(1 / factor)
+      rows.push({
+        label: t('Exchange rate'),
+        value: `1 USD = ${rate} ${currencyLabel}`,
       })
     }
   }
@@ -1261,6 +1281,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
               hideCacheColumns={!hasAnyCacheTokens(other)}
               usageSchema={billingUsageSchema}
               usageFacts={other.usage_facts}
+              currencyUSDFactor={logCurrencyUSDFactor(other)}
             />
           </DetailSection>
         )}

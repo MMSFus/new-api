@@ -77,11 +77,14 @@ func resolveUserSortOptions(sortOptions []UserSortOptions) UserSortOptions {
 // User if you add sensitive fields, don't forget to clean them in setupLogin function.
 // Otherwise, the sensitive information will be saved on local storage in plain text!
 type User struct {
-	Id                   int                        `json:"id"`
-	Username             string                     `json:"username" gorm:"unique;index" validate:"max=20"`
-	Password             string                     `json:"password" gorm:"not null;" validate:"min=8,max=128"`
-	HasPassword          bool                       `json:"-" gorm:"-:all"`
-	OriginalPassword     string                     `json:"original_password" gorm:"-:all"` // this field is only for Password change verification, don't save it to database!
+	Id               int    `json:"id"`
+	Username         string `json:"username" gorm:"unique;index" validate:"max=20"`
+	Password         string `json:"password" gorm:"not null;" validate:"min=8,max=128"`
+	HasPassword      bool   `json:"-" gorm:"-:all"`
+	OriginalPassword string `json:"original_password" gorm:"-:all"` // this field is only for Password change verification, don't save it to database!
+	// signupGiftQuota is the resolved QuotaForNewUser granted at insert, so the
+	// sign-up log reports exactly what was credited. Not persisted.
+	signupGiftQuota      int                        `gorm:"-:all"`
 	DisplayName          string                     `json:"display_name" gorm:"index" validate:"max=20"`
 	Role                 int                        `json:"role" gorm:"type:int;default:1"`   // admin, common
 	Status               int                        `json:"status" gorm:"type:int;default:1"` // enabled, disabled
@@ -575,11 +578,22 @@ func HardDeleteUserById(id int) (int64, error) {
 	return user.HardDelete()
 }
 
-func inviteUser(inviterId int) error {
+// rewardQuota resolves a sign-up/invitation reward at the current exchange
+// rate. An invalid rate skips the reward (returns 0) and logs the error.
+func rewardQuota(field string, quotaValue int) int {
+	quota, err := operation_setting.RewardQuota(field, quotaValue)
+	if err != nil {
+		common.SysError(common.LogText("reward skipped: %s", err.Error()))
+		return 0
+	}
+	return quota
+}
+
+func inviteUser(inviterId int, quota int) error {
 	result := DB.Model(&User{}).Where("id = ?", inviterId).Updates(map[string]any{
 		"aff_count":   gorm.Expr("aff_count + ?", 1),
-		"aff_quota":   gorm.Expr("aff_quota + ?", common.QuotaForInviter),
-		"aff_history": gorm.Expr("aff_history + ?", common.QuotaForInviter),
+		"aff_quota":   gorm.Expr("aff_quota + ?", quota),
+		"aff_history": gorm.Expr("aff_history + ?", quota),
 	})
 	if result.Error != nil {
 		return result.Error
@@ -671,7 +685,8 @@ func (user *User) Insert(inviterId int) error {
 			if err := user.prepareForInsert(tx); err != nil {
 				return err
 			}
-			user.setInitialGiftQuota(common.QuotaForNewUser)
+			user.signupGiftQuota = rewardQuota(operation_setting.AmountFieldQuotaForNewUser, common.QuotaForNewUser)
+			user.setInitialGiftQuota(user.signupGiftQuota)
 			user.AffCode = common.GetRandomString(4)
 
 			// 初始化用户设置，包括默认的边栏配置
@@ -707,18 +722,17 @@ func (user *User) finishInsert(inviterId int) {
 		}
 	}
 
-	if common.QuotaForNewUser > 0 {
-		RecordLog(user.Id, LogTypeSystem, common.NewMessage("New user sign-up bonus {{quota}}", map[string]any{"quota": logger.FormatQuota(common.QuotaForNewUser)}))
+	if user.signupGiftQuota > 0 {
+		RecordLog(user.Id, LogTypeSystem, common.NewMessage("New user sign-up bonus {{quota}}", map[string]any{"quota": logger.FormatQuota(user.signupGiftQuota)}))
 	}
 	if inviterId != 0 && operation_setting.IsPaymentComplianceConfirmed() {
-		if common.QuotaForInvitee > 0 {
-			_ = CreditUserBalance(user.Id, common.BalanceBucketInviteBonus, common.QuotaForInvitee)
-			RecordLog(user.Id, LogTypeSystem, common.NewMessage("Invitation code bonus {{quota}}", map[string]any{"quota": logger.FormatQuota(common.QuotaForInvitee)}))
+		if inviteeQuota := rewardQuota(operation_setting.AmountFieldQuotaForInvitee, common.QuotaForInvitee); inviteeQuota > 0 {
+			_ = CreditUserBalance(user.Id, common.BalanceBucketInviteBonus, inviteeQuota)
+			RecordLog(user.Id, LogTypeSystem, common.NewMessage("Invitation code bonus {{quota}}", map[string]any{"quota": logger.FormatQuota(inviteeQuota)}))
 		}
-		if common.QuotaForInviter > 0 {
-			//_ = IncreaseUserQuota(inviterId, common.QuotaForInviter)
-			RecordLog(inviterId, LogTypeSystem, common.NewMessage("Bonus for inviting a user {{quota}}", map[string]any{"quota": logger.FormatQuota(common.QuotaForInviter)}))
-			_ = inviteUser(inviterId)
+		if inviterQuota := rewardQuota(operation_setting.AmountFieldQuotaForInviter, common.QuotaForInviter); inviterQuota > 0 {
+			RecordLog(inviterId, LogTypeSystem, common.NewMessage("Bonus for inviting a user {{quota}}", map[string]any{"quota": logger.FormatQuota(inviterQuota)}))
+			_ = inviteUser(inviterId, inviterQuota)
 		}
 	}
 }
@@ -735,7 +749,8 @@ func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
 		if err := user.prepareForInsert(tx); err != nil {
 			return err
 		}
-		user.setInitialGiftQuota(common.QuotaForNewUser)
+		user.signupGiftQuota = rewardQuota(operation_setting.AmountFieldQuotaForNewUser, common.QuotaForNewUser)
+		user.setInitialGiftQuota(user.signupGiftQuota)
 		user.AffCode = common.GetRandomString(4)
 
 		// 初始化用户设置
@@ -764,17 +779,17 @@ func (user *User) FinalizeOAuthUserCreation(inviterId int) {
 		}
 	}
 
-	if common.QuotaForNewUser > 0 {
-		RecordLog(user.Id, LogTypeSystem, common.NewMessage("New user sign-up bonus {{quota}}", map[string]any{"quota": logger.FormatQuota(common.QuotaForNewUser)}))
+	if user.signupGiftQuota > 0 {
+		RecordLog(user.Id, LogTypeSystem, common.NewMessage("New user sign-up bonus {{quota}}", map[string]any{"quota": logger.FormatQuota(user.signupGiftQuota)}))
 	}
 	if inviterId != 0 && operation_setting.IsPaymentComplianceConfirmed() {
-		if common.QuotaForInvitee > 0 {
-			_ = CreditUserBalance(user.Id, common.BalanceBucketInviteBonus, common.QuotaForInvitee)
-			RecordLog(user.Id, LogTypeSystem, common.NewMessage("Invitation code bonus {{quota}}", map[string]any{"quota": logger.FormatQuota(common.QuotaForInvitee)}))
+		if inviteeQuota := rewardQuota(operation_setting.AmountFieldQuotaForInvitee, common.QuotaForInvitee); inviteeQuota > 0 {
+			_ = CreditUserBalance(user.Id, common.BalanceBucketInviteBonus, inviteeQuota)
+			RecordLog(user.Id, LogTypeSystem, common.NewMessage("Invitation code bonus {{quota}}", map[string]any{"quota": logger.FormatQuota(inviteeQuota)}))
 		}
-		if common.QuotaForInviter > 0 {
-			RecordLog(inviterId, LogTypeSystem, common.NewMessage("Bonus for inviting a user {{quota}}", map[string]any{"quota": logger.FormatQuota(common.QuotaForInviter)}))
-			_ = inviteUser(inviterId)
+		if inviterQuota := rewardQuota(operation_setting.AmountFieldQuotaForInviter, common.QuotaForInviter); inviterQuota > 0 {
+			RecordLog(inviterId, LogTypeSystem, common.NewMessage("Bonus for inviting a user {{quota}}", map[string]any{"quota": logger.FormatQuota(inviterQuota)}))
+			_ = inviteUser(inviterId, inviterQuota)
 		}
 	}
 }

@@ -65,6 +65,19 @@ export interface UpdatePasskeyDomainsResponse extends UpdateOptionResponse {
   data: PasskeyDomainChange
 }
 
+export type ExchangeRateSyncResult = {
+  usd_exchange_rate: number
+  last_synced_at: number
+  last_error: string
+  last_source: string
+}
+
+export type ExchangeRateSyncResponse = {
+  success: boolean
+  message: string
+  data?: ExchangeRateSyncResult
+}
+
 export type ConfirmPaymentComplianceResponse = {
   success: boolean
   message: string
@@ -280,6 +293,7 @@ export type BillingSettings = {
   'quota_setting.enable_free_model_pre_consume': boolean
   'quota_setting.trust_quota_usd': number
   'quota_setting.pre_consume_multiplier': number
+  'quota_setting.amount_currency': string
   QuotaPerUnit: number
   USDExchangeRate: number
   'general_setting.quota_display_type': string
@@ -287,7 +301,13 @@ export type BillingSettings = {
   'general_setting.custom_currency_exchange_rate': number
   DisplayInCurrencyEnabled: boolean
   DisplayTokenStatEnabled: boolean
+  'exchange_rate_setting.auto_sync_enabled': boolean
+  'exchange_rate_setting.sync_interval_hours': number
+  'exchange_rate_setting.last_synced_at': number
+  'exchange_rate_setting.last_error': string
+  'exchange_rate_setting.last_source': string
   ModelPrice: string
+  ModelPriceCurrency: string
   ModelRatio: string
   CacheRatio: string
   CreateCacheRatio: string
@@ -351,6 +371,7 @@ export type BillingSettings = {
   WaffoPancakeMerchantID: string
   WaffoPancakePrivateKey: string
   WaffoPancakeReturnURL: string
+  WaffoPancakeCurrency: string
   // Bound by the operator through the catalog flow in the admin Pancake
   // section (saved via /api/option/waffo-pancake/save).
   WaffoPancakeStoreID: string

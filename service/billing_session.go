@@ -346,7 +346,9 @@ func (s *BillingSession) shouldTrust(c *gin.Context) bool {
 		return false
 	}
 
-	trustQuota := operation_setting.GetQuotaSetting().TrustQuotaUSD * common.QuotaPerUnit
+	// TrustQuota converts a CNY/CUSTOM threshold at the current rate and
+	// returns 0 (no bypass) when that rate is invalid.
+	trustQuota := operation_setting.TrustQuota()
 	if trustQuota <= 0 || math.IsNaN(trustQuota) || math.IsInf(trustQuota, 0) {
 		return false
 	}
