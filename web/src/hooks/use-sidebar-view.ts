@@ -66,6 +66,10 @@ export function useSidebarView(): ResolvedSidebarView {
                 user,
                 item.requiredPermission.resource,
                 item.requiredPermission.action
+              )) &&
+            (item.requiredAnyPermission === undefined ||
+              item.requiredAnyPermission.some((permission) =>
+                hasPermission(user, permission.resource, permission.action)
               ))
         )
         return items.length === group.items.length ? group : { ...group, items }

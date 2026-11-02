@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
+	"github.com/QuantumNous/new-api/pkg/sessionrecorder"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -293,6 +294,9 @@ func validateOptionValue(key string, value string) error {
 	}
 	if key == setting.GroupBalanceBucketsOptionKey {
 		return setting.ValidateGroupBalanceBuckets(value)
+	}
+	if key == sessionrecorder.RevenueRulesOptionKey || key == sessionrecorder.RevenueCurrencyLabelOptionKey {
+		return sessionrecorder.ValidateRevenueOption(key, value)
 	}
 	return nil
 }

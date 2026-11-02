@@ -97,6 +97,12 @@ var auditRouteActions = map[string]string{
 
 	// 日志
 	"POST /api/system-task/log-cleanup": "log.cleanup_start",
+
+	// 会话录制
+	"PUT /api/session_recorder/revenue/rules":       "session_recorder.revenue_rules_update",
+	"POST /api/session_recorder/revenue/rules/test": "session_recorder.revenue_rules_test",
+	"POST /api/session_recorder/backfill":           "session_recorder.backfill_start",
+	"DELETE /api/session_recorder/backfill":         "session_recorder.backfill_cancel",
 }
 
 // beginAdminAudit 在管理/root 写操作进入 handler 前包装 ResponseWriter，

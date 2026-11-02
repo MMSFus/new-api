@@ -28,6 +28,7 @@ import {
   MessageSquare,
   PlugZap,
   Radio,
+  ScrollText,
   ServerCog,
   Settings,
   Ticket,
@@ -166,6 +167,21 @@ export function useSidebarData(): SidebarData {
               resource: ADMIN_PERMISSION_RESOURCES.SIMULATED_CACHE,
               action: ADMIN_PERMISSION_ACTIONS.READ,
             },
+          },
+          {
+            title: t('Session Recorder'),
+            url: '/session-recorder',
+            icon: ScrollText,
+            requiredAnyPermission: [
+              {
+                resource: ADMIN_PERMISSION_RESOURCES.SESSION_RECORDER_REVENUE,
+                action: ADMIN_PERMISSION_ACTIONS.READ,
+              },
+              {
+                resource: ADMIN_PERMISSION_RESOURCES.SESSION_RECORDER_CONTENT,
+                action: ADMIN_PERMISSION_ACTIONS.READ,
+              },
+            ],
           },
           {
             title: t('System Info'),

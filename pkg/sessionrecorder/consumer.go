@@ -17,7 +17,8 @@ import (
 )
 
 // Store is the remote object store used by the consumer. The interface has
-// no delete or copy operation on purpose.
+// no read, delete or copy operation on purpose; reads go through
+// ArchiveGetter.
 type Store interface {
 	Head(ctx context.Context, key string) (ObjectMetadata, error)
 	PutFile(ctx context.Context, key, file string, size int64, sha string) error
@@ -368,6 +369,8 @@ func (c *Consumer) advanceBatch(ctx context.Context, m *BatchManifest, result *C
 				_ = os.Remove(m.ArchivePath)
 			}
 		case StateVerified:
+			// Sources are still on disk here; cleanup below may remove them.
+			c.indexVerifiedBatch(ctx, m)
 			if c.cfg.LocalCleanupEnabled {
 				c.CleanupVerified(m)
 			} else {

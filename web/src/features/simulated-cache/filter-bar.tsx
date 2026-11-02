@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { Table } from '@tanstack/react-table'
+import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
@@ -37,11 +38,17 @@ import type { SimulatedCacheFilters } from './api'
 type LogRangeFilters = SimulatedCacheFilters & { group?: string }
 
 export function SimulatedCacheFilterBar<TData>(props: {
-  table: Table<TData>
+  table?: Table<TData>
   filters: LogRangeFilters
   onChange: (patch: Partial<LogRangeFilters>) => void
   /** Shows the group filter. */
   withGroup?: boolean
+  /**
+   * Replaces the channel/model/username/group inputs for reports filtered by
+   * other fields; `textFilterCount` is then their active count on mobile.
+   */
+  textFilters?: ReactNode
+  textFilterCount?: number
   isFetching: boolean
   onSearch: () => void
   onReset: () => void
@@ -95,7 +102,7 @@ export function SimulatedCacheFilterBar<TData>(props: {
       />
     </LogsFilterField>
   )
-  const textFilters = (
+  const textFilters = props.textFilters ?? (
     <>
       <LogsFilterField>
         <LogsFilterInput
@@ -146,12 +153,14 @@ export function SimulatedCacheFilterBar<TData>(props: {
       )}
     </>
   )
-  const filterCount = [
-    props.filters.channel,
-    props.filters.model_name,
-    props.filters.username,
-    props.filters.group,
-  ].filter(Boolean).length
+  const filterCount =
+    props.textFilterCount ??
+    [
+      props.filters.channel,
+      props.filters.model_name,
+      props.filters.username,
+      props.filters.group,
+    ].filter(Boolean).length
   return (
     <LogsFilterToolbar
       table={props.table}

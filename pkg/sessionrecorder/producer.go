@@ -1,6 +1,7 @@
 package sessionrecorder
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -98,6 +99,8 @@ type ProducerCounters struct {
 	UsagePercent   int    `json:"usage_percent"`
 	StoragePaused  bool   `json:"storage_paused"`
 	LastError      string `json:"last_error,omitempty"`
+	IndexDropped   int64  `json:"index_dropped"`
+	IndexErrors    int64  `json:"index_errors"`
 }
 
 // Producer writes captures asynchronously. Enqueue never blocks: when the
@@ -120,10 +123,23 @@ type Producer struct {
 	storagePaused  atomic.Bool
 	lastErr        atomic.Pointer[string]
 
+	// The index queue is fed by the writer goroutine only, never by relay
+	// requests, and is drained by its own goroutine in batches.
+	indexQueue   chan IndexRow
+	indexDropped atomic.Int64
+	indexErrors  atomic.Int64
+	indexDone    chan struct{}
+
 	stop chan struct{}
 	done chan struct{}
 	once sync.Once
 }
+
+const (
+	indexQueueSize     = 4096
+	indexBatchSize     = 200
+	indexFlushInterval = 2 * time.Second
+)
 
 // DefaultMaxQueueBytes bounds memory held by captures in flight.
 const DefaultMaxQueueBytes = 256 << 20
@@ -137,8 +153,12 @@ func NewProducer(s Settings) *Producer {
 		instance: hex.EncodeToString(b[:]),
 		queue:    make(chan *Capture, max(1, s.QueueSize)),
 		maxBytes: DefaultMaxQueueBytes,
-		stop:     make(chan struct{}),
-		done:     make(chan struct{}),
+
+		indexQueue: make(chan IndexRow, indexQueueSize),
+		indexDone:  make(chan struct{}),
+
+		stop: make(chan struct{}),
+		done: make(chan struct{}),
 	}
 }
 
@@ -220,6 +240,8 @@ func (p *Producer) Counters() ProducerCounters {
 		InflightBytes:  p.inflight.Load(),
 		UsagePercent:   p.UsagePercent(),
 		StoragePaused:  p.storagePaused.Load(),
+		IndexDropped:   p.indexDropped.Load(),
+		IndexErrors:    p.indexErrors.Load(),
 	}
 	if e := p.lastErr.Load(); e != nil {
 		c.LastError = *e
@@ -233,9 +255,10 @@ func (p *Producer) setErr(err error) {
 	p.writeErrors.Add(1)
 }
 
-// Start runs the writer goroutine. Panics are recovered and the writer
-// restarts after a short pause.
+// Start runs the writer and index goroutines. Panics are recovered and the
+// writer restarts after a short pause.
 func (p *Producer) Start() {
+	go p.indexLoop()
 	go func() {
 		defer close(p.done)
 		for {
@@ -263,13 +286,74 @@ func (p *Producer) runSafe() (stopped bool) {
 	return true
 }
 
-// Stop drains what is queued (bounded by timeout) and stops the writer.
+// Stop drains what is queued (bounded by timeout) and stops the writer and
+// the indexer.
 func (p *Producer) Stop(timeout time.Duration) {
 	p.once.Do(func() { close(p.stop) })
+	deadline := time.After(timeout)
 	select {
 	case <-p.done:
-	case <-time.After(timeout):
+	case <-deadline:
+		return
 	}
+	select {
+	case <-p.indexDone:
+	case <-deadline:
+	}
+}
+
+// indexLoop upserts index rows in batches. It exits after the writer has
+// stopped and the remaining rows are flushed.
+func (p *Producer) indexLoop() {
+	defer close(p.indexDone)
+	ticker := time.NewTicker(indexFlushInterval)
+	defer ticker.Stop()
+	pending := make([]IndexRow, 0, indexBatchSize)
+	for {
+		select {
+		case row := <-p.indexQueue:
+			pending = append(pending, row)
+			if len(pending) >= indexBatchSize {
+				pending = p.flushIndex(pending)
+			}
+		case <-ticker.C:
+			pending = p.flushIndex(pending)
+		case <-p.done:
+			for {
+				select {
+				case row := <-p.indexQueue:
+					pending = append(pending, row)
+				default:
+					p.flushIndex(pending)
+					return
+				}
+			}
+		}
+	}
+}
+
+// flushIndex writes rows through the sink; a failure is counted and logged,
+// never retried, and never affects recording.
+func (p *Producer) flushIndex(rows []IndexRow) []IndexRow {
+	if len(rows) == 0 {
+		return rows
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			p.indexErrors.Add(1)
+			common.SysError("session recorder index panic recovered")
+		}
+	}()
+	if sink := currentIndexSink(); sink != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err := sink.UpsertRecords(ctx, rows)
+		cancel()
+		if err != nil {
+			p.indexErrors.Add(1)
+			common.SysError("session recorder index write failed: " + err.Error())
+		}
+	}
+	return rows[:0]
 }
 
 func (p *Producer) loop() {
@@ -447,6 +531,19 @@ func (p *Producer) write(c *Capture) {
 		return
 	}
 	p.written.Add(1)
+	if currentIndexSink() == nil {
+		return
+	}
+	row := indexRowFromRecord(rec, strings.TrimSpace(p.settings.RootID), path.Join(modelDir, jsonlRel, filepath.Base(shard)))
+	row.RawBytes = int64(len(line))
+	for _, b := range rec.BodyFiles {
+		row.RawBytes += b.Size
+	}
+	select {
+	case p.indexQueue <- row:
+	default:
+		p.indexDropped.Add(1)
+	}
 }
 
 func twoDigits(n int) string {

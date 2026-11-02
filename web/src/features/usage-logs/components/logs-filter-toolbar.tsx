@@ -41,7 +41,8 @@ import { useMediaQuery } from '@/hooks'
 import { cn } from '@/lib/utils'
 
 interface LogsFilterToolbarProps<TData> {
-  table: Table<TData>
+  /** Column visibility menu; omitted when the page has no column options. */
+  table?: Table<TData>
   primaryFilters: ReactNode
   advancedFilters?: ReactNode
   compactMobile?: boolean
@@ -183,7 +184,7 @@ export function LogsFilterToolbar<TData>(props: LogsFilterToolbarProps<TData>) {
                 {t('Search')}
               </Button>
               {props.actionEnd}
-              <DataTableViewOptions table={props.table} />
+              {props.table && <DataTableViewOptions table={props.table} />}
             </>
           }
         >
@@ -287,7 +288,7 @@ export function LogsFilterToolbar<TData>(props: LogsFilterToolbarProps<TData>) {
             {t('Search')}
           </Button>
           {props.actionEnd}
-          <DataTableViewOptions table={props.table} />
+          {props.table && <DataTableViewOptions table={props.table} />}
         </div>
       </div>
     </div>

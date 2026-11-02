@@ -47,6 +47,7 @@ import { Route as AuthenticatedPlaygroundIndexRouteImport } from './routes/_auth
 import { Route as AuthenticatedProfileIndexRouteImport } from './routes/_authenticated/profile/index'
 import { Route as AuthenticatedRedemptionCodesIndexRouteImport } from './routes/_authenticated/redemption-codes/index'
 import { Route as AuthenticatedSecurityIndexRouteImport } from './routes/_authenticated/security/index'
+import { Route as AuthenticatedSessionRecorderIndexRouteImport } from './routes/_authenticated/session-recorder/index'
 import { Route as AuthenticatedSimulatedCacheIndexRouteImport } from './routes/_authenticated/simulated-cache/index'
 import { Route as AuthenticatedSubscriptionsIndexRouteImport } from './routes/_authenticated/subscriptions/index'
 import { Route as AuthenticatedSystemInfoIndexRouteImport } from './routes/_authenticated/system-info/index'
@@ -275,6 +276,12 @@ const AuthenticatedSecurityIndexRoute =
     path: '/security/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedSessionRecorderIndexRoute =
+  AuthenticatedSessionRecorderIndexRouteImport.update({
+    id: '/session-recorder/',
+    path: '/session-recorder/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedSimulatedCacheIndexRoute =
   AuthenticatedSimulatedCacheIndexRouteImport.update({
     id: '/simulated-cache/',
@@ -475,6 +482,7 @@ export interface FileRoutesByFullPath {
   '/profile/': typeof AuthenticatedProfileIndexRoute
   '/redemption-codes/': typeof AuthenticatedRedemptionCodesIndexRoute
   '/security/': typeof AuthenticatedSecurityIndexRoute
+  '/session-recorder/': typeof AuthenticatedSessionRecorderIndexRoute
   '/simulated-cache/': typeof AuthenticatedSimulatedCacheIndexRoute
   '/subscriptions/': typeof AuthenticatedSubscriptionsIndexRoute
   '/system-info/': typeof AuthenticatedSystemInfoIndexRoute
@@ -539,6 +547,7 @@ export interface FileRoutesByTo {
   '/profile': typeof AuthenticatedProfileIndexRoute
   '/redemption-codes': typeof AuthenticatedRedemptionCodesIndexRoute
   '/security': typeof AuthenticatedSecurityIndexRoute
+  '/session-recorder': typeof AuthenticatedSessionRecorderIndexRoute
   '/simulated-cache': typeof AuthenticatedSimulatedCacheIndexRoute
   '/subscriptions': typeof AuthenticatedSubscriptionsIndexRoute
   '/system-info': typeof AuthenticatedSystemInfoIndexRoute
@@ -607,6 +616,7 @@ export interface FileRoutesById {
   '/_authenticated/profile/': typeof AuthenticatedProfileIndexRoute
   '/_authenticated/redemption-codes/': typeof AuthenticatedRedemptionCodesIndexRoute
   '/_authenticated/security/': typeof AuthenticatedSecurityIndexRoute
+  '/_authenticated/session-recorder/': typeof AuthenticatedSessionRecorderIndexRoute
   '/_authenticated/simulated-cache/': typeof AuthenticatedSimulatedCacheIndexRoute
   '/_authenticated/subscriptions/': typeof AuthenticatedSubscriptionsIndexRoute
   '/_authenticated/system-info/': typeof AuthenticatedSystemInfoIndexRoute
@@ -674,6 +684,7 @@ export interface FileRouteTypes {
     | '/profile/'
     | '/redemption-codes/'
     | '/security/'
+    | '/session-recorder/'
     | '/simulated-cache/'
     | '/subscriptions/'
     | '/system-info/'
@@ -738,6 +749,7 @@ export interface FileRouteTypes {
     | '/profile'
     | '/redemption-codes'
     | '/security'
+    | '/session-recorder'
     | '/simulated-cache'
     | '/subscriptions'
     | '/system-info'
@@ -805,6 +817,7 @@ export interface FileRouteTypes {
     | '/_authenticated/profile/'
     | '/_authenticated/redemption-codes/'
     | '/_authenticated/security/'
+    | '/_authenticated/session-recorder/'
     | '/_authenticated/simulated-cache/'
     | '/_authenticated/subscriptions/'
     | '/_authenticated/system-info/'
@@ -1119,6 +1132,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedSecurityIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/session-recorder/': {
+      id: '/_authenticated/session-recorder/'
+      path: '/session-recorder'
+      fullPath: '/session-recorder/'
+      preLoaderRoute: typeof AuthenticatedSessionRecorderIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/simulated-cache/': {
       id: '/_authenticated/simulated-cache/'
       path: '/simulated-cache'
@@ -1418,6 +1438,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedProfileIndexRoute: typeof AuthenticatedProfileIndexRoute
   AuthenticatedRedemptionCodesIndexRoute: typeof AuthenticatedRedemptionCodesIndexRoute
   AuthenticatedSecurityIndexRoute: typeof AuthenticatedSecurityIndexRoute
+  AuthenticatedSessionRecorderIndexRoute: typeof AuthenticatedSessionRecorderIndexRoute
   AuthenticatedSimulatedCacheIndexRoute: typeof AuthenticatedSimulatedCacheIndexRoute
   AuthenticatedSubscriptionsIndexRoute: typeof AuthenticatedSubscriptionsIndexRoute
   AuthenticatedSystemInfoIndexRoute: typeof AuthenticatedSystemInfoIndexRoute
@@ -1447,6 +1468,8 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedRedemptionCodesIndexRoute:
     AuthenticatedRedemptionCodesIndexRoute,
   AuthenticatedSecurityIndexRoute: AuthenticatedSecurityIndexRoute,
+  AuthenticatedSessionRecorderIndexRoute:
+    AuthenticatedSessionRecorderIndexRoute,
   AuthenticatedSimulatedCacheIndexRoute: AuthenticatedSimulatedCacheIndexRoute,
   AuthenticatedSubscriptionsIndexRoute: AuthenticatedSubscriptionsIndexRoute,
   AuthenticatedSystemInfoIndexRoute: AuthenticatedSystemInfoIndexRoute,

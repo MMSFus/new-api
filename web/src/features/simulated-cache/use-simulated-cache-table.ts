@@ -23,7 +23,7 @@ import type {
   Table,
 } from '@tanstack/react-table'
 
-import { useDataTable } from '@/components/data-table'
+import { useServerPagedTable } from '@/hooks/use-server-paged-table'
 
 import type { SimulatedCacheRow } from './types'
 
@@ -37,20 +37,9 @@ export function useSimulatedCacheTable(options: {
   /** Paging is ignored while a page loads or the search is invalid. */
   locked: boolean
 }): Table<SimulatedCacheRow> {
-  const { table } = useDataTable({
-    columns: options.columns,
-    data: options.rows,
+  return useServerPagedTable({
+    ...options,
+    rows: options.rows,
     getRowId: (row) => String(row.log.id),
-    totalCount: options.total,
-    pagination: options.pagination,
-    onPaginationChange: (updater) => {
-      if (options.locked) return
-      options.onPaginationChange(updater)
-    },
-    enableRowSelection: false,
-    enableSorting: false,
-    manualFiltering: true,
-    manualPagination: true,
   })
-  return table
 }

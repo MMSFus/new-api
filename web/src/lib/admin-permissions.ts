@@ -28,6 +28,8 @@ export const ADMIN_PERMISSION_RESOURCES = {
   CHANNEL: 'channel',
   CHANNEL_COST: 'channel_cost',
   SIMULATED_CACHE: 'simulated_cache',
+  SESSION_RECORDER_REVENUE: 'session_recorder_revenue',
+  SESSION_RECORDER_CONTENT: 'session_recorder_content',
   TASK_PLUGIN: 'task_plugin',
 } as const
 

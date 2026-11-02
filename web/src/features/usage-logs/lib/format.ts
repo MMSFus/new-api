@@ -591,6 +591,17 @@ const AUDIT_TEMPLATES: Record<string, string> = {
   // Logs
   'log.clear': 'Cleared historical logs',
   'log.cleanup_start': 'Log cleanup task started.',
+  // Session recorder
+  'session_recorder.view_content':
+    'Viewed recorded content of record {{record_id}} (session {{session_id}})',
+  'session_recorder.revenue_rules_update':
+    'Updated session recording revenue rules',
+  'session_recorder.revenue_rules_test':
+    'Tested session recording revenue rules',
+  'session_recorder.backfill_start':
+    'Started the session recording index backfill',
+  'session_recorder.backfill_cancel':
+    'Cancelled the session recording index backfill',
   // Generic middleware fallback
   generic: '{{method}} {{route}}',
 }

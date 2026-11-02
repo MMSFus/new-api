@@ -81,6 +81,14 @@ var accessTokenHelperRoutes = map[string]authz.Permission{
 	"GET /api/log/simulated_cache/stat": authz.SimulatedCacheRead,
 	"GET /api/channel_cost/report":      authz.ChannelCostRead,
 	"GET /api/channel_cost/logs":        authz.ChannelCostRead,
+
+	"GET /api/session_recorder/revenue/rules":              authz.SessionRecorderRevenueRead,
+	"PUT /api/session_recorder/revenue/rules":              authz.SessionRecorderRevenueWrite,
+	"POST /api/session_recorder/revenue/rules/test":        authz.SessionRecorderRevenueRead,
+	"GET /api/session_recorder/revenue/summary":            authz.SessionRecorderRevenueRead,
+	"GET /api/session_recorder/sessions":                   authz.SessionRecorderContentRead,
+	"GET /api/session_recorder/sessions/records":           authz.SessionRecorderContentRead,
+	"GET /api/session_recorder/records/:record_id/content": authz.SessionRecorderContentRead,
 }
 
 func newAccessTokenScopeTestEngine(t *testing.T) *gin.Engine {

@@ -240,7 +240,18 @@ func SetApiRouter(router *gin.Engine) {
 			sessionRecorderRoute.PUT("/setting", controller.UpdateSessionRecorderSetting)
 			sessionRecorderRoute.GET("/status", controller.GetSessionRecorderStatus)
 			sessionRecorderRoute.POST("/check", controller.CheckSessionRecorder)
+			sessionRecorderRoute.GET("/backfill", middleware.DisableCache(), controller.GetSessionRecorderBackfill)
+			sessionRecorderRoute.POST("/backfill", middleware.DisableCache(), controller.CreateSessionRecorderBackfill)
+			sessionRecorderRoute.DELETE("/backfill", middleware.DisableCache(), controller.CancelSessionRecorderBackfill)
 		}
+		sessionRecorderPanel := apiRouter.Group("/session_recorder", middleware.DisableCache(), middleware.AdminAuth())
+		handlePermissionRoute(sessionRecorderPanel, http.MethodGet, "/revenue/rules", authz.SessionRecorderRevenueRead, controller.GetSessionRecorderRevenueRules)
+		handlePermissionRoute(sessionRecorderPanel, http.MethodPut, "/revenue/rules", authz.SessionRecorderRevenueWrite, controller.UpdateSessionRecorderRevenueRules)
+		handlePermissionRoute(sessionRecorderPanel, http.MethodPost, "/revenue/rules/test", authz.SessionRecorderRevenueRead, controller.TestSessionRecorderRevenueRules)
+		handlePermissionRoute(sessionRecorderPanel, http.MethodGet, "/revenue/summary", authz.SessionRecorderRevenueRead, controller.GetSessionRecorderRevenueSummary)
+		handlePermissionRoute(sessionRecorderPanel, http.MethodGet, "/sessions", authz.SessionRecorderContentRead, controller.ListSessionRecorderSessions)
+		handlePermissionRoute(sessionRecorderPanel, http.MethodGet, "/sessions/records", authz.SessionRecorderContentRead, controller.ListSessionRecorderSessionRecords)
+		handlePermissionRoute(sessionRecorderPanel, http.MethodGet, "/records/:record_id/content", authz.SessionRecorderContentRead, controller.GetSessionRecorderRecordContent)
 
 		// Custom OAuth provider management (root only)
 		customOAuthRoute := apiRouter.Group("/custom-oauth-provider")
