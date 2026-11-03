@@ -2,15 +2,19 @@ package model
 
 import (
 	"context"
+	"math"
 	"os"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -57,8 +61,10 @@ func setupChannelCostDialect(t *testing.T, dialect string) *gorm.DB {
 		common.MemoryCacheEnabled = oldMemoryCache
 		initCol()
 	})
-	require.NoError(t, db.AutoMigrate(&Log{}, &Channel{}))
-	t.Cleanup(func() { require.NoError(t, db.Migrator().DropTable(&Log{}, &Channel{})) })
+	require.NoError(t, db.AutoMigrate(&Log{}, &Channel{}, &ChannelCostRatioHistory{}, &ChannelCostRatioSyncStatus{}))
+	t.Cleanup(func() {
+		require.NoError(t, db.Migrator().DropTable(&Log{}, &Channel{}, &ChannelCostRatioHistory{}, &ChannelCostRatioSyncStatus{}))
+	})
 	return db
 }
 
@@ -122,7 +128,7 @@ func TestChannelCostBackfillAcrossDatabases(t *testing.T) {
 			_, next, err := BackfillChannelCostBatch(ctx, filter, upperID, cursor, ratios, "task-a")
 			require.NoError(t, err)
 			assert.Zero(t, next.Processed, "keyset excludes already visited rows")
-			_, again, err := BackfillChannelCostBatch(ctx, filter, upperID, ChannelCostBackfillCursor{}, map[int]*float64{1: common.GetPointer(1.0)}, "task-b")
+			_, again, err := BackfillChannelCostBatch(ctx, filter, upperID, ChannelCostBackfillCursor{}, map[int]ChannelCostTimeline{1: {Ratio: common.GetPointer(1.0)}}, "task-b")
 			require.NoError(t, err)
 			assert.Zero(t, again.Updated, "rerun preserves existing snapshots")
 			require.NoError(t, db.First(&stored, logs[0].Id).Error)
@@ -179,7 +185,7 @@ func TestChannelCostBackfillAcrossDatabases(t *testing.T) {
 func TestHistoricalChannelCostRejectsUnreliableMetadata(t *testing.T) {
 	for _, other := range []string{`{}`, `{"group_ratio":"2"}`, `{"group_ratio":1e-320}`, `{"group_ratio":2,"root_info":[]}`, `{"group_ratio":2,"root_info":{"channel_cost":{}}}`, `{"group_ratio":2,"admin_info":{"simulated_cache":{"original":{"quota":1.5}}}}`} {
 		t.Run(other, func(t *testing.T) {
-			result, reason := HistoricalChannelCost(Log{ChannelId: 1, Quota: 100, Other: other}, map[int]*float64{1: common.GetPointer(0.5)}, "task", 100)
+			result, reason := HistoricalChannelCost(Log{ChannelId: 1, Quota: 100, Other: other}, map[int]ChannelCostTimeline{1: {Ratio: common.GetPointer(0.5)}}, "task", 100)
 			assert.Empty(t, result)
 			assert.Equal(t, "Invalid historical billing data", reason)
 		})
@@ -323,4 +329,215 @@ func TestHideSimulatedCacheAuditKeepsOtherAdminInfo(t *testing.T) {
 	assert.False(t, gjson.Get(log.Other, "admin_info.simulated_cache").Exists())
 	assert.True(t, gjson.Get(log.Other, "admin_info.use_channel").Exists())
 	assert.Equal(t, int64(3), gjson.Get(log.Other, "cache_tokens").Int())
+}
+
+func TestChannelCostCurrencySnapshots(t *testing.T) {
+	db := setupChannelCostDB(t)
+	general := operation_setting.GetGeneralSetting()
+	oldGeneral, oldRate := *general, operation_setting.USDExchangeRate
+	t.Cleanup(func() { *general = oldGeneral; operation_setting.USDExchangeRate = oldRate })
+	general.CustomCurrencyExchangeRate = 2
+	operation_setting.USDExchangeRate = 8
+	cases := []struct {
+		name, currency, site string
+		priceFactor          float64
+		wantCurrency         string
+		wantCost, wantFactor float64
+	}{
+		{"USD same currency", "USD", "USD", 1, "USD", 40, 0},
+		{"CUSTOM same currency", "CUSTOM", "USD", .5, "CUSTOM", 40, 0},
+		{"CNY same currency", "CNY", "USD", .125, "CNY", 40, 0},
+		{"CUSTOM upstream USD price", "CUSTOM", "USD", 1, "CUSTOM", 20, .5},
+		{"USD upstream CUSTOM price", "USD", "USD", .5, "USD", 80, 2},
+		{"default site currency", "", "CUSTOM", 1, "CUSTOM", 20, .5},
+		{"tokens site uses USD", "", "TOKENS", 1, "USD", 40, 0},
+		{"legacy price factor", "CUSTOM", "USD", 0, "CUSTOM", 20, .5},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			general.QuotaDisplayType = tc.site
+			channel := Channel{Id: 1, Key: "k"}
+			channel.SetSetting(dto.ChannelSettings{UpstreamCostRatio: common.GetPointer(.4), UpstreamCostCurrency: tc.currency})
+			require.NoError(t, db.Save(&channel).Error)
+			other := NewLogOther()
+			other.SetPublic("group_ratio", 2)
+			if tc.priceFactor != 0 {
+				other.SetPublic("currency_usd_factor", tc.priceFactor)
+			}
+			historical := other.JSONString()
+			attachChannelCost(other, 1, 200, 2)
+			snapshot := gjson.Get(other.JSONString(), "root_info.channel_cost")
+			assert.InDelta(t, tc.wantCost, snapshot.Get("cost_quota").Float(), 1e-12)
+			assert.Equal(t, tc.wantCurrency, snapshot.Get("cost_currency").String())
+			assert.Equal(t, tc.wantFactor, snapshot.Get("currency_factor").Float())
+			result, reason := HistoricalChannelCost(Log{ChannelId: 1, Quota: 200, Other: historical}, map[int]ChannelCostTimeline{1: {Ratio: common.GetPointer(.4), Currency: tc.currency}}, "task", 1)
+			require.Empty(t, reason)
+			assert.InDelta(t, tc.wantCost, gjson.Get(result, "root_info.channel_cost.cost_quota").Float(), 1e-12)
+		})
+	}
+	general.CustomCurrencyExchangeRate = math.NaN()
+	channel := Channel{Id: 1, Key: "k"}
+	channel.SetSetting(dto.ChannelSettings{UpstreamCostRatio: common.GetPointer(.4), UpstreamCostCurrency: "CUSTOM"})
+	require.NoError(t, db.Save(&channel).Error)
+	other := NewLogOther()
+	attachChannelCost(other, 1, 200, 2)
+	assert.False(t, gjson.Get(other.JSONString(), "root_info.channel_cost").Exists())
+}
+
+func TestChannelCostRatioHistoryAcrossDatabases(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+		t.Run(dialect, func(t *testing.T) {
+			db := setupChannelCostDialect(t, dialect)
+			var version string
+			query := "SELECT version()"
+			if dialect == "sqlite" {
+				query = "SELECT sqlite_version()"
+			}
+			require.NoError(t, db.Raw(query).Scan(&version).Error)
+			t.Logf("database version: %s", version)
+			require.NoError(t, db.AutoMigrate(&Ability{}))
+			t.Cleanup(func() { require.NoError(t, db.Migrator().DropTable(&Ability{})) })
+			// Upgrade an existing baseline channel table, then repeat migration to
+			// verify the additive history/state schema preserves existing settings.
+			require.NoError(t, db.Migrator().DropTable(&ChannelCostRatioHistory{}, &ChannelCostRatioSyncStatus{}))
+			legacy := Channel{Key: "legacy", Name: "legacy", Type: constant.ChannelTypeSub2API}
+			legacy.SetSetting(dto.ChannelSettings{UpstreamCostRatio: common.GetPointer(.8)})
+			require.NoError(t, db.Create(&legacy).Error)
+			for range 2 {
+				require.NoError(t, db.AutoMigrate(&ChannelCostRatioHistory{}, &ChannelCostRatioSyncStatus{}))
+			}
+			var preserved Channel
+			require.NoError(t, db.First(&preserved, legacy.Id).Error)
+			assert.Equal(t, *legacy.Setting, *preserved.Setting)
+			assert.True(t, db.Migrator().HasIndex(&ChannelCostRatioHistory{}, "idx_channel_cost_ratio_time"))
+
+			channel := Channel{Key: "key", Type: constant.ChannelTypeSub2API, CostRatioOperatorID: 42}
+			channel.SetSetting(dto.ChannelSettings{UpstreamCostRatio: common.GetPointer(.5), UpstreamCostCurrency: "USD"})
+			require.NoError(t, channel.Insert())
+			require.NoError(t, channel.Update())
+			items, total, status, err := GetChannelCostRatioHistory(channel.Id, 1, 20)
+			require.NoError(t, err)
+			require.Len(t, items, 1)
+			assert.EqualValues(t, 1, total)
+			assert.Nil(t, status)
+			assert.Nil(t, items[0].OldRatio)
+			assert.Equal(t, 42, items[0].OperatorID)
+			assert.Equal(t, "manual", items[0].Source)
+			require.NoError(t, db.Model(&ChannelCostRatioHistory{}).Where("id = ?", items[0].ID).Update("created_at", 100).Error)
+
+			channel.SetSetting(dto.ChannelSettings{UpstreamCostRatio: common.GetPointer(.25), UpstreamCostCurrency: "USD"})
+			require.NoError(t, channel.Update())
+			items, total, _, err = GetChannelCostRatioHistory(channel.Id, 1, 20)
+			require.NoError(t, err)
+			require.Len(t, items, 2)
+			assert.Equal(t, .5, *items[0].OldRatio)
+			assert.Equal(t, 42, items[0].OperatorID)
+			require.NoError(t, db.Model(&ChannelCostRatioHistory{}).Where("id = ?", items[0].ID).Update("created_at", 200).Error)
+
+			channel.SetSetting(dto.ChannelSettings{UpstreamCostRatio: common.GetPointer(.25), UpstreamCostCurrency: "CUSTOM"})
+			require.NoError(t, channel.Update())
+			items, _, _, err = GetChannelCostRatioHistory(channel.Id, 1, 20)
+			require.NoError(t, err)
+			assert.Equal(t, "CUSTOM", items[0].Currency)
+			require.NoError(t, db.Model(&ChannelCostRatioHistory{}).Where("id = ?", items[0].ID).Update("created_at", 300).Error)
+			general := operation_setting.GetGeneralSetting()
+			oldGeneral := *general
+			t.Cleanup(func() { *general = oldGeneral })
+			general.CustomCurrencyExchangeRate = 2
+			if dialect == "sqlite" {
+				// History belongs to the primary DB even when logs use a separate DB.
+				logDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+				require.NoError(t, err)
+				require.NoError(t, logDB.AutoMigrate(&Log{}))
+				oldLogDB := LOG_DB
+				LOG_DB = logDB
+				t.Cleanup(func() {
+					LOG_DB = oldLogDB
+					sqlDB, err := logDB.DB()
+					require.NoError(t, err)
+					require.NoError(t, sqlDB.Close())
+				})
+			}
+			cases := []struct {
+				at   int64
+				want float64
+			}{{99, 12.5}, {100, 50}, {199, 50}, {200, 25}, {300, 12.5}}
+			logs := make([]Log, 0, len(cases))
+			for _, tc := range cases {
+				logs = append(logs, Log{CreatedAt: tc.at, Type: LogTypeConsume, ChannelId: channel.Id, Quota: 200, Other: `{"group_ratio":2}`})
+			}
+			require.NoError(t, LOG_DB.Create(&logs).Error)
+			filter := LogFilter{Channel: channel.Id}
+			upperID, _, timelines, err := PrepareChannelCostBackfill(context.Background(), filter)
+			require.NoError(t, err)
+			_, delta, err := BackfillChannelCostBatch(context.Background(), filter, upperID, ChannelCostBackfillCursor{}, timelines, "history")
+			require.NoError(t, err)
+			assert.EqualValues(t, len(cases), delta.Updated)
+			for i, tc := range cases {
+				var log Log
+				require.NoError(t, LOG_DB.First(&log, logs[i].Id).Error)
+				assert.Equal(t, tc.want, gjson.Get(log.Other, "root_info.channel_cost.cost_quota").Float())
+			}
+			// A sync updates only its setting, persists state and writes history once.
+			raw, err := sjson.Set(*channel.Setting, "future_setting", "keep")
+			require.NoError(t, err)
+			require.NoError(t, db.Model(&Channel{}).Where("id = ?", channel.Id).UpdateColumn("setting", raw).Error)
+			result, err := ApplyChannelCostRatioSync(channel.Id, common.GetPointer(.2), "success", "", `{"observed_at":"now"}`, false)
+			require.NoError(t, err)
+			assert.Equal(t, "success", result.Status)
+			preserved = Channel{}
+			require.NoError(t, db.First(&preserved, channel.Id).Error)
+			assert.Equal(t, "keep", gjson.Get(*preserved.Setting, "future_setting").String())
+			result, err = ApplyChannelCostRatioSync(channel.Id, common.GetPointer(.2), "success", "", "", false)
+			require.NoError(t, err)
+			assert.Equal(t, "unchanged", result.Status)
+			items, total, status, err = GetChannelCostRatioHistory(channel.Id, 1, 20)
+			require.NoError(t, err)
+			assert.EqualValues(t, 4, total)
+			assert.Equal(t, "sync", items[0].Source)
+			assert.Zero(t, items[0].OperatorID)
+			require.NotNil(t, status)
+			assert.Equal(t, "unchanged", status.Status)
+			assert.Positive(t, status.LastSuccessAt)
+			// Missing history storage must roll back the channel and sync state.
+			require.NoError(t, db.Migrator().DropTable(&ChannelCostRatioHistory{}))
+			_, err = ApplyChannelCostRatioSync(channel.Id, common.GetPointer(.1), "success", "", "", false)
+			require.Error(t, err)
+			preserved = Channel{}
+			require.NoError(t, db.First(&preserved, channel.Id).Error)
+			assert.Equal(t, .2, *preserved.GetSetting().UpstreamCostRatio)
+			require.NoError(t, db.AutoMigrate(&ChannelCostRatioHistory{}))
+		})
+	}
+}
+
+func TestUpstreamCostSyncValidationAndRanges(t *testing.T) {
+	for _, tc := range []struct {
+		min, max *float64
+		value    float64
+		inRange  bool
+	}{
+		{nil, nil, 0, true}, {nil, nil, 100, true},
+		{common.GetPointer(.2), common.GetPointer(.8), .2, true},
+		{common.GetPointer(.2), common.GetPointer(.8), .8, true},
+		{common.GetPointer(.2), nil, .1, false}, {common.GetPointer(.2), nil, 100, true},
+		{nil, common.GetPointer(.8), 0, true}, {nil, common.GetPointer(.8), .9, false},
+		{nil, nil, math.NaN(), false}, {nil, nil, math.Inf(1), false},
+	} {
+		setting := dto.ChannelSettings{UpstreamCostRatioSyncMin: tc.min, UpstreamCostRatioSyncMax: tc.max}
+		assert.Equal(t, tc.inRange, UpstreamCostRatioInRange(setting, tc.value))
+	}
+	for _, currency := range []string{"", "USD", "CNY", "CUSTOM"} {
+		require.NoError(t, ValidateUpstreamCostSettings(59, dto.ChannelSettings{UpstreamCostCurrency: currency, UpstreamCostRatioSyncEnabled: true}))
+	}
+	for _, channelType := range []int{0, 1, 58, 60, 61} {
+		require.EqualError(t, ValidateUpstreamCostSettings(channelType, dto.ChannelSettings{UpstreamCostRatioSyncEnabled: true}), OnlySub2APIRatioSync)
+	}
+	for _, setting := range []dto.ChannelSettings{
+		{UpstreamCostCurrency: "EUR"}, {UpstreamCostRatioSyncMin: common.GetPointer(-1.0)},
+		{UpstreamCostRatioSyncMax: common.GetPointer(101.0)},
+		{UpstreamCostRatioSyncMin: common.GetPointer(.8), UpstreamCostRatioSyncMax: common.GetPointer(.2)},
+	} {
+		require.Error(t, ValidateUpstreamCostSettings(59, setting))
+	}
 }

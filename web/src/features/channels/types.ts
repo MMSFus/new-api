@@ -90,6 +90,11 @@ export interface ChannelSettings {
   simulated_cache_hit_rate_min?: number
   simulated_cache_hit_rate_max?: number
   upstream_cost_ratio?: number
+  /** '' or absent means the site currency. */
+  upstream_cost_currency?: string
+  upstream_cost_ratio_sync_enabled?: boolean
+  upstream_cost_ratio_sync_min?: number
+  upstream_cost_ratio_sync_max?: number
   proxy?: string
   pass_through_body_enabled?: boolean
   responses_websocket_enabled?: boolean

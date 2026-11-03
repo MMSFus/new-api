@@ -59,6 +59,7 @@ func TestMain(m *testing.M) {
 		&model.Token{},
 		&model.Log{},
 		&model.Channel{},
+		&model.ChannelCostRatioHistory{},
 		&model.Midjourney{},
 		&model.TopUp{},
 		&model.UserSubscription{},

@@ -27,7 +27,7 @@ func (channelCostBackfillHandler) Run(ctx context.Context, task *model.SystemTas
 		err = errors.New("invalid historical cost backfill range")
 	}
 	var upperID int
-	var ratios map[int]*float64
+	var ratios map[int]model.ChannelCostTimeline
 	if err == nil {
 		prepareCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		upperID, state.Total, ratios, err = model.PrepareChannelCostBackfill(prepareCtx, payload.Filter)

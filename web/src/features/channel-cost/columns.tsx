@@ -30,7 +30,7 @@ import { formatLogQuota, formatNumber } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 import { LOG_TYPE_REFUND, type ChannelCostLog } from './api'
-import { formatCostQuota, profitTone } from './lib'
+import { formatCostFormula, formatCostQuota, profitTone } from './lib'
 
 /** `onOpenLog` adds a leading button that opens the log's cost breakdown. */
 export function useChannelCostColumns(
@@ -158,10 +158,7 @@ export function useChannelCostColumns(
           return (
             <span
               className='font-mono tabular-nums'
-              title={t('Official price {{base}} × {{ratio}}', {
-                base: formatCostQuota(cost.base_quota),
-                ratio: cost.upstream_ratio,
-              })}
+              title={formatCostFormula(t, cost)}
             >
               {formatCostQuota(sign * cost.cost_quota)}
             </span>

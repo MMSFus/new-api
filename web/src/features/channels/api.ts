@@ -829,3 +829,86 @@ export async function getKimiUsage(id: number): Promise<KimiUsage[]> {
   const response = await api.get(`/api/channel/${id}/kimi/usage`)
   return requireServerSuccess(response.data).data
 }
+
+export type UpstreamCostRatioProbe = {
+  group_rate_multiplier: number
+  user_rate_multiplier: number | null
+  resolved_rate_multiplier: number
+  peak_rate_enabled: boolean
+  observed_at: string
+  in_range: boolean
+}
+
+export type UpstreamCostRatioSyncStatus =
+  | 'success'
+  | 'unchanged'
+  | 'out_of_range'
+  | 'unsupported'
+  | 'failed'
+
+export type UpstreamCostRatioSyncResult = {
+  status: UpstreamCostRatioSyncStatus
+  old_ratio: number | null
+  new_ratio: number | null
+  value: number | null
+  error: string
+}
+
+export type UpstreamCostRatioHistoryItem = {
+  id: number
+  channel_id: number
+  old_ratio: number | null
+  new_ratio: number | null
+  currency: string
+  source: 'manual' | 'sync'
+  operator_id: number
+  upstream_info: string
+  created_at: number
+}
+
+export type UpstreamCostRatioSyncState = {
+  status: UpstreamCostRatioSyncStatus
+  last_attempt_at: number
+  last_success_at: number
+  last_value: number | null
+  error: string
+}
+
+export type UpstreamCostRatioHistory = {
+  items: UpstreamCostRatioHistoryItem[]
+  total: number
+  page: number
+  page_size: number
+  sync_status: UpstreamCostRatioSyncState | null
+}
+
+export async function probeUpstreamCostRatio(
+  id: number
+): Promise<UpstreamCostRatioProbe> {
+  const response = await api.get(
+    `/api/channel/${id}/upstream_cost_ratio/probe`,
+    { disableDuplicate: true }
+  )
+  return requireServerSuccess(response.data).data
+}
+
+export async function syncUpstreamCostRatio(
+  id: number
+): Promise<UpstreamCostRatioSyncResult> {
+  const response = await api.post(
+    `/api/channel/${id}/upstream_cost_ratio/sync`
+  )
+  return requireServerSuccess(response.data).data
+}
+
+export async function getUpstreamCostRatioHistory(
+  id: number,
+  page = 1,
+  pageSize = 10
+): Promise<UpstreamCostRatioHistory> {
+  const response = await api.get(
+    `/api/channel/${id}/upstream_cost_ratio/history`,
+    { params: { p: page, page_size: pageSize } }
+  )
+  return requireServerSuccess(response.data).data
+}

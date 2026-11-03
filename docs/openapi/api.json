@@ -2946,6 +2946,306 @@
         ]
       }
     },
+    "/api/channel/{id}/upstream_cost_ratio/probe": {
+      "get": {
+        "summary": "探测 Sub2API 上游倍率",
+        "description": "需要管理员身份及 channel.operate 权限。仅支持 Sub2API（type 59），遵守渠道可选的倍率上下限。",
+        "tags": [
+          "渠道管理"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "group_rate_multiplier": {
+                          "type": "number",
+                          "nullable": true
+                        },
+                        "user_rate_multiplier": {
+                          "type": "number",
+                          "nullable": true
+                        },
+                        "resolved_rate_multiplier": {
+                          "type": "number"
+                        },
+                        "peak_rate_enabled": {
+                          "type": "boolean"
+                        },
+                        "observed_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "in_range": {
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Combination343": []
+          },
+          {
+            "Combination1243": []
+          }
+        ]
+      }
+    },
+    "/api/channel/{id}/upstream_cost_ratio/sync": {
+      "post": {
+        "summary": "立即同步 Sub2API 上游倍率",
+        "description": "需要管理员身份及 channel.write 权限。仅支持 Sub2API（type 59），遵守渠道可选的倍率上下限。",
+        "tags": [
+          "渠道管理"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "success",
+                            "unchanged",
+                            "out_of_range",
+                            "unsupported",
+                            "failed"
+                          ]
+                        },
+                        "old_ratio": {
+                          "type": "number",
+                          "nullable": true
+                        },
+                        "new_ratio": {
+                          "type": "number",
+                          "nullable": true
+                        },
+                        "value": {
+                          "type": "number",
+                          "nullable": true
+                        },
+                        "error": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Combination343": []
+          },
+          {
+            "Combination1243": []
+          }
+        ]
+      }
+    },
+    "/api/channel/{id}/upstream_cost_ratio/history": {
+      "get": {
+        "summary": "查询渠道倍率变更历史与同步状态",
+        "description": "需要管理员身份及 channel.read 权限。按 created_at desc、id desc 排序；没有同步记录时 sync_status 为 null。",
+        "tags": [
+          "渠道管理"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "p",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "integer"
+                              },
+                              "channel_id": {
+                                "type": "integer"
+                              },
+                              "old_ratio": {
+                                "type": "number",
+                                "nullable": true
+                              },
+                              "new_ratio": {
+                                "type": "number",
+                                "nullable": true
+                              },
+                              "currency": {
+                                "type": "string"
+                              },
+                              "source": {
+                                "type": "string",
+                                "enum": [
+                                  "manual",
+                                  "sync"
+                                ]
+                              },
+                              "operator_id": {
+                                "type": "integer"
+                              },
+                              "upstream_info": {
+                                "type": "string"
+                              },
+                              "created_at": {
+                                "type": "integer"
+                              }
+                            }
+                          }
+                        },
+                        "total": {
+                          "type": "integer"
+                        },
+                        "page": {
+                          "type": "integer"
+                        },
+                        "page_size": {
+                          "type": "integer"
+                        },
+                        "sync_status": {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "success",
+                                "unchanged",
+                                "out_of_range",
+                                "unsupported",
+                                "failed"
+                              ]
+                            },
+                            "last_attempt_at": {
+                              "type": "integer"
+                            },
+                            "last_success_at": {
+                              "type": "integer"
+                            },
+                            "last_value": {
+                              "type": "number",
+                              "nullable": true
+                            },
+                            "error": {
+                              "type": "string"
+                            }
+                          },
+                          "nullable": true
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Combination343": []
+          },
+          {
+            "Combination1243": []
+          }
+        ]
+      }
+    },
     "/api/channel/{id}/key": {
       "post": {
         "summary": "获取渠道密钥",

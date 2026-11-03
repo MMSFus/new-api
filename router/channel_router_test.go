@@ -25,6 +25,9 @@ func TestChannelDefaultBaseURLsRequireReadPermission(t *testing.T) {
 }
 
 func TestChannelStatusRoutesUseExpectedPermissions(t *testing.T) {
+	assertChannelRoutePermission(t, http.MethodGet, "/:id/upstream_cost_ratio/probe", authz.ChannelOperate, controller.ProbeChannelUpstreamCostRatio)
+	assertChannelRoutePermission(t, http.MethodPost, "/:id/upstream_cost_ratio/sync", authz.ChannelWrite, controller.SyncChannelUpstreamCostRatio)
+	assertChannelRoutePermission(t, http.MethodGet, "/:id/upstream_cost_ratio/history", authz.ChannelRead, controller.GetChannelUpstreamCostRatioHistory)
 	assertChannelRoutePermission(t, http.MethodGet, "/priority/order", authz.ChannelRead, controller.GetChannelPriorityOrder)
 	assertChannelRoutePermission(t, http.MethodPost, "/priority/reorder", authz.ChannelWrite, controller.ReorderChannelPriority)
 	assertChannelRoutePermission(t, http.MethodGet, "/:id/vllm/status", authz.ChannelRead, controller.GetVLLMChannelStatus)

@@ -30,7 +30,12 @@ import { formatLogQuota, formatNumber } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 import { LOG_TYPE_REFUND, type ChannelCostLog } from './api'
-import { formatCostQuota, profitTone } from './lib'
+import {
+  formatCostFormula,
+  formatCostQuota,
+  hasCurrencyFactor,
+  profitTone,
+} from './lib'
 
 /** Every field of one cost log, including how its upstream cost was derived. */
 export function ChannelCostLogDetail(props: { log: ChannelCostLog }) {
@@ -118,17 +123,27 @@ export function ChannelCostLogDetail(props: { log: ChannelCostLog }) {
               value={String(cost.upstream_ratio)}
               mono
             />
+            {cost.cost_currency && (
+              <DetailRow
+                label={t('Upstream ratio currency')}
+                value={cost.cost_currency}
+                mono
+              />
+            )}
+            {hasCurrencyFactor(cost) && (
+              <DetailRow
+                label={t('Currency factor')}
+                value={String(cost.currency_factor)}
+                mono
+              />
+            )}
             <DetailRow
               label={t('Upstream cost')}
               value={
                 <span>
                   {formatCostQuota(sign * cost.cost_quota)}
                   <span className='text-muted-foreground ml-1'>
-                    ={' '}
-                    {t('Official price {{base}} × {{ratio}}', {
-                      base: formatCostQuota(cost.base_quota),
-                      ratio: cost.upstream_ratio,
-                    })}
+                    = {formatCostFormula(t, cost)}
                   </span>
                 </span>
               }

@@ -868,6 +868,7 @@ func AddChannel(c *gin.Context) {
 			continue
 		}
 		localChannel := addChannelRequest.Channel
+		localChannel.CostRatioOperatorID = c.GetInt("id")
 		localChannel.Key = key
 		if addChannelRequest.BatchAddSetKeyPrefix2Name && len(keys) > 1 {
 			keyPrefix := localChannel.Key
@@ -1300,6 +1301,7 @@ func UpdateChannel(c *gin.Context) {
 			// 覆盖模式：直接使用新密钥（默认行为，不需要特殊处理）
 		}
 	}
+	channel.CostRatioOperatorID = c.GetInt("id")
 	if strings.HasPrefix(strings.TrimSpace(kimiReference), kimiOAuthPrefix) {
 		err = saveKimiOAuthReference(c, kimiReference, func(tx *gorm.DB) error { return channel.UpdateWithTx(tx) }, kimiResolvedKey)
 	} else {
@@ -1685,6 +1687,7 @@ func CopyChannel(c *gin.Context) {
 	}
 
 	// insert
+	clone.CostRatioOperatorID = c.GetInt("id")
 	if err := clone.Insert(); err != nil {
 		common.SysError(common.LogText("failed to clone channel: %s", err.Error()))
 		common.ApiErrorT(c, "Failed to copy channel. Please try again later")

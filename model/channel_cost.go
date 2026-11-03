@@ -2,9 +2,13 @@ package model
 
 import (
 	"cmp"
+	"math"
 	"slices"
 	"strings"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -17,8 +21,10 @@ const channelCostLogKey = "channel_cost"
 // ChannelCostSnapshot freezes the channel's upstream cost of one log, so later
 // changes to the channel's upstream_cost_ratio do not rewrite history.
 type ChannelCostSnapshot struct {
-	UpstreamRatio float64 `json:"upstream_ratio"`
-	GroupRatio    float64 `json:"group_ratio"`
+	CostCurrency   string  `json:"cost_currency"`
+	CurrencyFactor float64 `json:"currency_factor,omitempty"`
+	UpstreamRatio  float64 `json:"upstream_ratio"`
+	GroupRatio     float64 `json:"group_ratio"`
 	// BaseQuota is the quota at the official price: what the log charged (or,
 	// under the simulated cache, what the upstream usage costs) divided by the
 	// group ratio. Surcharges added after the group ratio, such as tiered tool
@@ -50,21 +56,69 @@ func attachChannelCost(other *LogOther, channelId int, quota int, groupRatio flo
 	if err != nil {
 		return
 	}
-	ratio := channel.GetSetting().UpstreamCostRatio
-	if ratio == nil {
+	setting := channel.GetSetting()
+	ratio := setting.UpstreamCostRatio
+	if ratio == nil || !(*ratio >= 0 && *ratio <= dto.MaxUpstreamCostRatio) || math.IsInf(groupRatio, 0) {
 		return
 	}
 	basis := quota
 	if other.costBasisQuota != nil {
 		basis = *other.costBasisQuota
 	}
+	priceFactor := gjson.Result{}
+	if raw, exists := other.public["currency_usd_factor"]; exists {
+		encoded, err := common.Marshal(raw)
+		if err != nil {
+			return
+		}
+		priceFactor = gjson.ParseBytes(encoded)
+	}
+	currency, factor, valid := channelCostCurrencyFactor(setting.UpstreamCostCurrency, priceFactor)
+	if !valid {
+		return
+	}
 	baseQuota := float64(basis) / groupRatio
+	costQuota := baseQuota * *ratio * factor
+	if math.IsNaN(costQuota) || math.IsInf(costQuota, 0) || math.IsNaN(baseQuota) || math.IsInf(baseQuota, 0) {
+		return
+	}
+	storedFactor := factor
+	if storedFactor == 1 {
+		storedFactor = 0
+	}
+
 	other.SetRoot(channelCostLogKey, ChannelCostSnapshot{
-		UpstreamRatio: *ratio,
-		GroupRatio:    groupRatio,
-		BaseQuota:     baseQuota,
-		CostQuota:     baseQuota * *ratio,
+		UpstreamRatio:  *ratio,
+		GroupRatio:     groupRatio,
+		BaseQuota:      baseQuota,
+		CostQuota:      costQuota,
+		CostCurrency:   currency,
+		CurrencyFactor: storedFactor,
 	})
+}
+
+// channelCostCurrencyFactor uses the log's frozen price factor and today's
+// explicitly configured upstream currency. Invalid rates leave costs unknown.
+func channelCostCurrencyFactor(currency string, priceFactor gjson.Result) (string, float64, bool) {
+	if currency == "" {
+		currency = operation_setting.GetQuotaDisplayType()
+		if currency == operation_setting.QuotaDisplayTypeTokens {
+			currency = operation_setting.CurrencyUSD
+		}
+	}
+	upstream, err := operation_setting.CurrencyUSDFactor(currency)
+	if err != nil {
+		return currency, 0, false
+	}
+	frozen := 1.0
+	if priceFactor.Exists() {
+		if priceFactor.Type != gjson.Number {
+			return currency, 0, false
+		}
+		frozen = priceFactor.Float()
+	}
+	factor := upstream / frozen
+	return currency, factor, frozen > 0 && factor > 0 && !math.IsNaN(factor) && !math.IsInf(factor, 0)
 }
 
 // ChannelCostAmount sums revenue and cost in quota units. Refunds count
@@ -315,13 +369,15 @@ func GetChannelCostLogs(filter LogFilter, startIdx int, num int) ([]ChannelCostL
 		}
 		if snapshot := gjson.Get(log.Other, "root_info."+channelCostLogKey); snapshot.IsObject() {
 			item.Cost = &ChannelCostSnapshot{
-				UpstreamRatio: snapshot.Get("upstream_ratio").Float(),
-				GroupRatio:    snapshot.Get("group_ratio").Float(),
-				BaseQuota:     snapshot.Get("base_quota").Float(),
-				CostQuota:     snapshot.Get("cost_quota").Float(),
-				Source:        snapshot.Get("source").String(),
-				BackfilledAt:  snapshot.Get("backfilled_at").Int(),
-				TaskID:        snapshot.Get("task_id").String(),
+				UpstreamRatio:  snapshot.Get("upstream_ratio").Float(),
+				CostCurrency:   snapshot.Get("cost_currency").String(),
+				CurrencyFactor: snapshot.Get("currency_factor").Float(),
+				GroupRatio:     snapshot.Get("group_ratio").Float(),
+				BaseQuota:      snapshot.Get("base_quota").Float(),
+				CostQuota:      snapshot.Get("cost_quota").Float(),
+				Source:         snapshot.Get("source").String(),
+				BackfilledAt:   snapshot.Get("backfilled_at").Int(),
+				TaskID:         snapshot.Get("task_id").String(),
 			}
 		}
 		if delta := gjson.Get(log.Other, "admin_info.simulated_cache.quota_delta"); delta.Exists() {

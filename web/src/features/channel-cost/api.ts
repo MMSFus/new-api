@@ -87,6 +87,10 @@ export interface ChannelCostSnapshot {
   group_ratio: number
   base_quota: number
   cost_quota: number
+  /** Currency the upstream ratio was priced in, e.g. CUSTOM. */
+  cost_currency?: string
+  /** Upstream-to-price currency factor; absent means 1. */
+  currency_factor?: number
   source?: 'historical_backfill'
   backfilled_at?: number
   task_id?: string
