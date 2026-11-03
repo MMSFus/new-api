@@ -150,9 +150,13 @@ func TestSimulatedCacheNumbers(t *testing.T) {
 		{name: "claude read is bounded by the latest turn and the last breakpoint",
 			plan: claude(100, 2, 1, simulatedCacheTTL1h, simulatedCacheTTL5m), prompt: 4000,
 			want: simulatedCacheNumbers{prompt: 4000, read: 3000}},
-		{name: "claude without cache_control is zero",
-			plan: SimulatedCachePlan{claudeClient: true, clientFormat: types.RelayFormatClaude, targetRate: 100,
-				boundaries: boundaries([]int{100, 400}), matched: 1, lastBreakpoint: -1, last1hBreakpoint: -1}, prompt: 4000,
+		{name: "claude content mode creates history when there is no breakpoint",
+			plan: SimulatedCachePlan{claudeClient: true, clientFormat: types.RelayFormatClaude, targetRate: 80, mode: "content",
+				boundaries: boundaries([]int{800, 900, 1000}), matched: -1, lastBreakpoint: -1, last1hBreakpoint: -1}, prompt: 4000,
+			want: simulatedCacheNumbers{prompt: 4000, creation: 3600, c5m: 3600}},
+		{name: "claude content mode does not cache short history",
+			plan: SimulatedCachePlan{claudeClient: true, clientFormat: types.RelayFormatClaude, targetRate: 80, mode: "content",
+				boundaries: boundaries([]int{100, 200, 1000}), matched: 1, lastBreakpoint: -1, last1hBreakpoint: -1}, prompt: 4000,
 			want: simulatedCacheNumbers{prompt: 4000}},
 		{name: "claude breakpoint below 1024 tokens is zero",
 			plan: claude(100, -1, 1, simulatedCacheTTL1h, simulatedCacheTTL5m), prompt: 1300,
@@ -358,6 +362,7 @@ func TestSimulatedCacheClaudeSyncSplit(t *testing.T) {
 	plan := prepareSimulatedCacheForTest(t, channel, types.RelayFormatClaude, 100, req)
 	require.Equal(t, -1, plan.matched)
 	out := gjson.Parse(wrapSimulatedCacheBody(t, plan, "application/json", upstream))
+	assert.Equal(t, "breakpoint", plan.audit.Mode)
 	usage := out.Get("usage")
 	creation := usage.Get("cache_creation_input_tokens").Int()
 	assert.InDelta(t, 4000, creation, 50)
@@ -431,16 +436,125 @@ func TestSimulatedCacheClaudeStream(t *testing.T) {
 	assert.Contains(t, out, `{"type":"content_block_delta","delta":{"type":"text_delta","text":"usage"}}`)
 }
 
-func TestSimulatedCacheClaudeWithoutCacheControlIsZero(t *testing.T) {
+func TestSimulatedCacheClaudeContentModeMultiTurn(t *testing.T) {
 	channel := useMemorySimulatedCache(t)
-	req := `{"model":"claude","system":"` + longText(9000) + `","messages":[{"role":"user","content":"hi"}]}`
-	for range 2 {
-		plan := prepareSimulatedCacheForTest(t, channel, types.RelayFormatClaude, 100, req)
-		usage := gjson.Parse(wrapSimulatedCacheBody(t, plan, "application/json",
-			`{"type":"message","usage":{"input_tokens":10,"cache_read_input_tokens":9000,"cache_creation_input_tokens":0,"output_tokens":1}}`)).Get("usage")
-		assert.Equal(t, int64(9010), usage.Get("input_tokens").Int())
-		assert.Zero(t, usage.Get("cache_read_input_tokens").Int())
-		assert.Zero(t, usage.Get("cache_creation_input_tokens").Int())
+	turn1 := `{"model":"claude","system":"` + longText(5000) + `","messages":[{"role":"user","content":"` + longText(2500) + `"},{"role":"assistant","content":"` + longText(500) + `"},{"role":"user","content":"` + longText(1000) + `"}]}`
+	turn2 := `{"model":"claude","system":"` + longText(5000) + `","messages":[{"role":"user","content":"` + longText(2500) + `"},{"role":"assistant","content":"` + longText(500) + `"},{"role":"user","content":"` + longText(1000) + `"},{"role":"assistant","content":"ok"},{"role":"user","content":"new"}]}`
+	upstream := `{"type":"message","usage":{"input_tokens":10000,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}`
+	plan := prepareSimulatedCacheForTest(t, channel, types.RelayFormatClaude, 80, turn1)
+	require.NotNil(t, plan)
+	out := gjson.Parse(wrapSimulatedCacheBody(t, plan, "application/json", upstream)).Get("usage")
+	history := int(out.Get("input_tokens").Int() + out.Get("cache_read_input_tokens").Int() + out.Get("cache_creation_input_tokens").Int())
+	creation := int(out.Get("cache_creation_input_tokens").Int())
+	assert.Zero(t, out.Get("cache_read_input_tokens").Int())
+	assert.Equal(t, plan.prefixTokens(10000, len(plan.boundaries)-2), creation)
+	assert.Equal(t, int64(10000-creation), out.Get("input_tokens").Int())
+	assert.Equal(t, "content", plan.audit.Mode)
+
+	plan = prepareSimulatedCacheForTest(t, channel, types.RelayFormatClaude, 80, turn2)
+	require.NotNil(t, plan)
+	require.GreaterOrEqual(t, plan.contentMatched, 0)
+	out = gjson.Parse(wrapSimulatedCacheBody(t, plan, "application/json", upstream)).Get("usage")
+	read := int(out.Get("cache_read_input_tokens").Int())
+	creation = int(out.Get("cache_creation_input_tokens").Int())
+	history = plan.prefixTokens(10000, len(plan.boundaries)-2)
+	assert.InDelta(t, 8000, read, 1)
+	assert.LessOrEqual(t, read, history)
+	assert.Equal(t, history-read, creation)
+	assert.Equal(t, int64(10000-history), out.Get("input_tokens").Int())
+	assert.Equal(t, "content", plan.audit.Mode)
+}
+
+func TestSimulatedCacheClaudeContentModeThresholdAndSmallBreakpoint(t *testing.T) {
+	channel := useMemorySimulatedCache(t)
+	short := `{"model":"claude","system":"` + longText(900) + `","messages":[{"role":"user","content":"last"}]}`
+	plan := prepareSimulatedCacheForTest(t, channel, types.RelayFormatClaude, 100, short)
+	usage := gjson.Parse(wrapSimulatedCacheBody(t, plan, "application/json",
+		`{"type":"message","usage":{"input_tokens":1000,"output_tokens":1}}`)).Get("usage")
+	assert.Zero(t, usage.Get("cache_read_input_tokens").Int())
+	assert.Zero(t, usage.Get("cache_creation_input_tokens").Int())
+	assert.Equal(t, "content", plan.audit.Mode)
+
+	request := `{"model":"claude","system":[{"type":"text","text":"small","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"` + longText(9000) + `"},{"role":"assistant","content":"ok"},{"role":"user","content":"last"}]}`
+	plan = prepareSimulatedCacheForTest(t, channel, types.RelayFormatClaude, 100, request)
+	usage = gjson.Parse(wrapSimulatedCacheBody(t, plan, "application/json",
+		`{"type":"message","usage":{"input_tokens":10000,"output_tokens":1}}`)).Get("usage")
+	assert.Equal(t, "content", plan.audit.Mode)
+	assert.Greater(t, usage.Get("cache_creation_input_tokens").Int(), int64(1024))
+}
+
+func TestSimulatedCacheClaudeContentModeTTL(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		ttl  string
+		want time.Duration
+	}{
+		{name: "default five minutes", want: simulatedCacheTTL5m},
+		{name: "one hour", ttl: `,"cache_control":{"type":"ephemeral","ttl":"1h"}`, want: simulatedCacheTTL1h},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			channel := useMemorySimulatedCache(t)
+			system := `"` + longText(5000) + `"`
+			if tt.ttl != "" {
+				system = `[{"type":"text","text":"small","cache_control":{"type":"ephemeral","ttl":"1h"}}]`
+			}
+			request := `{"model":"claude","system":` + system + `,"messages":[{"role":"user","content":"` + longText(1000) + `"},{"role":"assistant","content":"old"},{"role":"user","content":"last"}]}`
+			plan := prepareSimulatedCacheForTest(t, channel, types.RelayFormatClaude, 100, request)
+			out := gjson.Parse(wrapSimulatedCacheBody(t, plan, "application/json",
+				`{"type":"message","usage":{"input_tokens":10000,"output_tokens":1}}`)).Get("usage")
+			assert.Equal(t, "content", plan.audit.Mode)
+			if tt.want == simulatedCacheTTL1h {
+				assert.Equal(t, out.Get("cache_creation_input_tokens").Int(), out.Get("cache_creation.ephemeral_1h_input_tokens").Int())
+			} else {
+				assert.Equal(t, out.Get("cache_creation_input_tokens").Int(), out.Get("cache_creation.ephemeral_5m_input_tokens").Int())
+			}
+			stored, err := getSimulatedCacheStore().GetMany([]string{plan.boundaries[len(plan.boundaries)-2].key, plan.boundaries[len(plan.boundaries)-1].key})
+			require.NoError(t, err)
+			require.NotEmpty(t, stored)
+			for _, seconds := range stored {
+				assert.Equal(t, int(tt.want/time.Second), seconds)
+			}
+		})
+	}
+}
+
+func TestSimulatedCacheOpenAITTLAndBreakpointHash(t *testing.T) {
+	channel := useMemorySimulatedCache(t)
+	for _, tt := range []struct {
+		name   string
+		format types.RelayFormat
+		body   string
+		want   time.Duration
+	}{
+		{name: "default five minutes", format: types.RelayFormatOpenAI, body: `{"messages":[{"role":"user","content":"` + longText(3000) + `"}]}`, want: simulatedCacheTTL5m},
+		{name: "responses 12h option", format: types.RelayFormatOpenAIResponses, body: `{"input":[{"type":"message","role":"user","content":"` + longText(3000) + `"}],"prompt_cache_options":{"ttl":"12h"}}`, want: simulatedCacheTTL12h},
+		{name: "responses 30m option", format: types.RelayFormatOpenAIResponses, body: `{"input":[{"type":"message","role":"user","content":"` + longText(3000) + `"}],"prompt_cache_options":{"ttl":"30m"}}`, want: simulatedCacheTTL30m},
+		{name: "chat breakpoint 12h", format: types.RelayFormatOpenAI, body: `{"messages":[{"role":"user","content":"` + longText(3000) + `","prompt_cache_breakpoint":{"mode":"explicit","ttl":"12h"}}]}`, want: simulatedCacheTTL12h},
+		{name: "responses legacy 24h", format: types.RelayFormatOpenAIResponses, body: `{"input":"` + longText(3000) + `","prompt_cache_retention":"24h"}`, want: simulatedCacheTTL24h},
+		{name: "longest ttl wins", format: types.RelayFormatOpenAIResponses, body: `{"input":[{"type":"message","role":"user","content":"` + longText(3000) + `","prompt_cache_breakpoint":{"mode":"explicit","ttl":"12h"}}],"prompt_cache_options":{"ttl":"30m"},"prompt_cache_retention":"24h"}`, want: simulatedCacheTTL24h},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			plan := prepareSimulatedCacheForTest(t, channel, tt.format, 80, tt.body)
+			require.NotNil(t, plan)
+			assert.Equal(t, tt.want, plan.writeTTL)
+			assert.Equal(t, "auto", plan.audit.Mode)
+		})
+	}
+	base := `{"messages":[{"role":"user","content":"` + longText(2000) + `"}]}`
+	withBreakpoint := `{"messages":[{"role":"user","content":"` + longText(2000) + `","prompt_cache_breakpoint":{"mode":"explicit","ttl":"12h"}}]}`
+	without := prepareSimulatedCacheForTest(t, channel, types.RelayFormatOpenAI, 80, base)
+	with := prepareSimulatedCacheForTest(t, channel, types.RelayFormatOpenAI, 80, withBreakpoint)
+	require.Len(t, with.boundaries, len(without.boundaries))
+	for i := range without.boundaries {
+		assert.Equal(t, without.boundaries[i].key, with.boundaries[i].key)
+	}
+	responsesBase := `{"input":[{"type":"message","role":"user","content":"` + longText(2000) + `"}]}`
+	responsesBreakpoint := `{"input":[{"type":"message","role":"user","content":"` + longText(2000) + `","prompt_cache_breakpoint":{"mode":"explicit","ttl":"12h"}}]}`
+	without = prepareSimulatedCacheForTest(t, channel, types.RelayFormatOpenAIResponses, 80, responsesBase)
+	with = prepareSimulatedCacheForTest(t, channel, types.RelayFormatOpenAIResponses, 80, responsesBreakpoint)
+	require.Len(t, with.boundaries, len(without.boundaries))
+	for i := range without.boundaries {
+		assert.Equal(t, without.boundaries[i].key, with.boundaries[i].key)
 	}
 }
 
