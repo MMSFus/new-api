@@ -153,10 +153,14 @@ func GetClaudeAuthHeader(token string) http.Header {
 type responseBodyLimits struct {
 	Timeout  time.Duration
 	MaxBytes int64
+	Context  context.Context
 }
 
 func GetResponseBody(method, url string, channel *model.Channel, headers http.Header, limits ...responseBodyLimits) ([]byte, error) {
 	ctx := context.Background()
+	if len(limits) > 0 && limits[0].Context != nil {
+		ctx = limits[0].Context
+	}
 	if len(limits) > 0 && limits[0].Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, limits[0].Timeout)

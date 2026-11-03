@@ -1685,6 +1685,12 @@ func CopyChannel(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "Failed to copy channel: invalid channel settings"})
 		return
 	}
+	if clone.GetSetting().UpstreamCostRatioSyncEnabled {
+		if eligible, _ := model.UpstreamRatioSyncEligibility(&clone); !eligible {
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": "Failed to copy channel: invalid channel settings"})
+			return
+		}
+	}
 
 	// insert
 	clone.CostRatioOperatorID = c.GetInt("id")

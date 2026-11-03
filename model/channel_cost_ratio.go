@@ -2,6 +2,8 @@ package model
 
 import (
 	"math"
+	"net/url"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -10,7 +12,49 @@ import (
 	"gorm.io/gorm"
 )
 
-const OnlySub2APIRatioSync = "Only Sub2API channels support upstream ratio sync"
+const (
+	upstreamRatioNeedsCustomBaseURL = "Upstream ratio sync needs a custom base URL"
+	upstreamRatioOfficialAPI        = "Official provider APIs do not expose upstream ratios"
+	upstreamRatioCredentials        = "This channel's credentials cannot query upstream ratios"
+)
+
+var upstreamRatioOfficialDomains = []string{
+	"anthropic.com", "openai.com", "googleapis.com", "x.ai", "grok.com",
+	"ollama.com", "moonshot.cn", "kimi.com", "bigmodel.cn", "deepseek.com",
+	"azure.com", "amazonaws.com", "cloudflare.com", "volces.com", "aliyuncs.com",
+}
+
+// UpstreamRatioSyncEligibility determines whether a channel can safely query
+// the custom upstream billing endpoint with its ordinary API key.
+func UpstreamRatioSyncEligibility(channel *Channel) (bool, string) {
+	return upstreamRatioSyncEligibility(channel, true)
+}
+
+func upstreamRatioSyncEligibility(channel *Channel, requireKey bool) (bool, string) {
+	if channel == nil {
+		return false, upstreamRatioNeedsCustomBaseURL
+	}
+	baseURL := strings.TrimSpace(channel.GetBaseURL())
+	parsed, err := url.Parse(baseURL)
+	if baseURL == "" || err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" {
+		return false, upstreamRatioNeedsCustomBaseURL
+	}
+	host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
+	for _, domain := range upstreamRatioOfficialDomains {
+		if host == domain || strings.HasSuffix(host, "."+domain) {
+			return false, upstreamRatioOfficialAPI
+		}
+	}
+	if channel.Type == constant.ChannelTypeCodex || channel.Type == constant.ChannelTypeAntigravity ||
+		channel.Type == constant.ChannelTypeKimi || channel.Type == constant.ChannelTypeVertexAi ||
+		channel.Type == constant.ChannelTypeAws || strings.HasPrefix(strings.TrimSpace(channel.Key), "{") {
+		return false, upstreamRatioCredentials
+	}
+	if requireKey && strings.TrimSpace(channel.Key) == "" {
+		return false, upstreamRatioCredentials
+	}
+	return true, ""
+}
 
 type ChannelCostRatioHistory struct {
 	ID           int      `json:"id"`
@@ -41,14 +85,16 @@ type ChannelCostRatioSyncResult struct {
 	Error    string   `json:"error"`
 }
 
-func ValidateUpstreamCostSettings(channelType int, s dto.ChannelSettings) error {
+func ValidateUpstreamCostSettings(channel *Channel, s dto.ChannelSettings) error {
 	switch s.UpstreamCostCurrency {
 	case "", "USD", "CNY", "CUSTOM":
 	default:
 		return common.NewMessage("Invalid upstream cost currency")
 	}
-	if s.UpstreamCostRatioSyncEnabled && channelType != constant.ChannelTypeSub2API {
-		return common.NewMessage(OnlySub2APIRatioSync)
+	if s.UpstreamCostRatioSyncEnabled {
+		if eligible, reason := upstreamRatioSyncEligibility(channel, false); !eligible {
+			return common.NewMessage(reason)
+		}
 	}
 	for _, bound := range []*float64{s.UpstreamCostRatioSyncMin, s.UpstreamCostRatioSyncMax} {
 		if bound != nil && !(*bound >= 0 && *bound <= dto.MaxUpstreamCostRatio) {
@@ -69,7 +115,7 @@ func UpstreamCostRatioInRange(s dto.ChannelSettings, value float64) bool {
 
 func recordChannelCostRatioChange(tx *gorm.DB, old dto.ChannelSettings, channel Channel, source, upstreamInfo string) error {
 	next := channel.GetSetting()
-	if err := ValidateUpstreamCostSettings(channel.Type, next); err != nil {
+	if err := ValidateUpstreamCostSettings(&channel, next); err != nil {
 		return err
 	}
 	sameRatio := old.UpstreamCostRatio == nil && next.UpstreamCostRatio == nil ||
@@ -82,6 +128,93 @@ func recordChannelCostRatioChange(tx *gorm.DB, old dto.ChannelSettings, channel 
 		Currency: next.UpstreamCostCurrency, Source: source, OperatorID: channel.CostRatioOperatorID,
 		UpstreamInfo: upstreamInfo, CreatedAt: common.GetTimestamp(),
 	}).Error
+}
+
+// UpdateChannelCostRatioSyncSettings changes only the sync-related setting
+// fields and records an operator history entry when the currency changes.
+func UpdateChannelCostRatioSyncSettings(channelID, operatorID int, currency string, minRatio, maxRatio *float64, enabled bool) error {
+	var channel Channel
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockForUpdate(tx).First(&channel, channelID).Error; err != nil {
+			return err
+		}
+		if eligible, reason := UpstreamRatioSyncEligibility(&channel); !eligible {
+			return common.NewMessage(reason)
+		}
+		old := channel.GetSetting()
+		next := old
+		next.UpstreamCostCurrency = currency
+		next.UpstreamCostRatioSyncEnabled = enabled
+		next.UpstreamCostRatioSyncMin = minRatio
+		next.UpstreamCostRatioSyncMax = maxRatio
+		if err := ValidateUpstreamCostSettings(&channel, next); err != nil {
+			return err
+		}
+		raw := "{}"
+		if channel.Setting != nil && *channel.Setting != "" {
+			raw = *channel.Setting
+		}
+		var err error
+		for _, field := range []struct {
+			path  string
+			value any
+		}{
+			{"upstream_cost_currency", currency},
+			{"upstream_cost_ratio_sync_enabled", enabled},
+			{"upstream_cost_ratio_sync_min", minRatio},
+			{"upstream_cost_ratio_sync_max", maxRatio},
+		} {
+			if field.path == "upstream_cost_currency" && currency == "" ||
+				(field.path == "upstream_cost_ratio_sync_min" && minRatio == nil) ||
+				(field.path == "upstream_cost_ratio_sync_max" && maxRatio == nil) ||
+				(field.path == "upstream_cost_ratio_sync_enabled" && !enabled) {
+				raw, err = sjson.Delete(raw, field.path)
+			} else {
+				raw, err = sjson.Set(raw, field.path, field.value)
+			}
+			if err != nil {
+				return err
+			}
+		}
+		channel.Setting = &raw
+		if err := tx.Model(&Channel{}).Where("id = ?", channelID).UpdateColumn("setting", raw).Error; err != nil {
+			return err
+		}
+		if old.UpstreamCostCurrency != next.UpstreamCostCurrency {
+			channel.CostRatioOperatorID = operatorID
+			if err := recordChannelCostRatioChange(tx, old, channel, "manual", ""); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err == nil {
+		CacheUpdateChannel(&channel)
+	}
+	return err
+}
+
+// DisableChannelCostRatioSync removes only the persisted opt-in flag.
+func DisableChannelCostRatioSync(channelID int) (bool, error) {
+	var channel Channel
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockForUpdate(tx).First(&channel, channelID).Error; err != nil {
+			return err
+		}
+		if channel.Setting == nil || *channel.Setting == "" {
+			return nil
+		}
+		raw, err := sjson.Delete(*channel.Setting, "upstream_cost_ratio_sync_enabled")
+		if err != nil {
+			return err
+		}
+		channel.Setting = &raw
+		return tx.Model(&Channel{}).Where("id = ?", channelID).UpdateColumn("setting", raw).Error
+	})
+	if err == nil {
+		CacheUpdateChannel(&channel)
+	}
+	return err == nil, err
 }
 
 func GetChannelCostRatioHistory(channelID, page, pageSize int) ([]ChannelCostRatioHistory, int64, *ChannelCostRatioSyncStatus, error) {
@@ -114,8 +247,8 @@ func ApplyChannelCostRatioSync(channelID int, value *float64, status, message, u
 		if err := lockForUpdate(tx).First(&channel, channelID).Error; err != nil {
 			return err
 		}
-		if channel.Type != constant.ChannelTypeSub2API {
-			return common.NewMessage(OnlySub2APIRatioSync)
+		if eligible, reason := UpstreamRatioSyncEligibility(&channel); !eligible {
+			return common.NewMessage(reason)
 		}
 		settings := channel.GetSetting()
 		result = ChannelCostRatioSyncResult{Status: status, OldRatio: settings.UpstreamCostRatio, NewRatio: settings.UpstreamCostRatio, Value: value, Error: message}

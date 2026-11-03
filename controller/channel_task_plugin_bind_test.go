@@ -178,6 +178,31 @@ func putUpdateChannel(t *testing.T, userID, role int, body string) *httptest.Res
 	return recorder
 }
 
+func TestUpdateChannelAllowsOmittedKeyWhenUpstreamRatioSyncIsEnabled(t *testing.T) {
+	setupTaskPluginBindChannelTest(t)
+	baseURL := "https://custom.example"
+	setting := `{"upstream_cost_ratio_sync_enabled":true}`
+	channel := model.Channel{
+		Type: constant.ChannelTypeOpenAI, Status: common.ChannelStatusEnabled,
+		Name: "ratio-sync", Models: "gpt-test", Group: "default", Key: "stored-key",
+		BaseURL: &baseURL, Setting: &setting,
+	}
+	require.NoError(t, model.DB.Create(&channel).Error)
+
+	payload := fmt.Sprintf(
+		`{"id":%d,"type":1,"name":"ratio-sync-edited","models":"gpt-test","group":"default","base_url":"https://custom.example","setting":"{\"upstream_cost_ratio_sync_enabled\":true}"}`,
+		channel.Id,
+	)
+	recorder := putUpdateChannel(t, 1, common.RoleRootUser, payload)
+	assert.Contains(t, recorder.Body.String(), `"success":true`)
+
+	var updated model.Channel
+	require.NoError(t, model.DB.First(&updated, channel.Id).Error)
+	assert.Equal(t, "stored-key", updated.Key)
+	assert.Equal(t, "ratio-sync-edited", updated.Name)
+	assert.True(t, updated.GetSetting().UpstreamCostRatioSyncEnabled)
+}
+
 func TestNewAPIChannelPluginBindingsRequireBindPermission(t *testing.T) {
 	setupTaskPluginBindChannelTest(t)
 	const key = "gateway-bind"

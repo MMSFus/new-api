@@ -29,43 +29,24 @@ import {
   probeUpstreamCostRatio,
   syncUpstreamCostRatio,
   type UpstreamCostRatioHistoryItem,
-  type UpstreamCostRatioSyncStatus,
 } from '../api'
-import { channelsQueryKeys } from '../lib'
+import {
+  channelsQueryKeys,
+  formatRatio,
+  UPSTREAM_RATIO_STATUS_LABELS as STATUS_LABELS,
+  UPSTREAM_RATIO_STATUS_VARIANTS as STATUS_VARIANTS,
+} from '../lib'
 
 const upstreamCostRatioQueryKeys = {
   history: (channelId: number) =>
     [...channelsQueryKeys.detail(channelId), 'upstream_cost_ratio'] as const,
 }
 
-const STATUS_LABELS: Record<UpstreamCostRatioSyncStatus, string> = {
-  success: 'Synced',
-  unchanged: 'Unchanged',
-  out_of_range: 'Out of range, not applied',
-  unsupported: 'Upstream does not support ratio query',
-  failed: 'Sync failed',
-}
-
-const STATUS_VARIANTS: Record<
-  UpstreamCostRatioSyncStatus,
-  'secondary' | 'warning' | 'destructive'
-> = {
-  success: 'secondary',
-  unchanged: 'secondary',
-  out_of_range: 'warning',
-  unsupported: 'warning',
-  failed: 'destructive',
-}
-
 const HISTORY_PAGE_SIZE = 10
-
-function formatRatio(value: number | null | undefined): string {
-  return typeof value === 'number' ? String(value) : '-'
-}
 
 type UpstreamCostRatioPanelProps = {
   channelId: number
-  /** Sync and probe are only offered for saved Sub2API channels. */
+  /** Sync and probe are offered for saved channels on a custom upstream. */
   syncSupported: boolean
   disabled?: boolean
   /** Called with the ratio the user chose to fill into the form. */
