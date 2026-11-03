@@ -56,7 +56,8 @@ type Channel struct {
 	OtherSettings string `json:"settings" gorm:"column:settings"` // 其他设置，存储azure版本等不需要检索的信息，详见dto.ChannelOtherSettings
 
 	// cache info
-	Keys []string `json:"-" gorm:"-"`
+	Keys                []string `json:"-" gorm:"-"`
+	CostRatioOperatorID int      `json:"-" gorm:"-"`
 }
 
 const ChannelStatusReasonAllKeysDisabled = "All keys are disabled"
@@ -465,6 +466,9 @@ func BatchInsertChannelsWithTx(tx *gorm.DB, channels []Channel) error {
 			return err
 		}
 		for _, channel := range chunk {
+			if err := recordChannelCostRatioChange(tx, dto.ChannelSettings{}, channel, "manual", ""); err != nil {
+				return err
+			}
 			if err := channel.AddAbilities(tx); err != nil {
 				return err
 			}
@@ -541,68 +545,78 @@ func (channel *Channel) GetStatusCodeMapping() string {
 }
 
 func (channel *Channel) Insert() error {
-	var err error
-	err = DB.Create(channel).Error
-	if err != nil {
-		return err
-	}
-	err = channel.AddAbilities(nil)
-	return err
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(channel).Error; err != nil {
+			return err
+		}
+		if err := recordChannelCostRatioChange(tx, dto.ChannelSettings{}, *channel, "manual", ""); err != nil {
+			return err
+		}
+		return channel.AddAbilities(tx)
+	})
 }
 
 func (channel *Channel) Update() error { return channel.UpdateWithTx(DB) }
 
 // UpdateWithTx lets a one-time credential enrollment and its channel save share a transaction.
 func (channel *Channel) UpdateWithTx(tx *gorm.DB) error {
-	// If this is a multi-key channel, recalculate MultiKeySize based on the current key list to avoid inconsistency after editing keys
-	if channel.ChannelInfo.IsMultiKey {
-		var keyStr string
-		if channel.Key != "" {
-			keyStr = channel.Key
-		} else {
-			// If key is not provided, read the existing key from the database
-			var existing Channel
-			if err := tx.First(&existing, channel.Id).Error; err == nil {
-				keyStr = existing.Key
-			}
+	return tx.Transaction(func(tx *gorm.DB) error {
+		var existing Channel
+		if err := lockForUpdate(tx).First(&existing, channel.Id).Error; err != nil {
+			return err
 		}
-		// Parse the key list (supports newline separation or JSON array)
-		keys := []string{}
-		if keyStr != "" {
-			trimmed := strings.TrimSpace(keyStr)
-			if strings.HasPrefix(trimmed, "[") {
-				var arr []json.RawMessage
-				if err := common.Unmarshal([]byte(trimmed), &arr); err == nil {
-					keys = make([]string, len(arr))
-					for i, v := range arr {
-						keys[i] = string(v)
+		// If this is a multi-key channel, recalculate MultiKeySize based on the current key list to avoid inconsistency after editing keys
+		if channel.ChannelInfo.IsMultiKey {
+			var keyStr string
+			if channel.Key != "" {
+				keyStr = channel.Key
+			} else {
+				// If key is not provided, read the existing key from the database
+				var existing Channel
+				if err := tx.First(&existing, channel.Id).Error; err == nil {
+					keyStr = existing.Key
+				}
+			}
+			// Parse the key list (supports newline separation or JSON array)
+			keys := []string{}
+			if keyStr != "" {
+				trimmed := strings.TrimSpace(keyStr)
+				if strings.HasPrefix(trimmed, "[") {
+					var arr []json.RawMessage
+					if err := common.Unmarshal([]byte(trimmed), &arr); err == nil {
+						keys = make([]string, len(arr))
+						for i, v := range arr {
+							keys[i] = string(v)
+						}
+					}
+				}
+				if len(keys) == 0 { // fallback to newline split
+					keys = strings.Split(strings.Trim(keyStr, "\n"), "\n")
+				}
+			}
+			channel.ChannelInfo.MultiKeySize = len(keys)
+			// Clean up status data that exceeds the new key count to prevent index out of range
+			if channel.ChannelInfo.MultiKeyStatusList != nil {
+				for idx := range channel.ChannelInfo.MultiKeyStatusList {
+					if idx >= channel.ChannelInfo.MultiKeySize {
+						delete(channel.ChannelInfo.MultiKeyStatusList, idx)
 					}
 				}
 			}
-			if len(keys) == 0 { // fallback to newline split
-				keys = strings.Split(strings.Trim(keyStr, "\n"), "\n")
-			}
 		}
-		channel.ChannelInfo.MultiKeySize = len(keys)
-		// Clean up status data that exceeds the new key count to prevent index out of range
-		if channel.ChannelInfo.MultiKeyStatusList != nil {
-			for idx := range channel.ChannelInfo.MultiKeyStatusList {
-				if idx >= channel.ChannelInfo.MultiKeySize {
-					delete(channel.ChannelInfo.MultiKeyStatusList, idx)
-				}
-			}
+		var err error
+		err = tx.Model(channel).Updates(channel).Error
+		if err != nil {
+			return err
 		}
-	}
-	var err error
-	err = tx.Model(channel).Updates(channel).Error
-	if err != nil {
-		return err
-	}
-	if err := tx.Model(channel).First(channel, "id = ?", channel.Id).Error; err != nil {
-		return err
-	}
-	err = channel.UpdateAbilities(tx)
-	return err
+		if err := tx.Model(channel).First(channel, "id = ?", channel.Id).Error; err != nil {
+			return err
+		}
+		if err := channel.UpdateAbilities(tx); err != nil {
+			return err
+		}
+		return recordChannelCostRatioChange(tx, existing.GetSetting(), *channel, "manual", "")
+	})
 }
 
 func (channel *Channel) UpdateResponseTime(responseTime int64) {
@@ -1011,6 +1025,9 @@ func (channel *Channel) ValidateSettings() error {
 	}
 	if ratio := channelParams.UpstreamCostRatio; ratio != nil && !(*ratio >= 0 && *ratio <= dto.MaxUpstreamCostRatio) {
 		return fmt.Errorf("invalid upstream_cost_ratio: %v", *ratio)
+	}
+	if err := ValidateUpstreamCostSettings(channel.Type, *channelParams); err != nil {
+		return err
 	}
 	channelOtherSettings := &dto.ChannelOtherSettings{}
 	if channel.OtherSettings != "" {

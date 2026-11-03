@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -149,8 +150,19 @@ func GetClaudeAuthHeader(token string) http.Header {
 	return h
 }
 
-func GetResponseBody(method, url string, channel *model.Channel, headers http.Header) ([]byte, error) {
-	req, err := http.NewRequest(method, url, nil)
+type responseBodyLimits struct {
+	Timeout  time.Duration
+	MaxBytes int64
+}
+
+func GetResponseBody(method, url string, channel *model.Channel, headers http.Header, limits ...responseBodyLimits) ([]byte, error) {
+	ctx := context.Background()
+	if len(limits) > 0 && limits[0].Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, limits[0].Timeout)
+		defer cancel()
+	}
+	req, err := http.NewRequestWithContext(ctx, method, url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -166,16 +178,20 @@ func GetResponseBody(method, url string, channel *model.Channel, headers http.He
 	if err != nil {
 		return nil, err
 	}
+	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("status code: %d", res.StatusCode)
 	}
-	body, err := io.ReadAll(res.Body)
+	var reader io.Reader = res.Body
+	if len(limits) > 0 && limits[0].MaxBytes > 0 {
+		reader = io.LimitReader(reader, limits[0].MaxBytes+1)
+	}
+	body, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, err
 	}
-	err = res.Body.Close()
-	if err != nil {
-		return nil, err
+	if len(limits) > 0 && limits[0].MaxBytes > 0 && int64(len(body)) > limits[0].MaxBytes {
+		return nil, fmt.Errorf("response exceeds %d bytes", limits[0].MaxBytes)
 	}
 	return body, nil
 }

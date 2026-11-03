@@ -49,7 +49,11 @@ type ChannelSettings struct {
 	// UpstreamCostRatio is what the upstream charges relative to the official
 	// price (0.3 = 30%). Consume logs snapshot it to compute the channel cost;
 	// nil means the cost is unknown, while 0 is a free channel.
-	UpstreamCostRatio *float64 `json:"upstream_cost_ratio,omitempty"`
+	UpstreamCostRatio            *float64 `json:"upstream_cost_ratio,omitempty"`
+	UpstreamCostCurrency         string   `json:"upstream_cost_currency,omitempty"`
+	UpstreamCostRatioSyncEnabled bool     `json:"upstream_cost_ratio_sync_enabled,omitempty"`
+	UpstreamCostRatioSyncMin     *float64 `json:"upstream_cost_ratio_sync_min,omitempty"`
+	UpstreamCostRatioSyncMax     *float64 `json:"upstream_cost_ratio_sync_max,omitempty"`
 }
 
 // MaxUpstreamCostRatio bounds UpstreamCostRatio.

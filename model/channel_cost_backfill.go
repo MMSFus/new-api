@@ -31,9 +31,17 @@ func ChannelCostBackfillSupported() bool {
 	return !common.UsingLogDatabase(common.DatabaseTypeClickHouse)
 }
 
+// ChannelCostTimeline freezes current settings and the available ratio history
+// at task start, so every batch uses the same fallback and historical values.
+type ChannelCostTimeline struct {
+	Ratio    *float64
+	Currency string
+	History  []ChannelCostRatioHistory
+}
+
 // PrepareChannelCostBackfill captures the scan boundary and current channel
 // ratios once. It runs in the worker, never in the management request.
-func PrepareChannelCostBackfill(ctx context.Context, filter LogFilter) (upperID int, total int64, ratios map[int]*float64, err error) {
+func PrepareChannelCostBackfill(ctx context.Context, filter LogFilter) (upperID int, total int64, ratios map[int]ChannelCostTimeline, err error) {
 	if !ChannelCostBackfillSupported() {
 		return 0, 0, nil, errors.New("Historical cost backfill is not supported by this log database")
 	}
@@ -58,9 +66,27 @@ func PrepareChannelCostBackfill(ctx context.Context, filter LogFilter) (upperID 
 	if err != nil {
 		return
 	}
-	ratios = make(map[int]*float64, len(channels))
+	ratios = make(map[int]ChannelCostTimeline, len(channels))
 	for _, channel := range channels {
-		ratios[channel.Id] = channel.GetSetting().UpstreamCostRatio
+		setting := channel.GetSetting()
+		ratios[channel.Id] = ChannelCostTimeline{Ratio: setting.UpstreamCostRatio, Currency: setting.UpstreamCostCurrency}
+	}
+	var histories []ChannelCostRatioHistory
+	historyQuery := DB.WithContext(ctx).Select("id", "channel_id", "new_ratio", "currency", "created_at")
+	if filter.EndTimestamp > 0 {
+		historyQuery = historyQuery.Where("created_at <= ?", filter.EndTimestamp)
+	}
+	if filter.Channel > 0 {
+		historyQuery = historyQuery.Where("channel_id = ?", filter.Channel)
+	}
+	err = historyQuery.Order("created_at ASC, id ASC").Find(&histories).Error
+	if err != nil {
+		return
+	}
+	for _, history := range histories {
+		timeline := ratios[history.ChannelID]
+		timeline.History = append(timeline.History, history)
+		ratios[history.ChannelID] = timeline
 	}
 	return
 }
@@ -68,7 +94,7 @@ func PrepareChannelCostBackfill(ctx context.Context, filter LogFilter) (upperID 
 // HistoricalChannelCost uses the same official-price basis as live snapshots.
 // group_ratio already includes any user-group override in relay logs. Missing
 // historical billing facts must never be substituted with today's group prices.
-func HistoricalChannelCost(log Log, ratios map[int]*float64, taskID string, timestamp int64) (string, string) {
+func HistoricalChannelCost(log Log, ratios map[int]ChannelCostTimeline, taskID string, timestamp int64) (string, string) {
 	if !gjson.Valid(log.Other) || !gjson.Parse(log.Other).IsObject() {
 		return "", "Invalid historical billing data"
 	}
@@ -80,9 +106,17 @@ func HistoricalChannelCost(log Log, ratios map[int]*float64, taskID string, time
 	if snapshot.Exists() || (root.Exists() && !root.IsObject()) {
 		return "", "Invalid historical billing data"
 	}
-	ratio, exists := ratios[log.ChannelId]
+	timeline, exists := ratios[log.ChannelId]
 	if !exists {
 		return "", "Channel no longer exists"
+	}
+	ratio, currency := timeline.Ratio, timeline.Currency
+	for i := len(timeline.History) - 1; i >= 0; i-- {
+		history := timeline.History[i]
+		if history.CreatedAt <= log.CreatedAt {
+			ratio, currency = history.NewRatio, history.Currency
+			break
+		}
 	}
 	if ratio == nil {
 		return "", "Channel cost ratio is not configured"
@@ -101,11 +135,20 @@ func HistoricalChannelCost(log Log, ratios map[int]*float64, taskID string, time
 		basis = original.Float()
 	}
 	base := basis / group.Float()
-	cost := base * *ratio
+	currency, factor, valid := channelCostCurrencyFactor(currency, gjson.Get(log.Other, "currency_usd_factor"))
+	if !valid {
+		return "", "Invalid historical billing data"
+	}
+	cost := base * *ratio * factor
+	storedFactor := factor
+	if storedFactor == 1 {
+		storedFactor = 0
+	}
 	if math.IsNaN(base) || math.IsInf(base, 0) || math.IsNaN(cost) || math.IsInf(cost, 0) {
 		return "", "Invalid historical billing data"
 	}
 	other, err := sjson.Set(log.Other, "root_info.channel_cost", ChannelCostSnapshot{
+		CostCurrency: currency, CurrencyFactor: storedFactor,
 		UpstreamRatio: *ratio, GroupRatio: group.Float(), BaseQuota: base, CostQuota: cost,
 		Source: "historical_backfill", BackfilledAt: timestamp, TaskID: taskID,
 	})
@@ -118,7 +161,7 @@ func HistoricalChannelCost(log Log, ratios map[int]*float64, taskID string, time
 // BackfillChannelCostBatch holds locks only for a bounded batch. Keyset paging
 // uses the existing (created_at, id) index; there is no OFFSET or JSON SQL scan.
 // Reading under the lock preserves concurrent metadata updates and snapshots.
-func BackfillChannelCostBatch(ctx context.Context, filter LogFilter, upperID int, cursor ChannelCostBackfillCursor, ratios map[int]*float64, taskID string) (next ChannelCostBackfillCursor, delta ChannelCostBackfillState, err error) {
+func BackfillChannelCostBatch(ctx context.Context, filter LogFilter, upperID int, cursor ChannelCostBackfillCursor, ratios map[int]ChannelCostTimeline, taskID string) (next ChannelCostBackfillCursor, delta ChannelCostBackfillState, err error) {
 	next = cursor
 	delta.Reasons = map[string]int64{}
 	if !ChannelCostBackfillSupported() {
