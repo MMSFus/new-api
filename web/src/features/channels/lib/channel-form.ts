@@ -21,6 +21,7 @@ import { z } from 'zod'
 import {
   CLAUDE_FIELD_PASSTHROUGH_TYPES,
   CHANNEL_TYPE_NEW_API,
+  CHANNEL_TYPE_SUB2API,
   CHANNEL_TYPE_OLLAMA,
   CHANNEL_TYPE_TASK_PLUGIN,
   CHANNEL_TYPE_VLLM,
@@ -86,6 +87,26 @@ export const DEFAULT_SIMULATED_CACHE_HIT_RATE_MIN = 80
 export const DEFAULT_SIMULATED_CACHE_HIT_RATE_MAX = 90
 /** Spread around a legacy single hit rate, matching the backend fallback. */
 const LEGACY_SIMULATED_CACHE_HIT_RATE_SPREAD = 3
+
+/** Valid upstream_cost_currency values; '' means the site currency. */
+export const UPSTREAM_COST_CURRENCIES = ['', 'USD', 'CNY', 'CUSTOM'] as const
+export type UpstreamCostCurrency = (typeof UPSTREAM_COST_CURRENCIES)[number]
+
+function readUpstreamCostCurrency(value: unknown): UpstreamCostCurrency {
+  return UPSTREAM_COST_CURRENCIES.find((code) => code === value) ?? ''
+}
+
+function numberToInput(value: unknown): string {
+  return typeof value === 'number' ? String(value) : ''
+}
+
+/** Parses an optional ratio input; undefined when empty, NaN when invalid. */
+function parseOptionalRatio(value: string | undefined): number | undefined {
+  const text = value?.trim() ?? ''
+  if (text === '') return undefined
+  const ratio = Number(text)
+  return Number.isFinite(ratio) && ratio >= 0 && ratio <= 100 ? ratio : Number.NaN
+}
 
 export function normalizeHttpProtocol(
   value: string | undefined | null
@@ -272,6 +293,11 @@ export const channelFormSchema = z
     simulated_cache_hit_rate_max: z.number().optional(),
     // Text so an empty input means "not set", distinct from a free channel (0).
     upstream_cost_ratio: z.string().optional(),
+    // '' means the site currency.
+    upstream_cost_currency: z.enum(UPSTREAM_COST_CURRENCIES).optional(),
+    upstream_cost_ratio_sync_enabled: z.boolean().optional(),
+    upstream_cost_ratio_sync_min: z.string().optional(),
+    upstream_cost_ratio_sync_max: z.string().optional(),
     proxy: z
       .string()
       .optional()
@@ -431,14 +457,45 @@ export const channelFormSchema = z
       )
     }
 
-    const upstreamCostRatio = data.upstream_cost_ratio?.trim() ?? ''
-    if (upstreamCostRatio !== '') {
-      const ratio = Number(upstreamCostRatio)
-      if (!Number.isFinite(ratio) || ratio < 0 || ratio > 100) {
+    if (Number.isNaN(parseOptionalRatio(data.upstream_cost_ratio))) {
+      addRequiredIssue(
+        ctx,
+        'upstream_cost_ratio',
+        ERROR_MESSAGES.INVALID_UPSTREAM_COST_RATIO
+      )
+    }
+
+    if (
+      data.upstream_cost_ratio_sync_enabled === true &&
+      data.type === CHANNEL_TYPE_SUB2API
+    ) {
+      const syncMin = parseOptionalRatio(data.upstream_cost_ratio_sync_min)
+      const syncMax = parseOptionalRatio(data.upstream_cost_ratio_sync_max)
+      if (Number.isNaN(syncMin)) {
         addRequiredIssue(
           ctx,
-          'upstream_cost_ratio',
+          'upstream_cost_ratio_sync_min',
           ERROR_MESSAGES.INVALID_UPSTREAM_COST_RATIO
+        )
+      }
+      if (Number.isNaN(syncMax)) {
+        addRequiredIssue(
+          ctx,
+          'upstream_cost_ratio_sync_max',
+          ERROR_MESSAGES.INVALID_UPSTREAM_COST_RATIO
+        )
+      }
+      if (
+        syncMin !== undefined &&
+        syncMax !== undefined &&
+        !Number.isNaN(syncMin) &&
+        !Number.isNaN(syncMax) &&
+        syncMin > syncMax
+      ) {
+        addRequiredIssue(
+          ctx,
+          'upstream_cost_ratio_sync_max',
+          ERROR_MESSAGES.INVALID_UPSTREAM_COST_RATIO_SYNC_RANGE
         )
       }
     }
@@ -512,6 +569,10 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   simulated_cache_hit_rate_min: DEFAULT_SIMULATED_CACHE_HIT_RATE_MIN,
   simulated_cache_hit_rate_max: DEFAULT_SIMULATED_CACHE_HIT_RATE_MAX,
   upstream_cost_ratio: '',
+  upstream_cost_currency: '',
+  upstream_cost_ratio_sync_enabled: false,
+  upstream_cost_ratio_sync_min: '',
+  upstream_cost_ratio_sync_max: '',
   proxy: '',
   http_protocol: HTTP_PROTOCOL_AUTO,
   http2_connection_shards: 1,
@@ -563,6 +624,10 @@ export function transformChannelToFormDefaults(
     simulated_cache_hit_rate_min: DEFAULT_SIMULATED_CACHE_HIT_RATE_MIN,
     simulated_cache_hit_rate_max: DEFAULT_SIMULATED_CACHE_HIT_RATE_MAX,
     upstream_cost_ratio: '',
+    upstream_cost_currency: '' as UpstreamCostCurrency,
+    upstream_cost_ratio_sync_enabled: false,
+    upstream_cost_ratio_sync_min: '',
+    upstream_cost_ratio_sync_max: '',
     proxy: '',
     http_protocol: HTTP_PROTOCOL_AUTO as 'auto' | 'http1',
     http2_connection_shards: 1,
@@ -625,6 +690,17 @@ export function transformChannelToFormDefaults(
           typeof parsed.upstream_cost_ratio === 'number'
             ? String(parsed.upstream_cost_ratio)
             : '',
+        upstream_cost_currency: readUpstreamCostCurrency(
+          parsed.upstream_cost_currency
+        ),
+        upstream_cost_ratio_sync_enabled:
+          parsed.upstream_cost_ratio_sync_enabled === true,
+        upstream_cost_ratio_sync_min: numberToInput(
+          parsed.upstream_cost_ratio_sync_min
+        ),
+        upstream_cost_ratio_sync_max: numberToInput(
+          parsed.upstream_cost_ratio_sync_max
+        ),
         proxy: parsed.proxy || '',
         http_protocol: protocol,
         http2_connection_shards: protocol === HTTP_PROTOCOL_HTTP1 ? 1 : shards,
@@ -799,6 +875,19 @@ export function buildSettingJSON(formData: ChannelFormValues): string {
   const upstreamCostRatio = formData.upstream_cost_ratio?.trim() ?? ''
   if (upstreamCostRatio !== '') {
     settingObj.upstream_cost_ratio = Number(upstreamCostRatio)
+  }
+  if (formData.upstream_cost_currency) {
+    settingObj.upstream_cost_currency = formData.upstream_cost_currency
+  }
+  if (
+    formData.upstream_cost_ratio_sync_enabled === true &&
+    formData.type === CHANNEL_TYPE_SUB2API
+  ) {
+    settingObj.upstream_cost_ratio_sync_enabled = true
+    const syncMin = formData.upstream_cost_ratio_sync_min?.trim() ?? ''
+    const syncMax = formData.upstream_cost_ratio_sync_max?.trim() ?? ''
+    if (syncMin !== '') settingObj.upstream_cost_ratio_sync_min = Number(syncMin)
+    if (syncMax !== '') settingObj.upstream_cost_ratio_sync_max = Number(syncMax)
   }
 
   return JSON.stringify(settingObj)

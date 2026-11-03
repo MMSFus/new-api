@@ -149,6 +149,7 @@ import {
   CHANNEL_TYPE_TASK_PLUGIN,
   CHANNEL_TYPE_VLLM,
   CHANNEL_TYPE_SGLANG,
+  CHANNEL_TYPE_SUB2API,
   CHANNEL_TYPE_WARNINGS,
   ERROR_MESSAGES,
   FIELD_PASSTHROUGH_TYPES,
@@ -238,6 +239,7 @@ import {
 } from '../model-mapping-editor'
 import { ModelRedirectPanel } from '../model-redirect-panel'
 import { ResponsesWebSocketSetting } from '../responses-websocket-setting'
+import { UpstreamCostRatioPanel } from '../upstream-cost-ratio-panel'
 import { UpstreamModelSelection } from '../upstream-model-selection'
 import {
   ChannelConfiguration,
@@ -282,6 +284,8 @@ const MODEL_MAPPING_PREVIEW_FALLBACK: Array<{
 }> = [{ source: 'client-model', target: 'upstream-model' }]
 
 const ADVANCED_CUSTOM_ROUTE_TYPE_PREVIEW_LIMIT = 3
+/** Select value standing for '' (site currency); Select items need a non-empty value. */
+const UPSTREAM_COST_SITE_CURRENCY = 'site'
 const UPSTREAM_DETECTED_MODEL_PREVIEW_LIMIT = 8
 const SENSITIVE_FORM_FIELDS = [
   'type',
@@ -307,6 +311,10 @@ const SENSITIVE_FORM_FIELDS = [
   'simulated_cache_hit_rate_min',
   'simulated_cache_hit_rate_max',
   'upstream_cost_ratio',
+  'upstream_cost_currency',
+  'upstream_cost_ratio_sync_enabled',
+  'upstream_cost_ratio_sync_min',
+  'upstream_cost_ratio_sync_max',
   'proxy',
   'http_protocol',
   'http2_connection_shards',
@@ -2375,7 +2383,126 @@ export function ChannelMutateDrawer({
             </FormItem>
           )}
         />
+
+        <FormField
+          control={form.control}
+          name='upstream_cost_currency'
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>{t('Upstream ratio currency')}</FormLabel>
+              <Select
+                value={field.value || UPSTREAM_COST_SITE_CURRENCY}
+                onValueChange={(value) =>
+                  field.onChange(
+                    value === UPSTREAM_COST_SITE_CURRENCY ? '' : value
+                  )
+                }
+                disabled={sensitiveLocked}
+              >
+                <FormControl>
+                  <SelectTrigger className='w-full'>
+                    <SelectValue />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectItem value={UPSTREAM_COST_SITE_CURRENCY}>
+                      {t('Site currency')}
+                    </SelectItem>
+                    <SelectItem value='USD'>USD</SelectItem>
+                    <SelectItem value='CNY'>CNY</SelectItem>
+                    <SelectItem value='CUSTOM'>{t('Custom currency')}</SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <FormDescription>
+                {t(FIELD_DESCRIPTIONS.UPSTREAM_COST_CURRENCY)}
+              </FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
       </div>
+
+      {currentType === CHANNEL_TYPE_SUB2API && (
+        <div className='space-y-3'>
+          <FormField
+            control={form.control}
+            name='upstream_cost_ratio_sync_enabled'
+            render={({ field }) => (
+              <FormItem className='flex items-center justify-between gap-4'>
+                <div className='space-y-0.5'>
+                  <FormLabel>{t('Auto sync upstream ratio')}</FormLabel>
+                  <FormDescription>
+                    {t(FIELD_DESCRIPTIONS.UPSTREAM_COST_RATIO_SYNC)}
+                  </FormDescription>
+                </div>
+                <FormControl>
+                  <Switch
+                    disabled={sensitiveLocked}
+                    checked={field.value === true}
+                    onCheckedChange={field.onChange}
+                  />
+                </FormControl>
+              </FormItem>
+            )}
+          />
+          {formValues.upstream_cost_ratio_sync_enabled && (
+            <div className='space-y-2'>
+              <div className='grid gap-3 sm:grid-cols-2'>
+                {(
+                  [
+                    ['upstream_cost_ratio_sync_min', t('Sync range minimum')],
+                    ['upstream_cost_ratio_sync_max', t('Sync range maximum')],
+                  ] as const
+                ).map(([name, label]) => (
+                  <FormField
+                    key={name}
+                    control={form.control}
+                    name={name}
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{label}</FormLabel>
+                        <FormControl>
+                          <Input
+                            type='number'
+                            inputMode='decimal'
+                            step='any'
+                            placeholder={t('No limit')}
+                            disabled={sensitiveLocked}
+                            {...field}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                ))}
+              </div>
+              <p className='text-muted-foreground text-xs'>
+                {t(FIELD_DESCRIPTIONS.UPSTREAM_COST_RATIO_SYNC_RANGE)}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {channelId != null && (
+        <UpstreamCostRatioPanel
+          channelId={channelId}
+          syncSupported={
+            currentType === CHANNEL_TYPE_SUB2API &&
+            currentRow?.type === CHANNEL_TYPE_SUB2API
+          }
+          disabled={sensitiveLocked}
+          onApplyRatio={(ratio) =>
+            form.setValue('upstream_cost_ratio', String(ratio), {
+              shouldDirty: true,
+              shouldValidate: true,
+            })
+          }
+        />
+      )}
 
       <FormField
         control={form.control}

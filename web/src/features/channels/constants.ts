@@ -382,6 +382,8 @@ export const ERROR_MESSAGES = {
     'Maximum hit rate must not be lower than the minimum hit rate',
   INVALID_UPSTREAM_COST_RATIO:
     'Upstream cost ratio must be a number between 0 and 100',
+  INVALID_UPSTREAM_COST_RATIO_SYNC_RANGE:
+    'Sync range minimum must not exceed the maximum',
   CREATE_FAILED: 'Failed to create channel',
   UPDATE_FAILED: 'Failed to update channel',
   DELETE_FAILED: 'Failed to delete channel',
@@ -504,6 +506,12 @@ export const FIELD_DESCRIPTIONS = {
   WEIGHT: 'Used for load balancing. Higher weight = more requests',
   UPSTREAM_COST_RATIO:
     'What upstream charges relative to the official price, e.g. 0.3 for 30%. Leave empty if unknown; requests are then left out of the cost report.',
+  UPSTREAM_COST_CURRENCY:
+    'Currency the upstream ratio is priced in. Costs are converted when it differs from the price currency of each request.',
+  UPSTREAM_COST_RATIO_SYNC:
+    'Read the ratio from the upstream /v1/sub2api/billing every 30 minutes. Peak-hour multipliers are ignored.',
+  UPSTREAM_COST_RATIO_SYNC_RANGE:
+    'Optional. A synced value outside this range is not applied.',
   TEST_MODEL: 'Model to use when testing channel connectivity',
   AUTO_BAN: 'Automatically disable channel on repeated failures',
   STATUS_CODE_MAPPING: 'Map response status codes (JSON format)',

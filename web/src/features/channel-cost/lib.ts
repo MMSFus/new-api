@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import type { TFunction } from 'i18next'
 import z from 'zod'
 
 import dayjs from '@/lib/dayjs'
@@ -27,6 +28,7 @@ import type {
   ChannelCostBucket,
   ChannelCostFilters,
   ChannelCostReport,
+  ChannelCostSnapshot,
 } from './api'
 
 /** Profit over the revenue whose cost is known; null when none is. */
@@ -49,6 +51,27 @@ export function formatPercent(
 /** Cost and profit are fractional quota; show them like charged quota. */
 export function formatCostQuota(value: number): string {
   return formatLogQuota(Math.round(value))
+}
+
+/** True when the snapshot converted between the upstream and price currencies. */
+export function hasCurrencyFactor(cost: ChannelCostSnapshot): boolean {
+  return (
+    typeof cost.currency_factor === 'number' && cost.currency_factor !== 1
+  )
+}
+
+/** "Official price X × ratio", with "× factor" when currencies differ. */
+export function formatCostFormula(
+  t: TFunction,
+  cost: ChannelCostSnapshot
+): string {
+  const formula = t('Official price {{base}} × {{ratio}}', {
+    base: formatCostQuota(cost.base_quota),
+    ratio: cost.upstream_ratio,
+  })
+  return hasCurrencyFactor(cost)
+    ? `${formula} × ${cost.currency_factor}`
+    : formula
 }
 
 export function profitTone(value: number): string | undefined {
