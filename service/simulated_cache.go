@@ -40,7 +40,9 @@ const (
 	simulatedCacheOpenAIStep = 128
 
 	simulatedCacheTTL5m  = 5 * time.Minute
+	simulatedCacheTTL30m = 30 * time.Minute
 	simulatedCacheTTL1h  = time.Hour
+	simulatedCacheTTL12h = 12 * time.Hour
 	simulatedCacheTTL24h = 24 * time.Hour
 )
 
@@ -96,9 +98,13 @@ type SimulatedCachePlan struct {
 	// lastBreakpoint / last1hBreakpoint are boundary indexes (-1 = none).
 	lastBreakpoint   int
 	last1hBreakpoint int
+	mode             string
 	// matched is the longest cached boundary index (-1 = miss).
-	matched    int
-	matchedTTL time.Duration
+	matched           int
+	matchedTTL        time.Duration
+	contentMatched    int
+	contentMatchedTTL time.Duration
+	prefixesRecorded  bool
 	// isStream is the client stream flag, used when the upstream
 	// Content-Type is neither JSON nor SSE.
 	isStream bool
@@ -128,9 +134,10 @@ type SimulatedCacheTokens struct {
 type SimulatedCacheAudit struct {
 	Version int `json:"version"`
 	// HitRate is the range maximum, kept for readers of the single rate.
-	HitRate    int `json:"hit_rate"`
-	HitRateMin int `json:"hit_rate_min"`
-	HitRateMax int `json:"hit_rate_max"`
+	HitRate    int    `json:"hit_rate"`
+	HitRateMin int    `json:"hit_rate_min"`
+	HitRateMax int    `json:"hit_rate_max"`
+	Mode       string `json:"mode"`
 	// TargetRate is the drawn rate in percent; absent on a miss.
 	TargetRate      *float64             `json:"target_rate,omitempty"`
 	ClientFormat    string               `json:"client_format"`
@@ -219,6 +226,7 @@ func PrepareSimulatedCache(c *gin.Context, info *relaycommon.RelayInfo) *Simulat
 			HitRate:      hitMax,
 			HitRateMin:   hitMin,
 			HitRateMax:   hitMax,
+			Mode:         "auto",
 			ClientFormat: string(info.RelayFormat),
 		},
 		claudeClient:     info.RelayFormat == types.RelayFormatClaude,
@@ -228,10 +236,12 @@ func PrepareSimulatedCache(c *gin.Context, info *relaycommon.RelayInfo) *Simulat
 		writeTTL:         simulatedCacheTTL5m,
 		lastBreakpoint:   -1,
 		last1hBreakpoint: -1,
+		mode:             "auto",
 		matched:          -1,
+		contentMatched:   -1,
 	}
-	if !plan.claudeClient && gjson.GetBytes(body, "prompt_cache_retention").String() == "24h" {
-		plan.writeTTL = simulatedCacheTTL24h
+	if info.RelayFormat == types.RelayFormatOpenAI || info.RelayFormat == types.RelayFormatOpenAIResponses {
+		plan.writeTTL = simulatedCacheOpenAIWriteTTL(body)
 	}
 
 	segments := simulatedCacheSegments(body, info.RelayFormat)
@@ -302,7 +312,14 @@ func (p *SimulatedCachePlan) lookupLongestPrefix() {
 
 	for k := last; k >= lowest; k-- {
 		ttl, found := storedTTL(k)
-		if !found || ttl < p.boundaries[k].ttl {
+		if !found {
+			continue
+		}
+		if p.contentMatched < 0 {
+			p.contentMatched = k
+			p.contentMatchedTTL = ttl
+		}
+		if ttl < p.boundaries[k].ttl {
 			continue
 		}
 		p.matched = k
@@ -374,6 +391,9 @@ func simulatedCacheSegments(body []byte, format types.RelayFormat) []simulatedCa
 			continue
 		}
 		value, ttl := stripCacheControl(value)
+		if format == types.RelayFormatOpenAI || format == types.RelayFormatOpenAIResponses {
+			value = stripPromptCacheBreakpoint(value)
+		}
 		data, err := common.Marshal(value)
 		if err != nil {
 			continue
@@ -388,6 +408,62 @@ func simulatedCacheSegments(body []byte, format types.RelayFormat) []simulatedCa
 		}
 	}
 	return segments
+}
+
+func stripPromptCacheBreakpoint(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		delete(v, "prompt_cache_breakpoint")
+		for key, child := range v {
+			v[key] = stripPromptCacheBreakpoint(child)
+		}
+	case []any:
+		for i, child := range v {
+			v[i] = stripPromptCacheBreakpoint(child)
+		}
+	}
+	return value
+}
+
+func simulatedCacheOpenAIWriteTTL(body []byte) time.Duration {
+	ttl := simulatedCacheTTL5m
+	if gjson.GetBytes(body, "prompt_cache_retention").String() == "24h" {
+		ttl = simulatedCacheTTL24h
+	}
+	switch gjson.GetBytes(body, "prompt_cache_options.ttl").String() {
+	case "30m":
+		ttl = max(ttl, simulatedCacheTTL30m)
+	case "12h":
+		ttl = max(ttl, simulatedCacheTTL12h)
+	}
+	var root any
+	if common.Unmarshal(body, &root) == nil {
+		if simulatedCacheHasOpenAI12hBreakpoint(root) {
+			ttl = max(ttl, simulatedCacheTTL12h)
+		}
+	}
+	return ttl
+}
+
+func simulatedCacheHasOpenAI12hBreakpoint(value any) bool {
+	switch v := value.(type) {
+	case map[string]any:
+		if breakpoint, ok := v["prompt_cache_breakpoint"].(map[string]any); ok && breakpoint["ttl"] == "12h" {
+			return true
+		}
+		for _, child := range v {
+			if simulatedCacheHasOpenAI12hBreakpoint(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range v {
+			if simulatedCacheHasOpenAI12hBreakpoint(child) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // stripCacheControl removes every "cache_control" key recursively so cache
@@ -472,6 +548,34 @@ func (p *SimulatedCachePlan) numbersFor(prompt int) simulatedCacheNumbers {
 	// A prefix hit reads the drawn share of the prompt, never the latest turn
 	// (the last segment); a new conversation (no stored prefix) reads nothing.
 	historyTokens := p.prefixTokens(prompt, len(p.boundaries)-2)
+	if p.claudeClient && p.mode == "auto" {
+		if p.lastBreakpoint >= 0 && p.prefixTokens(prompt, p.lastBreakpoint) >= simulatedCacheMinTokens {
+			p.mode = "breakpoint"
+		} else {
+			p.mode = "content"
+			p.writeTTL = simulatedCacheTTL5m
+			for _, boundary := range p.boundaries {
+				if boundary.ttl >= simulatedCacheTTL1h {
+					p.writeTTL = simulatedCacheTTL1h
+					break
+				}
+			}
+			p.matched = p.contentMatched
+			p.matchedTTL = p.contentMatchedTTL
+		}
+		if p.audit != nil {
+			p.audit.Mode = p.mode
+			p.audit.MatchedSegments = p.matched + 1
+			if p.matched >= 0 {
+				rate := math.Round(p.targetRate*100) / 100
+				p.audit.TargetRate = &rate
+			}
+		}
+		if !p.prefixesRecorded && (p.mode != "content" || historyTokens >= simulatedCacheMinTokens) {
+			p.recordPrefixes()
+			p.prefixesRecorded = true
+		}
+	}
 	var targetTokens int
 	if p.matched >= 0 {
 		targetTokens = min(simulatedCacheTokens(float64(prompt)*p.targetRate/100, prompt), historyTokens)
@@ -486,6 +590,19 @@ func (p *SimulatedCachePlan) numbersFor(prompt int) simulatedCacheNumbers {
 			cached = simulatedCacheMinTokens + (cached-simulatedCacheMinTokens)/simulatedCacheOpenAIStep*simulatedCacheOpenAIStep
 		}
 		numbers.read = min(cached, prompt)
+		return numbers
+	}
+	if p.mode == "content" {
+		if historyTokens < simulatedCacheMinTokens {
+			return numbers
+		}
+		numbers.read = targetTokens
+		numbers.creation = historyTokens - numbers.read
+		if p.writeTTL >= simulatedCacheTTL1h {
+			numbers.c1h = numbers.creation
+		} else {
+			numbers.c5m = numbers.creation
+		}
 		return numbers
 	}
 
@@ -526,14 +643,22 @@ func (p *SimulatedCachePlan) recordPrefixes() {
 			write(p.matched, p.writeTTL)
 		}
 	} else {
-		for k, boundary := range p.boundaries {
-			if boundary.ttl > 0 {
-				write(k, boundary.ttl)
+		if p.mode == "content" {
+			write(len(p.boundaries)-2, p.writeTTL)
+			write(len(p.boundaries)-1, p.writeTTL)
+			if p.matched >= 0 && p.matched != len(p.boundaries)-2 && p.matched != len(p.boundaries)-1 {
+				write(p.matched, p.writeTTL)
 			}
-		}
-		// A hit on a prefix this request no longer marks still refreshes it.
-		if p.matched >= 0 && p.boundaries[p.matched].ttl == 0 {
-			write(p.matched, p.matchedTTL)
+		} else {
+			for k, boundary := range p.boundaries {
+				if boundary.ttl > 0 {
+					write(k, boundary.ttl)
+				}
+			}
+			// A hit on a prefix this request no longer marks still refreshes it.
+			if p.matched >= 0 && p.boundaries[p.matched].ttl == 0 {
+				write(p.matched, p.matchedTTL)
+			}
 		}
 	}
 	store := getSimulatedCacheStore()
@@ -550,7 +675,10 @@ func (p *SimulatedCachePlan) WrapResponse(resp *http.Response) {
 	if p == nil || resp == nil || resp.Body == nil {
 		return
 	}
-	p.recordPrefixes()
+	if !p.claudeClient {
+		p.recordPrefixes()
+		p.prefixesRecorded = true
+	}
 	if encoding := resp.Header.Get("Content-Encoding"); encoding != "" && !strings.EqualFold(encoding, "identity") {
 		return
 	}
