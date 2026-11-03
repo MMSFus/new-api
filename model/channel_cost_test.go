@@ -411,7 +411,8 @@ func TestChannelCostRatioHistoryAcrossDatabases(t *testing.T) {
 			assert.Equal(t, *legacy.Setting, *preserved.Setting)
 			assert.True(t, db.Migrator().HasIndex(&ChannelCostRatioHistory{}, "idx_channel_cost_ratio_time"))
 
-			channel := Channel{Key: "key", Type: constant.ChannelTypeSub2API, CostRatioOperatorID: 42}
+			baseURL := "https://relay.example"
+			channel := Channel{Key: "key", Type: constant.ChannelTypeSub2API, BaseURL: &baseURL, CostRatioOperatorID: 42}
 			channel.SetSetting(dto.ChannelSettings{UpstreamCostRatio: common.GetPointer(.5), UpstreamCostCurrency: "USD"})
 			require.NoError(t, channel.Insert())
 			require.NoError(t, channel.Update())
@@ -528,16 +529,56 @@ func TestUpstreamCostSyncValidationAndRanges(t *testing.T) {
 		assert.Equal(t, tc.inRange, UpstreamCostRatioInRange(setting, tc.value))
 	}
 	for _, currency := range []string{"", "USD", "CNY", "CUSTOM"} {
-		require.NoError(t, ValidateUpstreamCostSettings(59, dto.ChannelSettings{UpstreamCostCurrency: currency, UpstreamCostRatioSyncEnabled: true}))
+		baseURL := "https://relay.example"
+		channel := &Channel{Type: constant.ChannelTypeSub2API, BaseURL: &baseURL, Key: "api-key"}
+		require.NoError(t, ValidateUpstreamCostSettings(channel, dto.ChannelSettings{UpstreamCostCurrency: currency, UpstreamCostRatioSyncEnabled: true}))
 	}
-	for _, channelType := range []int{0, 1, 58, 60, 61} {
-		require.EqualError(t, ValidateUpstreamCostSettings(channelType, dto.ChannelSettings{UpstreamCostRatioSyncEnabled: true}), OnlySub2APIRatioSync)
+	baseURL := "https://relay.example"
+	channelWithoutKey := &Channel{Type: constant.ChannelTypeOpenAI, BaseURL: &baseURL}
+	require.NoError(t, ValidateUpstreamCostSettings(channelWithoutKey, dto.ChannelSettings{UpstreamCostRatioSyncEnabled: true}))
+	for _, channelType := range []int{constant.ChannelTypeCodex, constant.ChannelTypeAntigravity, constant.ChannelTypeKimi, constant.ChannelTypeVertexAi, constant.ChannelTypeAws} {
+		channel := &Channel{Type: channelType, BaseURL: &baseURL, Key: "api-key"}
+		require.EqualError(t, ValidateUpstreamCostSettings(channel, dto.ChannelSettings{UpstreamCostRatioSyncEnabled: true}), upstreamRatioCredentials)
 	}
 	for _, setting := range []dto.ChannelSettings{
 		{UpstreamCostCurrency: "EUR"}, {UpstreamCostRatioSyncMin: common.GetPointer(-1.0)},
 		{UpstreamCostRatioSyncMax: common.GetPointer(101.0)},
 		{UpstreamCostRatioSyncMin: common.GetPointer(.8), UpstreamCostRatioSyncMax: common.GetPointer(.2)},
 	} {
-		require.Error(t, ValidateUpstreamCostSettings(59, setting))
+		baseURL := "https://relay.example"
+		require.Error(t, ValidateUpstreamCostSettings(&Channel{Type: constant.ChannelTypeSub2API, BaseURL: &baseURL, Key: "api-key"}, setting))
+	}
+}
+
+func TestUpstreamRatioSyncEligibility(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		typeID     int
+		baseURL    string
+		key        string
+		eligible   bool
+		wantReason string
+	}{
+		{"custom exact", constant.ChannelTypeOpenAI, "https://relay.example", "sk-key", true, ""},
+		{"custom subdomain", constant.ChannelTypeAnthropic, "https://edge.relay.example:8443", "sk-key", true, ""},
+		{"official exact with port", constant.ChannelTypeOpenAI, "https://api.openai.com:8443/v1", "sk-key", false, upstreamRatioOfficialAPI},
+		{"official subdomain with trailing dot", constant.ChannelTypeAnthropic, "https://proxy.anthropic.com./v1", "sk-key", false, upstreamRatioOfficialAPI},
+		{"empty URL", constant.ChannelTypeCustom, "", "sk-key", false, upstreamRatioNeedsCustomBaseURL},
+		{"invalid scheme", constant.ChannelTypeOpenAI, "ftp://relay.example", "sk-key", false, upstreamRatioNeedsCustomBaseURL},
+		{"Codex", constant.ChannelTypeCodex, "https://relay.example", "sk-key", false, upstreamRatioCredentials},
+		{"Antigravity", constant.ChannelTypeAntigravity, "https://relay.example", "sk-key", false, upstreamRatioCredentials},
+		{"Kimi OAuth", constant.ChannelTypeKimi, "https://relay.example", "sk-key", false, upstreamRatioCredentials},
+		{"Vertex", constant.ChannelTypeVertexAi, "https://relay.example", "sk-key", false, upstreamRatioCredentials},
+		{"AWS", constant.ChannelTypeAws, "https://relay.example", "sk-key", false, upstreamRatioCredentials},
+		{"JSON credentials", constant.ChannelTypeOpenAI, "https://relay.example", " {\"key\":\"value\"}", false, upstreamRatioCredentials},
+		{"missing key", constant.ChannelTypeOpenAI, "https://relay.example", " ", false, upstreamRatioCredentials},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			baseURL := tc.baseURL
+			channel := &Channel{Type: tc.typeID, BaseURL: &baseURL, Key: tc.key}
+			eligible, reason := UpstreamRatioSyncEligibility(channel)
+			assert.Equal(t, tc.eligible, eligible)
+			assert.Equal(t, tc.wantReason, reason)
+		})
 	}
 }

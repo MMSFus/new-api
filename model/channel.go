@@ -1026,7 +1026,7 @@ func (channel *Channel) ValidateSettings() error {
 	if ratio := channelParams.UpstreamCostRatio; ratio != nil && !(*ratio >= 0 && *ratio <= dto.MaxUpstreamCostRatio) {
 		return fmt.Errorf("invalid upstream_cost_ratio: %v", *ratio)
 	}
-	if err := ValidateUpstreamCostSettings(channel.Type, *channelParams); err != nil {
+	if err := ValidateUpstreamCostSettings(channel, *channelParams); err != nil {
 		return err
 	}
 	channelOtherSettings := &dto.ChannelOtherSettings{}

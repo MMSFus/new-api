@@ -72,6 +72,10 @@ func registerChannelRoutes(apiRouter *gin.RouterGroup) {
 }
 
 var channelPermissionRoutes = []permissionRoute{
+	{method: http.MethodPost, path: "/upstream_cost_ratio/batch_probe", permission: authz.ChannelOperate, handler: controller.BatchProbeChannelUpstreamCostRatios},
+	{method: http.MethodPost, path: "/upstream_cost_ratio/batch_enable", permission: authz.ChannelWrite, handler: controller.BatchEnableChannelUpstreamCostRatioSync},
+	{method: http.MethodPost, path: "/upstream_cost_ratio/batch_disable", permission: authz.ChannelWrite, handler: controller.BatchDisableChannelUpstreamCostRatioSync},
+	{method: http.MethodPost, path: "/upstream_cost_ratio/batch_sync", permission: authz.ChannelWrite, handler: controller.BatchSyncChannelUpstreamCostRatios},
 	{method: http.MethodGet, path: "/:id/upstream_cost_ratio/probe", permission: authz.ChannelOperate, handler: controller.ProbeChannelUpstreamCostRatio},
 	{method: http.MethodPost, path: "/:id/upstream_cost_ratio/sync", permission: authz.ChannelWrite, handler: controller.SyncChannelUpstreamCostRatio},
 	{method: http.MethodGet, path: "/:id/upstream_cost_ratio/history", permission: authz.ChannelRead, handler: controller.GetChannelUpstreamCostRatioHistory},

@@ -3,9 +3,11 @@ package controller
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -240,8 +242,135 @@ func TestSub2APIRatioProbeAndSync(t *testing.T) {
 	assert.Equal(t, firstSuccess, status.LastSuccessAt)
 	assert.Equal(t, "failed", status.Status)
 	channel.Type = constant.ChannelTypeOpenAI
+	body = valid
 	_, err = probeSub2APIRatio(channel)
-	require.EqualError(t, err, model.OnlySub2APIRatioSync)
+	require.NoError(t, err, "custom-base-URL OpenAI channels are eligible")
+}
+
+func TestUpstreamRatioEndpointURL(t *testing.T) {
+	for _, tc := range []struct{ baseURL, wantPath string }{
+		{"https://relay.example", "/v1/sub2api/billing"},
+		{"https://relay.example/root/v1", "/root/v1/sub2api/billing"},
+	} {
+		endpoint, err := upstreamRatioEndpointURL(tc.baseURL)
+		require.NoError(t, err)
+		parsed, err := url.Parse(endpoint)
+		require.NoError(t, err)
+		assert.Equal(t, tc.wantPath, parsed.Path)
+	}
+}
+
+func TestUpstreamRatioBatchEndpoints(t *testing.T) {
+	setupSub2APIBalanceTest(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.ChannelCostRatioHistory{}, &model.ChannelCostRatioSyncStatus{}))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/v1/sub2api/billing", r.URL.Path)
+		switch r.Header.Get("Authorization") {
+		case "Bearer unsupported":
+			_, _ = w.Write([]byte(`{"object":"other","schema_version":1,"billing_scope":"token"}`))
+		case "Bearer missing":
+			http.NotFound(w, r)
+		case "Bearer failed":
+			http.Error(w, "upstream error", http.StatusBadGateway)
+		default:
+			_, _ = w.Write([]byte(`{"object":"sub2api.key_billing","schema_version":1,"billing_scope":"token","group_rate_multiplier":0.4,"user_rate_multiplier":null,"resolved_rate_multiplier":0.2,"observed_at":"2026-11-03T10:00:00Z"}`))
+		}
+	}))
+	defer server.Close()
+
+	supported := newSub2APITestChannel(t, server.URL)
+	supported.Type = constant.ChannelTypeOpenAI
+	supported.Key = "supported"
+	raw := `{"future_setting":"keep","upstream_cost_ratio":0.35,"upstream_cost_currency":"CNY"}`
+	supported.Setting = &raw
+	require.NoError(t, model.DB.Save(supported).Error)
+	unsupported := newSub2APITestChannel(t, server.URL)
+	unsupported.Type = constant.ChannelTypeAnthropic
+	unsupported.Key = "unsupported"
+	require.NoError(t, model.DB.Save(unsupported).Error)
+	missing := newSub2APITestChannel(t, server.URL)
+	missing.Type = constant.ChannelTypeOpenAI
+	missing.Key = "missing"
+	require.NoError(t, model.DB.Save(missing).Error)
+	failed := newSub2APITestChannel(t, server.URL)
+	failed.Type = constant.ChannelTypeOpenAI
+	failed.Key = "failed"
+	require.NoError(t, model.DB.Save(failed).Error)
+	officialURL := "https://api.openai.com/v1"
+	ineligible := &model.Channel{Type: constant.ChannelTypeOpenAI, BaseURL: &officialURL, Key: "must-not-send", Name: "official"}
+	require.NoError(t, model.DB.Create(ineligible).Error)
+
+	engine := gin.New()
+	engine.Use(func(c *gin.Context) {
+		c.Set("id", 42)
+		c.Next()
+	})
+	engine.POST("/batch_probe", BatchProbeChannelUpstreamCostRatios)
+	engine.POST("/batch_enable", BatchEnableChannelUpstreamCostRatioSync)
+	engine.POST("/batch_disable", BatchDisableChannelUpstreamCostRatioSync)
+	engine.POST("/batch_sync", BatchSyncChannelUpstreamCostRatios)
+	request := func(method, path, body string) *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		engine.ServeHTTP(recorder, req)
+		return recorder
+	}
+
+	probeResponse := request(http.MethodPost, "/batch_probe", `{"ids":[`+strconv.Itoa(supported.Id)+`,`+strconv.Itoa(999999)+`,`+strconv.Itoa(unsupported.Id)+`,`+strconv.Itoa(missing.Id)+`,`+strconv.Itoa(failed.Id)+`,`+strconv.Itoa(ineligible.Id)+`,`+strconv.Itoa(supported.Id)+`]}`)
+	assert.Equal(t, http.StatusOK, probeResponse.Code)
+	items := gjson.Get(probeResponse.Body.String(), "data.items").Array()
+	require.Len(t, items, 6, "duplicate ids are removed while preserving order")
+	assert.Equal(t, int64(supported.Id), items[0].Get("channel_id").Int())
+	assert.Equal(t, "supported", items[0].Get("status").String())
+	assert.Equal(t, "not_found", items[1].Get("status").String())
+	assert.Equal(t, "unsupported", items[2].Get("status").String())
+	assert.Equal(t, "unsupported", items[3].Get("status").String(), "404 means the endpoint is unsupported")
+	assert.Equal(t, "failed", items[4].Get("status").String())
+	assert.Equal(t, "ineligible", items[5].Get("status").String())
+	assert.Equal(t, "Official provider APIs do not expose upstream ratios", items[5].Get("error").String())
+	assert.Equal(t, .2, items[0].Get("resolved_rate_multiplier").Float())
+	assert.Equal(t, gjson.Null, items[2].Get("resolved_rate_multiplier").Type)
+
+	enableResponse := request(http.MethodPost, "/batch_enable", `{"ids":[`+strconv.Itoa(supported.Id)+`],"currency":"USD","sync_min":null,"sync_max":0.5,"sync_now":true}`)
+	assert.Equal(t, http.StatusOK, enableResponse.Code)
+	assert.Equal(t, 1, int(gjson.Get(enableResponse.Body.String(), "data.summary.enabled").Int()))
+	assert.Equal(t, 1, int(gjson.Get(enableResponse.Body.String(), "data.summary.success").Int()))
+	assert.Equal(t, "success", gjson.Get(enableResponse.Body.String(), "data.items.0.sync.status").String())
+	var stored model.Channel
+	require.NoError(t, model.DB.First(&stored, supported.Id).Error)
+	assert.Equal(t, "keep", gjson.Get(*stored.Setting, "future_setting").String())
+	assert.True(t, gjson.Get(*stored.Setting, "upstream_cost_ratio_sync_enabled").Bool())
+	assert.Equal(t, "USD", gjson.Get(*stored.Setting, "upstream_cost_currency").String())
+	assert.Equal(t, .5, gjson.Get(*stored.Setting, "upstream_cost_ratio_sync_max").Float())
+	require.NotNil(t, stored.GetSetting().UpstreamCostRatio)
+	assert.Equal(t, .2, *stored.GetSetting().UpstreamCostRatio)
+	var histories []model.ChannelCostRatioHistory
+	require.NoError(t, model.DB.Where("channel_id = ?", supported.Id).Order("id DESC").Find(&histories).Error)
+	require.Len(t, histories, 2, "currency change and ratio sync each write history")
+	assert.Equal(t, "sync", histories[0].Source)
+	assert.Equal(t, "manual", histories[1].Source)
+	assert.Equal(t, 42, histories[1].OperatorID)
+
+	disableResponse := request(http.MethodPost, "/batch_disable", `{"ids":[`+strconv.Itoa(supported.Id)+`]}`)
+	assert.Equal(t, 1, int(gjson.Get(disableResponse.Body.String(), "data.updated").Int()))
+	require.NoError(t, model.DB.First(&stored, supported.Id).Error)
+	assert.False(t, gjson.Get(*stored.Setting, "upstream_cost_ratio_sync_enabled").Exists())
+	require.NotNil(t, stored.GetSetting().UpstreamCostRatio)
+	assert.Equal(t, .2, *stored.GetSetting().UpstreamCostRatio)
+	assert.Equal(t, "USD", stored.GetSetting().UpstreamCostCurrency)
+	assert.Equal(t, .5, *stored.GetSetting().UpstreamCostRatioSyncMax)
+
+	syncResponse := request(http.MethodPost, "/batch_sync", `{"ids":[`+strconv.Itoa(unsupported.Id)+`,`+strconv.Itoa(ineligible.Id)+`,999999]}`)
+	assert.Equal(t, "unsupported", gjson.Get(syncResponse.Body.String(), "data.items.0.sync.status").String())
+	assert.Equal(t, "Official provider APIs do not expose upstream ratios", gjson.Get(syncResponse.Body.String(), "data.items.1.error").String())
+	assert.Equal(t, 1, int(gjson.Get(syncResponse.Body.String(), "data.summary.unsupported").Int()))
+	assert.Equal(t, 1, int(gjson.Get(syncResponse.Body.String(), "data.summary.ineligible").Int()))
+	assert.Equal(t, 1, int(gjson.Get(syncResponse.Body.String(), "data.summary.failed").Int()))
+
+	assert.True(t, shouldSkipUnsupportedRatioRetry(&model.ChannelCostRatioSyncStatus{Status: "unsupported", LastAttemptAt: 100}, 100+int64((3*time.Hour)/time.Second)))
+	assert.True(t, shouldSkipUnsupportedRatioRetry(&model.ChannelCostRatioSyncStatus{Status: "unsupported", LastAttemptAt: 100}, 100+int64((4*time.Hour)/time.Second)-1))
+	assert.False(t, shouldSkipUnsupportedRatioRetry(&model.ChannelCostRatioSyncStatus{Status: "unsupported", LastAttemptAt: 100}, 100+int64((4*time.Hour)/time.Second)))
 }
 
 func TestSub2APIRatioEndpoints(t *testing.T) {
