@@ -16,15 +16,22 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useQueryClient } from '@tanstack/react-query'
-import { type Table } from '@tanstack/react-table'
-import { Power, PowerOff, Tag, Trash2 } from 'lucide-react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import type { Table } from '@tanstack/react-table'
+import { Gauge, Power, PowerOff, Tag, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 
 import { DataTableBulkActions as BulkActionsToolbar } from '@/components/data-table'
 import { Dialog } from '@/components/dialog'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -37,16 +44,24 @@ import {
   ADMIN_PERMISSION_RESOURCES,
   hasPermission,
 } from '@/lib/admin-permissions'
+import { handleServerError } from '@/lib/handle-server-error'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 
 import {
+  batchDisableUpstreamCostRatioSync,
+  batchSyncUpstreamCostRatio,
+} from '../api'
+import {
+  channelsQueryKeys,
   handleBatchDelete,
   handleBatchDisable,
   handleBatchEnable,
   handleBatchSetTag,
 } from '../lib'
 import type { Channel } from '../types'
+import { UpstreamRatioBatchDialog } from './dialogs/upstream-ratio-batch-dialog'
+import { UpstreamRatioBatchSummaryList } from './dialogs/upstream-ratio-batch-summary'
 
 interface DataTableBulkActionsProps<TData> {
   table: Table<TData>
@@ -60,7 +75,13 @@ export function DataTableBulkActions<TData>({
   const [showTagDialog, setShowTagDialog] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [tagValue, setTagValue] = useState('')
+  const [showRatioDetect, setShowRatioDetect] = useState(false)
   const currentUser = useAuthStore((s) => s.auth.user)
+  const canWriteChannel = hasPermission(
+    currentUser,
+    ADMIN_PERMISSION_RESOURCES.CHANNEL,
+    ADMIN_PERMISSION_ACTIONS.WRITE
+  )
   const canEditSensitive = hasPermission(
     currentUser,
     ADMIN_PERMISSION_RESOURCES.CHANNEL,
@@ -97,6 +118,28 @@ export function DataTableBulkActions<TData>({
       handleClearSelection()
     })
   }
+
+  const ratioSyncMutation = useMutation({
+    mutationFn: batchSyncUpstreamCostRatio,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: channelsQueryKeys.all })
+    },
+    onError: (error) =>
+      handleServerError(error, t('Failed to sync upstream ratio')),
+  })
+
+  const ratioDisableMutation = useMutation({
+    mutationFn: batchDisableUpstreamCostRatioSync,
+    onSuccess: async (updated) => {
+      toast.success(
+        t('Auto sync turned off for {{count}} channels', { count: updated })
+      )
+      await queryClient.invalidateQueries({ queryKey: channelsQueryKeys.all })
+      handleClearSelection()
+    },
+    onError: (error) =>
+      handleServerError(error, t('Failed to turn off upstream ratio sync')),
+  })
 
   const handleSetTag = () => {
     handleBatchSetTag(selectedIds, tagValue || null, queryClient, () => {
@@ -174,6 +217,41 @@ export function DataTableBulkActions<TData>({
           </TooltipContent>
         </Tooltip>
 
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                variant='outline'
+                size='icon'
+                className='size-8'
+                disabled={!canWriteChannel}
+                aria-label={t('Upstream ratio')}
+                title={t('Upstream ratio')}
+              />
+            }
+          >
+            <Gauge />
+            <span className='sr-only'>{t('Upstream ratio')}</span>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align='start' className='w-56'>
+            <DropdownMenuItem onClick={() => setShowRatioDetect(true)}>
+              {t('Detect and enable auto sync')}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={ratioSyncMutation.isPending}
+              onClick={() => ratioSyncMutation.mutate(selectedIds)}
+            >
+              {t('Sync upstream ratio now')}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={ratioDisableMutation.isPending}
+              onClick={() => ratioDisableMutation.mutate(selectedIds)}
+            >
+              {t('Turn off auto sync')}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+
         <Tooltip>
           <TooltipTrigger
             render={
@@ -210,6 +288,40 @@ export function DataTableBulkActions<TData>({
           </TooltipContent>
         </Tooltip>
       </BulkActionsToolbar>
+
+      <UpstreamRatioBatchDialog
+        open={showRatioDetect}
+        onOpenChange={setShowRatioDetect}
+        channelIds={selectedIds}
+        onDone={handleClearSelection}
+      />
+
+      <Dialog
+        open={ratioSyncMutation.isSuccess}
+        onOpenChange={(open) => {
+          if (open) return
+          ratioSyncMutation.reset()
+          handleClearSelection()
+        }}
+        title={t('Upstream ratio sync result')}
+        contentHeight='auto'
+        footer={
+          <Button
+            onClick={() => {
+              ratioSyncMutation.reset()
+              handleClearSelection()
+            }}
+          >
+            {t('Done')}
+          </Button>
+        }
+      >
+        {ratioSyncMutation.data && (
+          <UpstreamRatioBatchSummaryList
+            summary={ratioSyncMutation.data.summary}
+          />
+        )}
+      </Dialog>
 
       {/* Set Tag Dialog */}
       <Dialog

@@ -21,7 +21,6 @@ import { z } from 'zod'
 import {
   CLAUDE_FIELD_PASSTHROUGH_TYPES,
   CHANNEL_TYPE_NEW_API,
-  CHANNEL_TYPE_SUB2API,
   CHANNEL_TYPE_OLLAMA,
   CHANNEL_TYPE_TASK_PLUGIN,
   CHANNEL_TYPE_VLLM,
@@ -43,6 +42,7 @@ import {
 } from './advanced-custom'
 import { readTaskExtendPluginKeys } from './channel-plugin-extensions'
 import { supportsResponsesWebSocket } from './responses-websocket'
+import { getUpstreamRatioSyncEligibility } from './upstream-ratio-sync'
 
 // ============================================================================
 // Form Validation Schema
@@ -465,10 +465,18 @@ export const channelFormSchema = z
       )
     }
 
-    if (
-      data.upstream_cost_ratio_sync_enabled === true &&
-      data.type === CHANNEL_TYPE_SUB2API
-    ) {
+    if (data.upstream_cost_ratio_sync_enabled === true) {
+      const eligibility = getUpstreamRatioSyncEligibility(
+        data.type,
+        data.base_url
+      )
+      if (!eligibility.eligible) {
+        addRequiredIssue(
+          ctx,
+          'upstream_cost_ratio_sync_enabled',
+          eligibility.reason
+        )
+      }
       const syncMin = parseOptionalRatio(data.upstream_cost_ratio_sync_min)
       const syncMax = parseOptionalRatio(data.upstream_cost_ratio_sync_max)
       if (Number.isNaN(syncMin)) {
@@ -879,10 +887,7 @@ export function buildSettingJSON(formData: ChannelFormValues): string {
   if (formData.upstream_cost_currency) {
     settingObj.upstream_cost_currency = formData.upstream_cost_currency
   }
-  if (
-    formData.upstream_cost_ratio_sync_enabled === true &&
-    formData.type === CHANNEL_TYPE_SUB2API
-  ) {
+  if (formData.upstream_cost_ratio_sync_enabled === true) {
     settingObj.upstream_cost_ratio_sync_enabled = true
     const syncMin = formData.upstream_cost_ratio_sync_min?.trim() ?? ''
     const syncMax = formData.upstream_cost_ratio_sync_max?.trim() ?? ''

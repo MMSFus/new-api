@@ -912,3 +912,94 @@ export async function getUpstreamCostRatioHistory(
   )
   return requireServerSuccess(response.data).data
 }
+
+export type UpstreamRatioBatchProbeStatus =
+  | 'supported'
+  | 'unsupported'
+  | 'ineligible'
+  | 'failed'
+  | 'not_found'
+
+export type UpstreamRatioBatchProbeItem = {
+  channel_id: number
+  name: string
+  type: number
+  status: UpstreamRatioBatchProbeStatus
+  resolved_rate_multiplier: number | null
+  group_rate_multiplier: number | null
+  user_rate_multiplier: number | null
+  current_ratio: number | null
+  sync_enabled: boolean
+  error: string
+}
+
+export type UpstreamRatioBatchSummary = Partial<
+  Record<UpstreamCostRatioSyncStatus | 'enabled' | 'ineligible', number>
+>
+
+export type UpstreamRatioBatchEnableRequest = {
+  ids: number[]
+  currency: '' | 'USD' | 'CNY' | 'CUSTOM'
+  sync_min: number | null
+  sync_max: number | null
+  sync_now: boolean
+}
+
+export type UpstreamRatioBatchEnableResult = {
+  items: {
+    channel_id: number
+    enabled: boolean
+    sync: UpstreamCostRatioSyncResult | null
+    error: string
+  }[]
+  summary: UpstreamRatioBatchSummary
+}
+
+export type UpstreamRatioBatchSyncResult = {
+  items: {
+    channel_id: number
+    sync: UpstreamCostRatioSyncResult | null
+    error: string
+  }[]
+  summary: UpstreamRatioBatchSummary
+}
+
+export async function batchProbeUpstreamCostRatio(
+  ids: number[]
+): Promise<UpstreamRatioBatchProbeItem[]> {
+  const response = await api.post(
+    '/api/channel/upstream_cost_ratio/batch_probe',
+    { ids }
+  )
+  return requireServerSuccess(response.data).data.items
+}
+
+export async function batchEnableUpstreamCostRatioSync(
+  request: UpstreamRatioBatchEnableRequest
+): Promise<UpstreamRatioBatchEnableResult> {
+  const response = await api.post(
+    '/api/channel/upstream_cost_ratio/batch_enable',
+    request
+  )
+  return requireServerSuccess(response.data).data
+}
+
+export async function batchDisableUpstreamCostRatioSync(
+  ids: number[]
+): Promise<number> {
+  const response = await api.post(
+    '/api/channel/upstream_cost_ratio/batch_disable',
+    { ids }
+  )
+  return requireServerSuccess(response.data).data.updated
+}
+
+export async function batchSyncUpstreamCostRatio(
+  ids: number[]
+): Promise<UpstreamRatioBatchSyncResult> {
+  const response = await api.post(
+    '/api/channel/upstream_cost_ratio/batch_sync',
+    { ids }
+  )
+  return requireServerSuccess(response.data).data
+}

@@ -81,14 +81,26 @@ describe('upstream cost ratio sync settings', () => {
     expect(setting.upstream_cost_ratio_sync_enabled).toBe(true)
   })
 
-  test('a non-Sub2API channel never saves the sync switch', () => {
+  test('an OpenAI channel on a custom upstream saves the sync switch', () => {
     const setting = JSON.parse(
       buildSettingJSON(
         sub2apiForm({ type: 1, upstream_cost_ratio_sync_enabled: true })
       )
     )
 
-    expect(setting).not.toHaveProperty('upstream_cost_ratio_sync_enabled')
+    expect(setting.upstream_cost_ratio_sync_enabled).toBe(true)
+  })
+
+  test('enabling sync on an official API host is rejected on the switch', () => {
+    expect(
+      issuePaths(
+        sub2apiForm({
+          type: 14,
+          base_url: 'https://api.anthropic.com',
+          upstream_cost_ratio_sync_enabled: true,
+        })
+      )
+    ).toEqual(['upstream_cost_ratio_sync_enabled'])
   })
 
   test('saved sync settings load back into the form as text inputs', () => {

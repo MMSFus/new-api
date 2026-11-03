@@ -149,7 +149,6 @@ import {
   CHANNEL_TYPE_TASK_PLUGIN,
   CHANNEL_TYPE_VLLM,
   CHANNEL_TYPE_SGLANG,
-  CHANNEL_TYPE_SUB2API,
   CHANNEL_TYPE_WARNINGS,
   ERROR_MESSAGES,
   FIELD_PASSTHROUGH_TYPES,
@@ -187,6 +186,7 @@ import {
   hasModelConfigChanged,
   findMissingModelsInMapping,
   validateModelMappingJson,
+  getUpstreamRatioSyncEligibility,
 } from '../../lib'
 import {
   getChannelConfigurationSection,
@@ -600,6 +600,16 @@ export function ChannelMutateDrawer({
   const keyMode = formValues.key_mode
   const currentGroups = formValues.group
   const currentType = formValues.type
+  // Previews the backend rule; saving still validates on the server.
+  const formRatioSyncEligibility = getUpstreamRatioSyncEligibility(
+    currentType,
+    formValues.base_url
+  )
+  const savedRatioSyncEligible =
+    currentRow != null &&
+    currentRow.type === currentType &&
+    (currentRow.base_url ?? '') === (formValues.base_url ?? '') &&
+    formRatioSyncEligibility.eligible
   const baseUrlPlaceholder = [CHANNEL_TYPE_VLLM, CHANNEL_TYPE_SGLANG].includes(
     currentType
   )
@@ -2424,8 +2434,7 @@ export function ChannelMutateDrawer({
         />
       </div>
 
-      {currentType === CHANNEL_TYPE_SUB2API && (
-        <div className='space-y-3'>
+      <div className='space-y-3'>
           <FormField
             control={form.control}
             name='upstream_cost_ratio_sync_enabled'
@@ -2436,10 +2445,20 @@ export function ChannelMutateDrawer({
                   <FormDescription>
                     {t(FIELD_DESCRIPTIONS.UPSTREAM_COST_RATIO_SYNC)}
                   </FormDescription>
+                  {!formRatioSyncEligibility.eligible && (
+                    <p className='text-muted-foreground text-xs'>
+                      {t(formRatioSyncEligibility.reason)}
+                    </p>
+                  )}
+                  <FormMessage />
                 </div>
                 <FormControl>
                   <Switch
-                    disabled={sensitiveLocked}
+                    disabled={
+                      sensitiveLocked ||
+                      (!formRatioSyncEligibility.eligible &&
+                        field.value !== true)
+                    }
                     checked={field.value === true}
                     onCheckedChange={field.onChange}
                   />
@@ -2484,16 +2503,12 @@ export function ChannelMutateDrawer({
               </p>
             </div>
           )}
-        </div>
-      )}
+      </div>
 
       {channelId != null && (
         <UpstreamCostRatioPanel
           channelId={channelId}
-          syncSupported={
-            currentType === CHANNEL_TYPE_SUB2API &&
-            currentRow?.type === CHANNEL_TYPE_SUB2API
-          }
+          syncSupported={savedRatioSyncEligible}
           disabled={sensitiveLocked}
           onApplyRatio={(ratio) =>
             form.setValue('upstream_cost_ratio', String(ratio), {
