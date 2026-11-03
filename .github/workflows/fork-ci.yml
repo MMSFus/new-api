@@ -250,7 +250,7 @@ jobs:
         run: |
           mkdir -p web/dist
           touch web/dist/index.html
-          go test ./model/ -run 'TestSimulatedCacheLogSearchAcrossDatabases|TestChannelCostBackfillAcrossDatabases|TestSessionRecorderIndexAcrossDatabases|TestWaffoPancakeBoundSubscriptionPlansAcrossDatabases' -count=1 -v
+          go test ./model/ -run 'TestSimulatedCacheLogSearchAcrossDatabases|TestChannelCostBackfillAcrossDatabases|TestChannelCostRatioHistoryAcrossDatabases|TestSessionRecorderIndexAcrossDatabases|TestWaffoPancakeBoundSubscriptionPlansAcrossDatabases' -count=1 -v
 
       - name: Test Antigravity credentials on MySQL and PostgreSQL
         env:
