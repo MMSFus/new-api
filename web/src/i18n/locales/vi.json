@@ -1213,6 +1213,7 @@
     "Checks hourly while you are online, including pre-releases.": "Kiểm tra mỗi giờ khi trực tuyến, bao gồm các bản phát hành thử.",
     "Checks text extracted from supported requests against keywords, ignoring case. A match rejects the request before upstream processing and does not affect channel health. Images, audio and generated responses are not checked.": "Đối chiếu văn bản trích xuất từ yêu cầu được hỗ trợ với từ khóa, không phân biệt hoa thường. Khi khớp, yêu cầu bị từ chối trước khi gửi đến thượng nguồn và không ảnh hưởng tình trạng kênh. Không kiểm tra hình ảnh, âm thanh hay phản hồi được tạo.",
     "Chinese": "Tiếng Trung",
+    "Choose a channel or submit its ID": "Chọn kênh hoặc xác nhận ID của kênh",
     "Choose a color theme and light or dark mode.": "Choose a color theme and light or dark mode.",
     "Choose a complete upstream protocol plan or edit individual route groups.": "Chọn cấu hình giao thức thượng nguồn đầy đủ hoặc chỉnh sửa từng nhóm route.",
     "Choose a provider or plugin to configure your channel.": "Chọn nhà cung cấp hoặc plugin để cấu hình kênh.",

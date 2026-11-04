@@ -1213,6 +1213,7 @@
     "Checks hourly while you are online, including pre-releases.": "在线时每小时检查一次，包含预发布版本。",
     "Checks text extracted from supported requests against keywords, ignoring case. A match rejects the request before upstream processing and does not affect channel health. Images, audio and generated responses are not checked.": "对支持的请求中提取的文本进行关键词匹配，不区分大小写。命中后在发送上游前拒绝请求，不影响渠道健康状态。不检查图片、音频或生成的响应内容。",
     "Chinese": "中文",
+    "Choose a channel or submit its ID": "请选择渠道，或提交渠道 ID",
     "Choose a color theme and light or dark mode.": "选择配色主题以及浅色或深色模式。",
     "Choose a complete upstream protocol plan or edit individual route groups.": "选择完整的上游协议方案，或逐组编辑路由。",
     "Choose a provider or plugin to configure your channel.": "选择提供商或插件，开始配置渠道。",

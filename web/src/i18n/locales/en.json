@@ -1213,6 +1213,7 @@
     "Checks hourly while you are online, including pre-releases.": "Checks hourly while you are online, including pre-releases.",
     "Checks text extracted from supported requests against keywords, ignoring case. A match rejects the request before upstream processing and does not affect channel health. Images, audio and generated responses are not checked.": "Checks text extracted from supported requests against keywords, ignoring case. A match rejects the request before upstream processing and does not affect channel health. Images, audio and generated responses are not checked.",
     "Chinese": "Chinese",
+    "Choose a channel or submit its ID": "Choose a channel or submit its ID",
     "Choose a color theme and light or dark mode.": "Choose a color theme and light or dark mode.",
     "Choose a complete upstream protocol plan or edit individual route groups.": "Choose a complete upstream protocol plan or edit individual route groups.",
     "Choose a provider or plugin to configure your channel.": "Choose a provider or plugin to configure your channel.",

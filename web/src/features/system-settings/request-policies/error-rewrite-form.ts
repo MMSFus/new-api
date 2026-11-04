@@ -56,15 +56,6 @@ function splitList(value: string, separator: RegExp): string[] {
     .filter(Boolean)
 }
 
-function isValidRegex(pattern: string): boolean {
-  try {
-    new RegExp(pattern)
-    return true
-  } catch {
-    return false
-  }
-}
-
 export function createErrorRewriteSchema(t: TFunction) {
   const rule = z
     .object({
@@ -85,12 +76,7 @@ export function createErrorRewriteSchema(t: TFunction) {
         ),
       error_codes: z.string(),
       keywords: z.string(),
-      message_regex: z
-        .string()
-        .refine(
-          (value) => value === '' || isValidRegex(value),
-          t('Invalid regular expression')
-        ),
+      message_regex: z.string(),
       response_status_code: z
         .string()
         .refine(

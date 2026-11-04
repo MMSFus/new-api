@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ListOrdered } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -27,7 +27,7 @@ import { ErrorState } from '@/components/error-state'
 import { LoadingState } from '@/components/loading-state'
 import { Button } from '@/components/ui/button'
 
-import { saveRevenueRules } from '../api'
+import { saveRevenueRules, type RevenueRuleSet } from '../api'
 import {
   REVENUE_RULES_QUERY_KEY,
   REVENUE_SUMMARY_QUERY_KEY,
@@ -40,37 +40,58 @@ export function RevenueRulesDialog(props: { siteSymbol: string }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
+  const [editingSnapshot, setEditingSnapshot] = useState<RevenueRuleSet | null>(
+    null
+  )
   const rulesQuery = useRevenueRules(open)
+  useEffect(() => {
+    if (
+      open &&
+      editingSnapshot === null &&
+      rulesQuery.data &&
+      !rulesQuery.isFetching &&
+      !rulesQuery.isError
+    ) {
+      setEditingSnapshot(rulesQuery.data)
+    }
+  }, [
+    editingSnapshot,
+    open,
+    rulesQuery.data,
+    rulesQuery.isFetching,
+    rulesQuery.isError,
+  ])
   const mutation = useMutation({
     mutationFn: saveRevenueRules,
     // The error is shown in the dialog next to the rules.
     meta: { errorToast: false },
-    onSuccess: () => {
+    onSuccess: (savedRules) => {
+      queryClient.setQueryData(REVENUE_RULES_QUERY_KEY, savedRules)
       toast.success(t('Revenue rules saved'))
-      void queryClient.invalidateQueries({ queryKey: REVENUE_RULES_QUERY_KEY })
       void queryClient.invalidateQueries({
         queryKey: REVENUE_SUMMARY_QUERY_KEY,
       })
+      setEditingSnapshot(null)
       setOpen(false)
     },
   })
 
   let body = <LoadingState />
-  if (rulesQuery.isError) {
+  if (editingSnapshot) {
+    body = (
+      <RevenueRulesEditor
+        initial={editingSnapshot}
+        siteSymbol={props.siteSymbol}
+        saveError={mutation.error}
+        onSave={(set) => mutation.mutate(set)}
+      />
+    )
+  } else if (rulesQuery.isError) {
     body = (
       <ErrorState
         title={t('Failed to load revenue rules')}
         description={rulesQuery.error.message}
         onRetry={() => void rulesQuery.refetch()}
-      />
-    )
-  } else if (rulesQuery.data) {
-    body = (
-      <RevenueRulesEditor
-        initial={rulesQuery.data}
-        siteSymbol={props.siteSymbol}
-        saveError={mutation.error}
-        onSave={(set) => mutation.mutate(set)}
       />
     )
   }
@@ -80,6 +101,7 @@ export function RevenueRulesDialog(props: { siteSymbol: string }) {
       open={open}
       onOpenChange={(next) => {
         if (mutation.isPending) return
+        if (!next) setEditingSnapshot(null)
         setOpen(next)
         mutation.reset()
       }}
@@ -100,14 +122,17 @@ export function RevenueRulesDialog(props: { siteSymbol: string }) {
             type='button'
             variant='outline'
             disabled={mutation.isPending}
-            onClick={() => setOpen(false)}
+            onClick={() => {
+              setEditingSnapshot(null)
+              setOpen(false)
+            }}
           >
             {t('Cancel')}
           </Button>
           <Button
             type='submit'
             form={REVENUE_RULES_FORM_ID}
-            disabled={!rulesQuery.data || mutation.isPending}
+            disabled={!editingSnapshot || mutation.isPending}
           >
             {t('Save')}
           </Button>

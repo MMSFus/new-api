@@ -1213,6 +1213,7 @@
     "Checks hourly while you are online, including pre-releases.": "Проверка каждый час при подключении к сети, включая предварительные версии.",
     "Checks text extracted from supported requests against keywords, ignoring case. A match rejects the request before upstream processing and does not affect channel health. Images, audio and generated responses are not checked.": "Проверяет текст из поддерживаемых запросов по ключевым словам без учёта регистра. Совпадение отклоняет запрос до отправки провайдеру и не влияет на здоровье канала. Изображения, аудио и сгенерированные ответы не проверяются.",
     "Chinese": "Китайский",
+    "Choose a channel or submit its ID": "Выберите канал или подтвердите его ID",
     "Choose a color theme and light or dark mode.": "Choose a color theme and light or dark mode.",
     "Choose a complete upstream protocol plan or edit individual route groups.": "Выберите полную схему протокола поставщика или измените группы маршрутов.",
     "Choose a provider or plugin to configure your channel.": "Выберите поставщика или плагин для настройки канала.",

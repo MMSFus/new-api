@@ -42,6 +42,7 @@ interface ComboboxInputProps {
   popupClassName?: string
   id?: string
   allowCustomValue?: boolean
+  onSearchValueChange?: (value: string) => void
   openOnFocus?: boolean
   disabled?: boolean
   onKeyDown?: React.KeyboardEventHandler<HTMLInputElement>
@@ -60,6 +61,7 @@ export function ComboboxInput({
   popupClassName,
   id,
   allowCustomValue = false,
+  onSearchValueChange,
   openOnFocus = true,
   disabled = false,
   onKeyDown,
@@ -251,6 +253,7 @@ export function ComboboxInput({
           const nextValue = e.target.value
           setSearchValue(nextValue)
           setSearchChanged(true)
+          onSearchValueChange?.(nextValue)
           if (allowCustomValue) {
             onValueChange(nextValue)
           }

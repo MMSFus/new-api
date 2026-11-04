@@ -404,6 +404,22 @@ describe('request policy settings', () => {
     ])
   })
 
+  it('an RE2 inline flag is accepted by the form and sent to server validation', async () => {
+    await renderPolicies('/system-settings/request-policies/error-rewrite')
+    const regex = await screen.findByRole('textbox', {
+      name: 'Message regular expression',
+    })
+    fireEvent.change(regex, { target: { value: '(?i)quota' } })
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+    await waitFor(() => expect(api.patch).toHaveBeenCalledOnce())
+    const [, body] = vi.mocked(api.patch).mock.calls[0]
+    const saved = (body as { options: { ErrorRewriteRules: string } }).options
+    expect(JSON.parse(saved.ErrorRewriteRules)[0].message_regex).toBe(
+      '(?i)quota'
+    )
+  })
+
   it('an error rewrite rule without conditions shows validation and is not saved', async () => {
     await renderPolicies('/system-settings/request-policies/error-rewrite')
     await addErrorRewriteRule('Try again later')

@@ -28,6 +28,9 @@ const int = (min: number, max = Number.MAX_SAFE_INTEGER) =>
 
 const ruleSchema = z.object({
   channel_id: int(0),
+  channel_search: z
+    .string()
+    .refine((value) => value === '', 'Choose a channel or submit its ID'),
   group: z.string(),
   model: z.string(),
 })
@@ -81,6 +84,7 @@ export type RecorderRuleFormValue = z.infer<typeof ruleSchema>
 function toFormRule(rule: SessionRecorderFilterRule): RecorderRuleFormValue {
   return {
     channel_id: rule.channel_id ?? 0,
+    channel_search: '',
     group: rule.group ?? '',
     model: rule.model ?? '',
   }
@@ -120,6 +124,7 @@ export function toApiSettings(
 
 export const EMPTY_RULE: RecorderRuleFormValue = {
   channel_id: 0,
+  channel_search: '',
   group: '',
   model: '',
 }
