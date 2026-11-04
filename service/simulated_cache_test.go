@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/cachex"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	hosttypes "github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -434,6 +435,7 @@ func TestSimulatedCacheClaudeStream(t *testing.T) {
 	assert.Equal(t, creation, dUsage.Get("cache_creation_input_tokens").Int())
 	assert.Equal(t, usage.Get("cache_creation").Raw, dUsage.Get("cache_creation").Raw)
 	assert.Contains(t, out, `{"type":"content_block_delta","delta":{"type":"text_delta","text":"usage"}}`)
+	assert.Equal(t, SimulatedCacheTokens{PromptTokens: 8000, CompletionTokens: 9, CacheReadTokens: 7997}, plan.audit.Original)
 }
 
 func TestSimulatedCacheClaudeContentModeMultiTurn(t *testing.T) {
@@ -687,4 +689,203 @@ func TestSimulatedCacheAuditRecordsOriginalAndPricesBoth(t *testing.T) {
 	require.Nil(t, PrepareSimulatedCache(c2, info2))
 	stale, _ := common.GetContextKeyType[*SimulatedCacheAudit](c2, constant.ContextKeySimulatedCache)
 	assert.Nil(t, stale)
+}
+
+func simulatedCacheBillingForTest(t *testing.T) (*gin.Context, *relaycommon.RelayInfo) {
+	t.Helper()
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	return c, &relaycommon.RelayInfo{
+		FinalRequestRelayFormat: types.RelayFormatOpenAI,
+		OriginModelName:         "cache-test",
+		StartTime:               time.Now(),
+		PriceData: hosttypes.PriceData{
+			ModelRatio: 1, CompletionRatio: 5, CacheRatio: 0.1, CacheCreationRatio: 1.25,
+			CacheCreation5mRatio: 1.25, CacheCreation1hRatio: 2, CacheCreation12hRatio: 2.5,
+			GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: 1},
+		},
+	}
+}
+
+func TestSimulatedCacheOpenAICreationAliases(t *testing.T) {
+	for _, format := range []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatOpenAIResponses} {
+		for _, stream := range []bool{false, true} {
+			for _, claudeClient := range []bool{false, true} {
+				t.Run(string(format)+"/stream="+strconv.FormatBool(stream)+"/claude="+strconv.FormatBool(claudeClient), func(t *testing.T) {
+					channel := useMemorySimulatedCache(t)
+					clientFormat := format
+					req := `{"messages":[{"role":"system","content":"` + longText(9000) + `"},{"role":"user","content":"hi"}]}`
+					if format == types.RelayFormatOpenAIResponses {
+						req = `{"instructions":"` + longText(9000) + `","input":"hi"}`
+					}
+					if claudeClient {
+						clientFormat = types.RelayFormatClaude
+						req = claudeRequestForTest(`,"ttl":"1h"`, false)
+					} else {
+						seed := prepareSimulatedCacheForTest(t, channel, clientFormat, 50, req)
+						wrapSimulatedCacheBody(t, seed, "application/json", `{}`)
+					}
+					plan := prepareSimulatedCacheForTest(t, channel, clientFormat, 50, req)
+					require.NotNil(t, plan)
+					details := `{"cached_tokens":0,"cached_creation_tokens":2000,"cache_write_tokens":3000,"cache_creation_input_tokens":4000,"cache_write_tokens_details":{"ttl_30m_tokens":500,"ttl_12h_tokens":3500}}`
+					usage := `{"prompt_tokens":10000,"completion_tokens":20,"prompt_tokens_details":` + details + `,"input_tokens_details":` + details + `}`
+					if format == types.RelayFormatOpenAIResponses {
+						usage = `{"input_tokens":10000,"output_tokens":20,"input_tokens_details":` + details + `}`
+					}
+					body, contentType, usagePath := `{"usage":`+usage+`}`, "application/json", "usage"
+					if stream {
+						contentType = "text/event-stream"
+						if format == types.RelayFormatOpenAIResponses {
+							body, usagePath = `{"type":"response.completed","response":{"usage":`+usage+`}}`, "response.usage"
+						}
+						body = "data: " + body + "\n\n"
+					}
+					out := wrapSimulatedCacheBody(t, plan, contentType, body)
+					if stream {
+						frames := sseUsagePayloads(out, usagePath)
+						require.Len(t, frames, 1)
+						out = frames[0].Raw
+					}
+					var parsed dto.Usage
+					require.NoError(t, common.UnmarshalJsonStr(gjson.Get(out, usagePath).Raw, &parsed))
+					want := plan.audit.Simulated
+					assert.Equal(t, 4000, plan.audit.Original.CacheCreationTokens)
+					for _, detail := range []*dto.InputTokenDetails{&parsed.PromptTokensDetails, parsed.InputTokensDetails} {
+						if detail == nil || format == types.RelayFormatOpenAIResponses && detail == &parsed.PromptTokensDetails {
+							continue
+						}
+						assert.Equal(t, want.CacheReadTokens, detail.CachedTokens)
+						assert.Equal(t, want.CacheCreationTokens, detail.CachedCreationTokens)
+						assert.Equal(t, want.CacheCreationTokens, detail.CacheWriteTokens)
+						assert.Equal(t, want.CacheCreationTokens, detail.CacheCreationInputTokens)
+						assert.Equal(t, want.CacheCreationTokens, detail.CacheCreationTokensTotal())
+						assert.Nil(t, detail.CacheWriteTokensDetails)
+					}
+					billingUsage := &parsed
+					if format == types.RelayFormatOpenAIResponses {
+						billingUsage = relayconvert.NormalizeResponsesUsage(&parsed)
+					}
+					billingUsage = effectiveBillingUsage(billingUsage)
+					c, info := simulatedCacheBillingForTest(t)
+					summary := calculateTextQuotaSummary(c, info, billingUsage)
+					assert.Equal(t, want.CacheCreationTokens, summary.CacheCreationTokens)
+					assert.Zero(t, summary.CacheCreationTokens12h)
+					if claudeClient {
+						assert.Positive(t, want.CacheCreationTokens)
+						assert.Equal(t, want.CacheCreation1hTokens, summary.CacheCreationTokens1h)
+					} else {
+						assert.Positive(t, want.CacheReadTokens)
+						assert.Zero(t, want.CacheCreationTokens)
+						assert.Equal(t, common.QuotaFromFloat(float64(10000-want.CacheReadTokens)+float64(want.CacheReadTokens)*0.1+100), summary.Quota)
+					}
+					summary.Quota = settleTextQuota(info, &summary, billingUsage)
+					common.SetContextKey(c, constant.ContextKeySimulatedCache, plan.audit)
+					other := model.NewLogOther()
+					attachSimulatedCacheAudit(c, info, billingUsage, summary, other)
+					// 6000 ordinary + 500 short writes * 1.25 + 3500 long writes * 2.5 + 20 output * 5.
+					assert.Equal(t, int64(15475), gjson.Get(other.JSONString(), "admin_info.simulated_cache.original.quota").Int())
+				})
+			}
+		}
+	}
+}
+
+func TestSimulatedCacheOriginalCostPreservesClaudeTTL(t *testing.T) {
+	for _, format := range []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatOpenAIResponses} {
+		for _, stream := range []bool{false, true} {
+			for _, claudeClient := range []bool{false, true} {
+				t.Run(string(format)+"/stream="+strconv.FormatBool(stream)+"/claude="+strconv.FormatBool(claudeClient), func(t *testing.T) {
+					channel := useMemorySimulatedCache(t)
+					clientFormat := format
+					req := `{"messages":[{"role":"system","content":"` + longText(9000) + `"},{"role":"user","content":"hi"}]}`
+					if format == types.RelayFormatOpenAIResponses {
+						req = `{"instructions":"` + longText(9000) + `","input":"hi"}`
+					}
+					if claudeClient {
+						clientFormat, req = types.RelayFormatClaude, claudeRequestForTest("", false)
+					}
+					plan := prepareSimulatedCacheForTest(t, channel, clientFormat, 100, req)
+					require.NotNil(t, plan)
+					original := relayconvert.UsageFromClaudeAPIUsage(&dto.ClaudeUsage{
+						InputTokens: 2000, CacheCreationInputTokens: 6000,
+						CacheCreation: &dto.ClaudeCacheCreationUsage{Ephemeral1hInputTokens: 6000},
+					})
+					var bodies []string
+					for _, output := range []int{0, 7} {
+						original.BillingUsage.ClaudeUsage.OutputTokens = output
+						usage := map[string]any{
+							"prompt_tokens": original.PromptTokens, "completion_tokens": output,
+							"prompt_tokens_details": original.PromptTokensDetails, "billing_usage": original.BillingUsage,
+						}
+						if format == types.RelayFormatOpenAIResponses {
+							usage = map[string]any{
+								"input_tokens": original.PromptTokens, "output_tokens": output,
+								"input_tokens_details": original.PromptTokensDetails, "billing_usage": original.BillingUsage,
+							}
+						}
+						raw, err := common.Marshal(map[string]any{"usage": usage})
+						require.NoError(t, err)
+						bodies = append(bodies, string(raw))
+					}
+					body, contentType, completion := bodies[0], "application/json", 0
+					if stream {
+						completion = 7
+						body, contentType = "data: "+body+"\n\ndata: "+bodies[1]+"\n\n", "text/event-stream"
+					}
+					out := wrapSimulatedCacheBody(t, plan, contentType, body)
+					if stream {
+						frames := sseUsagePayloads(out, "usage")
+						require.Len(t, frames, 2)
+						out = frames[1].Raw
+					}
+					var parsed dto.Usage
+					require.NoError(t, common.UnmarshalJsonStr(gjson.Get(out, "usage").Raw, &parsed))
+					billingUsage := &parsed
+					if format == types.RelayFormatOpenAIResponses {
+						billingUsage = relayconvert.NormalizeResponsesUsage(&parsed)
+					}
+					billingUsage = effectiveBillingUsage(billingUsage)
+					for _, mode := range []string{"ratio", "tiered_expr"} {
+						t.Run(mode, func(t *testing.T) {
+							c, info := simulatedCacheBillingForTest(t)
+							if mode == "tiered_expr" {
+								// Same prices as the ratio fixture, expressed in USD per million.
+								info.TieredBillingSnapshot = makeSnapshot(cacheExpr, 1, 8000, 0)
+								info.TieredBillingSnapshot.CurrencyUSDFactor = 0.5
+							}
+							common.SetContextKey(c, constant.ContextKeySimulatedCache, plan.audit)
+							summary := calculateTextQuotaSummary(c, info, billingUsage)
+							summary.Quota = settleTextQuota(info, &summary, billingUsage)
+							usageBefore, err := common.Marshal(billingUsage)
+							require.NoError(t, err)
+							snapshotBefore, err := common.Marshal(info.TieredBillingSnapshot)
+							require.NoError(t, err)
+							other := model.NewLogOther()
+							attachSimulatedCacheAudit(c, info, billingUsage, summary, other)
+							record := gjson.Get(other.JSONString(), "admin_info.simulated_cache")
+							assert.Equal(t, int64(8000), record.Get("original.prompt_tokens").Int())
+							assert.Equal(t, int64(6000), record.Get("original.cache_creation_tokens").Int())
+							assert.Zero(t, record.Get("original.cache_creation_5m_tokens").Int())
+							assert.Equal(t, int64(6000), record.Get("original.cache_creation_1h_tokens").Int())
+							assert.Equal(t, int64(completion), record.Get("original.completion_tokens").Int())
+							wantOriginalQuota := 14000 + completion*5
+							if mode == "tiered_expr" {
+								wantOriginalQuota = common.QuotaRound(float64(wantOriginalQuota) * 0.5)
+								assert.True(t, summary.tieredApplied)
+							}
+							assert.Equal(t, int64(wantOriginalQuota), record.Get("original.quota").Int())
+							assert.Equal(t, int64(summary.Quota), record.Get("simulated.quota").Int())
+							assert.Equal(t, int64(summary.Quota-wantOriginalQuota), record.Get("quota_delta").Int())
+							assert.Nil(t, info.QuotaClamp)
+							usageAfter, err := common.Marshal(billingUsage)
+							require.NoError(t, err)
+							snapshotAfter, err := common.Marshal(info.TieredBillingSnapshot)
+							require.NoError(t, err)
+							assert.JSONEq(t, string(usageBefore), string(usageAfter))
+							assert.Equal(t, string(snapshotBefore), string(snapshotAfter))
+						})
+					}
+				})
+			}
+		}
+	}
 }
