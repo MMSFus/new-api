@@ -139,7 +139,7 @@ func (s *R2Store) objectURL(key string, query url.Values) *url.URL {
 
 func (s *R2Store) do(ctx context.Context, method, key string, query url.Values, header http.Header, body io.Reader, size int64, payloadHash string) (*http.Response, error) {
 	switch method {
-	case http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPost:
+	case http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPost, http.MethodDelete:
 	default:
 		return nil, fmt.Errorf("r2: method %s is not allowed", method)
 	}
@@ -365,6 +365,18 @@ func (s *R2Store) putMultipart(ctx context.Context, key, file string, size int64
 	if err := xml.Unmarshal(raw, &initiated); err != nil || initiated.UploadID == "" {
 		return errors.New("r2 create multipart: missing upload id")
 	}
+	completed := false
+	defer func() {
+		if completed {
+			return
+		}
+		abortCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		resp, err := s.do(abortCtx, http.MethodDelete, key, url.Values{"uploadId": {initiated.UploadID}}, nil, nil, 0, emptyPayloadHash)
+		if err == nil {
+			resp.Body.Close()
+		}
+	}()
 	partCount := int((size + multipartPart - 1) / multipartPart)
 	parts := make([]completedPart, partCount)
 	errs := make([]error, partCount)
@@ -425,6 +437,7 @@ func (s *R2Store) putMultipart(ctx context.Context, key, file string, size int64
 		}
 		return &httpStatusError{Op: "complete multipart", Status: resp.StatusCode, Code: parsed.Code}
 	}
+	completed = true
 	return nil
 }
 
