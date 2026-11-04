@@ -30,7 +30,12 @@ const ruleSchema = z.object({
   channel_id: int(0),
   channel_search: z
     .string()
-    .refine((value) => value === '', 'Choose a channel or submit its ID'),
+    // Explicit boolean return: an inferred type predicate would narrow the
+    // output type to '' and break the form's input/output type pairing.
+    .refine(
+      (value): boolean => value === '',
+      'Choose a channel or submit its ID'
+    ),
   group: z.string(),
   model: z.string(),
 })

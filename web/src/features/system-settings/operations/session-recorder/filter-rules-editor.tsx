@@ -67,7 +67,7 @@ type RuleRowProps = {
   disabled?: boolean
   onChange: (
     index: number,
-    field: 'channel_id' | 'channel_search' | 'group' | 'model',
+    field: 'channel_id' | 'group' | 'model',
     value: string
   ) => void
   onRemove: (index: number) => void

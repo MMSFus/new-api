@@ -247,9 +247,9 @@ export function remainingLegacyRateLimits(legacyValue: string): string {
   )
 }
 
-export function orderRateLimitOptionUpdates(
-  updates: Array<[string, unknown]>
-): Array<[string, unknown]> {
+export function orderRateLimitOptionUpdates<T>(
+  updates: Array<[string, T]>
+): Array<[string, T]> {
   return [...updates].sort(([left], [right]) => {
     const priority = (key: string) => {
       if (key === 'ModelRequestRateLimitGlobalGroup') return 0

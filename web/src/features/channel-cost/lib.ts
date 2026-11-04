@@ -201,7 +201,10 @@ export function trendPoints(
     if (previous) {
       previous.amount = addAmounts(previous.amount, bucket)
       previous.start = Math.min(previous.start, bucket.time)
-      previous.end = Math.max(previous.end, Math.min(range.end, bucket.time + 3599))
+      previous.end = Math.max(
+        previous.end,
+        Math.min(range.end, bucket.time + 3599)
+      )
       continue
     }
     points.set(key, {

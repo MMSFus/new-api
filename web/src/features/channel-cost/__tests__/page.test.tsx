@@ -54,7 +54,9 @@ const chart = vi.hoisted(() =>
     (_props: {
       spec: { type: string }
       onClick?: (event: { datum?: Record<string, unknown> }) => void
-      onDimensionClick?: (event: { dimensionInfo?: { value?: unknown }[] }) => void
+      onDimensionClick?: (event: {
+        dimensionInfo?: { value?: unknown }[]
+      }) => void
     }) => null
   )
 )
@@ -421,17 +423,14 @@ test('clicking a trend point drills into its day within the range', async () => 
   const get = mockApi()
   await renderPage()
   await screen.findByRole('button', { name: 'anthropic #3' })
-  const day = dayjs.unix(NOW - 3600)
-  const hourLabel = day.format('MM-DD HH:mm Z')
+  // The default week-long range plots days, keyed by the viewer-local date.
+  const dayKey = dayjs.unix(NOW - 3600).format('YYYY-MM-DD')
 
-  chartProps('line').onClick?.({ datum: { Bucket: String(NOW - 3600) } })
   chartProps('line').onDimensionClick?.({
-    dimensionInfo: [{ value: String(NOW - 3600) }],
+    dimensionInfo: [{ value: dayKey }],
   })
 
-  expect(
-    await screen.findByRole('dialog', { name: hourLabel })
-  ).toBeVisible()
+  expect(await screen.findByRole('dialog', { name: dayKey })).toBeVisible()
   await waitFor(() =>
     expect(paramsOf(get, '/api/channel_cost/logs')).toContainEqual({
       start_timestamp: Math.max(NOW - WEEK, NOW - 3600),

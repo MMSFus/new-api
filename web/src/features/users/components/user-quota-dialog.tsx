@@ -238,7 +238,7 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
                 {formatQuota(currentDebt + debtRepayment)}
               </div>
               <div>
-                {t('Total Balance')}: {formatQuota(props.currentQuota)} {'→'}{' '}
+                {t('Total Balance')}: {formatQuota(props.currentQuota)} →{' '}
                 {formatQuota(props.currentQuota + quotaValue)}
               </div>
             </>
