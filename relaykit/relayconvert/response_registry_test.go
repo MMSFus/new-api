@@ -6,6 +6,7 @@ import (
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
+	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -432,6 +433,87 @@ func TestConvertResponseUsesBillingUsageWhenRestoringNativeTargets(t *testing.T)
 	assert.Equal(t, 5, geminiValue.UsageMetadata.CandidatesTokenCount)
 	assert.Equal(t, 3, geminiValue.UsageMetadata.ThoughtsTokenCount)
 	assert.Equal(t, 17, geminiValue.UsageMetadata.TotalTokenCount)
+}
+
+func TestGeminiThoughtSignaturesRoundTripWithTheirParts(t *testing.T) {
+	response := &dto.GeminiChatResponse{Candidates: []dto.GeminiChatCandidate{{
+		Index: 0,
+		Content: dto.GeminiChatContent{Role: "model", Parts: []dto.GeminiPart{
+			{Thought: true, Text: "first thought", ThoughtSignature: []byte(`"thought-one"`)},
+			{Thought: true, Text: "second thought", ThoughtSignature: []byte(`"thought-two"`)},
+			{FunctionCall: &dto.FunctionCall{ID: "call-1", FunctionName: "lookup", Arguments: map[string]any{"q": "x"}}, ThoughtSignature: []byte(`"tool-signature"`)},
+		}},
+	}}}
+
+	for _, target := range []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatClaude} {
+		t.Run(string(target), func(t *testing.T) {
+			converted, err := ConvertResponse(nil, &convmeta.Values{ChannelMetaAttached: true}, target, response)
+			require.NoError(t, err)
+			var clientRequest any
+			if target == types.RelayFormatOpenAI {
+				openAIResponse, ok := converted.Value.(*dto.OpenAITextResponse)
+				require.True(t, ok)
+				wire, err := kitutil.Marshal(openAIResponse)
+				require.NoError(t, err)
+				require.NoError(t, kitutil.Unmarshal(wire, &openAIResponse))
+				require.Len(t, openAIResponse.Choices, 1)
+				clientRequest = dto.GeneralOpenAIRequest{Messages: []dto.Message{openAIResponse.Choices[0].Message}}
+			} else {
+				claudeResponse, ok := converted.Value.(*dto.ClaudeResponse)
+				require.True(t, ok)
+				wire, err := kitutil.Marshal(claudeResponse)
+				require.NoError(t, err)
+				var roundTripped dto.ClaudeResponse
+				require.NoError(t, kitutil.Unmarshal(wire, &roundTripped))
+				claudeResponse = &roundTripped
+				clientRequest = &dto.ClaudeRequest{Messages: []dto.ClaudeMessage{{Role: "assistant", Content: claudeResponse.Content}}}
+			}
+			request, err := ConvertRequest(nil, &convmeta.Values{ChannelMetaAttached: true}, types.RelayFormatGemini, clientRequest)
+			require.NoError(t, err)
+			geminiRequest, ok := request.Value.(*dto.GeminiChatRequest)
+			require.True(t, ok)
+			require.Len(t, geminiRequest.Contents, 1)
+			var signatures []string
+			for _, part := range geminiRequest.Contents[0].Parts {
+				if len(part.ThoughtSignature) == 0 {
+					continue
+				}
+				var signature string
+				require.NoError(t, kitutil.Unmarshal(part.ThoughtSignature, &signature))
+				signatures = append(signatures, signature)
+			}
+			assert.ElementsMatch(t, []string{"thought-one", "thought-two", "tool-signature"}, signatures)
+			foundToolSignature := false
+			for _, part := range geminiRequest.Contents[0].Parts {
+				if part.FunctionCall != nil && len(part.ThoughtSignature) > 0 {
+					var signature string
+					require.NoError(t, kitutil.Unmarshal(part.ThoughtSignature, &signature))
+					foundToolSignature = signature == "tool-signature"
+				}
+			}
+			assert.True(t, foundToolSignature)
+		})
+	}
+
+	streamed, err := ConvertStreamResponse(nil, &convmeta.Values{ChannelMetaAttached: true}, types.RelayFormatOpenAI, response)
+	require.NoError(t, err)
+	chatChunk, ok := streamed.Value.(*dto.ChatCompletionsStreamResponse)
+	require.True(t, ok)
+	require.Len(t, chatChunk.Choices, 1)
+	claudeStream, err := ConvertStreamResponse(nil, &convmeta.Values{ClaudeConvertInfo: &convmeta.ClaudeConvertInfo{}}, types.RelayFormatClaude, chatChunk)
+	require.NoError(t, err)
+	claudeEvents, ok := claudeStream.Value.([]*dto.ClaudeResponse)
+	require.True(t, ok)
+	var streamedSignatures []string
+	for _, event := range claudeEvents {
+		if event.ContentBlock != nil && event.ContentBlock.ThoughtSignature != "" {
+			streamedSignatures = append(streamedSignatures, event.ContentBlock.ThoughtSignature)
+		}
+		if event.Delta != nil && event.Delta.Signature != "" {
+			streamedSignatures = append(streamedSignatures, event.Delta.Signature)
+		}
+	}
+	assert.ElementsMatch(t, []string{"thought-one", "thought-two", "tool-signature"}, streamedSignatures)
 }
 
 func TestConvertStreamResponseDirectConverters(t *testing.T) {

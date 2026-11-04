@@ -410,10 +410,11 @@ func (r *GeneralOpenAIRequest) GetSystemRoleName() string {
 const CustomType = "custom"
 
 type ToolCallRequest struct {
-	ID       string          `json:"id,omitempty"`
-	Type     string          `json:"type"`
-	Function FunctionRequest `json:"function"`
-	Custom   json.RawMessage `json:"custom,omitempty"`
+	ID               string          `json:"id,omitempty"`
+	Type             string          `json:"type"`
+	Function         FunctionRequest `json:"function"`
+	ThoughtSignature string          `json:"thought_signature,omitempty"`
+	Custom           json.RawMessage `json:"custom,omitempty"`
 	// Native is a complete vendor tool object sent instead of the fields
 	// above. Function has no omitempty, so a non-function tool would
 	// otherwise carry "function":{"name":""}, which vendor schemas with
@@ -495,6 +496,8 @@ type Message struct {
 	// SignedThinking preserves Claude blocks across an internal conversion chain;
 	// it is never emitted to an OpenAI endpoint.
 	SignedThinking []ClaudeMediaMessage `json:"-"`
+	// ReasoningBlocks preserves separately signed Gemini thought parts across clients.
+	ReasoningBlocks []ClaudeMediaMessage `json:"reasoning_blocks,omitempty"`
 	// ReasoningSignature carries an opaque provider signature across compatible clients.
 	ReasoningSignature *string         `json:"reasoning_signature,omitempty"`
 	Role               string          `json:"role"`

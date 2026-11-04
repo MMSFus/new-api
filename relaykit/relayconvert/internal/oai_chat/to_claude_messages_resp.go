@@ -63,10 +63,11 @@ func startPendingToolBlocks(state *convmeta.ClaudeConvertInfo) []*dto.ClaudeResp
 			Index: &idx,
 			Type:  "content_block_start",
 			ContentBlock: &dto.ClaudeMediaMessage{
-				Id:    tool.ID,
-				Type:  "tool_use",
-				Name:  tool.Name,
-				Input: map[string]any{},
+				Id:               tool.ID,
+				Type:             "tool_use",
+				Name:             tool.Name,
+				Input:            map[string]any{},
+				ThoughtSignature: tool.ThoughtSignature,
 			},
 		})
 		tool.Started = true
@@ -237,6 +238,18 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 		return claudeResponses
 	} else {
 		chosenChoice := openAIResponse.Choices[0]
+		for _, block := range chosenChoice.Delta.ReasoningBlocks {
+			if state.LastMessagesType != convmeta.LastMessageTypeThinking {
+				stopOpenBlocksAndAdvance()
+				idx := state.Index
+				claudeResponses = append(claudeResponses, &dto.ClaudeResponse{Type: "content_block_start", Index: &idx, ContentBlock: &dto.ClaudeMediaMessage{Type: "thinking", Thinking: kitutil.GetPointer("")}})
+			}
+			state.LastMessagesType = convmeta.LastMessageTypeThinking
+			if block.Thinking != nil && *block.Thinking != "" {
+				claudeResponses = append(claudeResponses, &dto.ClaudeResponse{Type: "content_block_delta", Index: kitutil.GetPointer(state.Index), Delta: &dto.ClaudeMediaMessage{Type: "thinking_delta", Thinking: block.Thinking}})
+			}
+			claudeResponses = append(claudeResponses, &dto.ClaudeResponse{Type: "content_block_delta", Index: kitutil.GetPointer(state.Index), Delta: &dto.ClaudeMediaMessage{Type: "signature_delta", Signature: block.Signature}})
+		}
 		signature := chosenChoice.Delta.ReasoningSignature
 		if signature != nil && *signature != "" && chosenChoice.Delta.GetReasoningContent() == "" {
 			if state.LastMessagesType != convmeta.LastMessageTypeThinking {
@@ -299,6 +312,9 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 				if tool.Name == "" && strings.TrimSpace(toolCall.Function.Name) != "" {
 					tool.Name = strings.TrimSpace(toolCall.Function.Name)
 				}
+				if tool.ThoughtSignature == "" && toolCall.ThoughtSignature != "" {
+					tool.ThoughtSignature = toolCall.ThoughtSignature
+				}
 				if !tool.Started {
 					tool.PendingArguments += toolCall.Function.Arguments
 				}
@@ -309,10 +325,11 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 						Index: &idx,
 						Type:  "content_block_start",
 						ContentBlock: &dto.ClaudeMediaMessage{
-							Id:    tool.ID,
-							Type:  "tool_use",
-							Name:  tool.Name,
-							Input: map[string]any{},
+							Id:               tool.ID,
+							Type:             "tool_use",
+							Name:             tool.Name,
+							Input:            map[string]any{},
+							ThoughtSignature: tool.ThoughtSignature,
 						},
 					})
 					tool.Started = true
@@ -474,7 +491,9 @@ func ResponseOpenAI2Claude(openAIResponse *dto.OpenAITextResponse, info convmeta
 		reasoningContent := choice.Message.GetReasoningContent()
 		textContent := choice.Message.StringContent()
 		toolCalls := choice.Message.ParseToolCalls()
-		if reasoningContent != "" || choice.Message.ReasoningSignature != nil {
+		if len(choice.Message.SignedThinking) > 0 {
+			contents = append(contents, choice.Message.SignedThinking...)
+		} else if reasoningContent != "" || choice.Message.ReasoningSignature != nil {
 			claudeContent := dto.ClaudeMediaMessage{Type: "thinking"}
 			claudeContent.Thinking = kitutil.GetPointer(reasoningContent)
 			if choice.Message.ReasoningSignature != nil {
@@ -505,6 +524,7 @@ func ResponseOpenAI2Claude(openAIResponse *dto.OpenAITextResponse, info convmeta
 				}
 			}
 			claudeContent.Input = mapParams
+			claudeContent.ThoughtSignature = toolUse.ThoughtSignature
 			contents = append(contents, claudeContent)
 		}
 	}

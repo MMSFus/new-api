@@ -102,7 +102,12 @@ func ResponseGeminiChat2OpenAI(id string, created int64, response *dto.GeminiCha
 				if len(part.ThoughtSignature) > 0 {
 					var signature string
 					if kitutil.Unmarshal(part.ThoughtSignature, &signature) == nil && signature != "" {
-						choice.Message.ReasoningSignature = &signature
+						if part.Thought {
+							choice.Message.SignedThinking = append(choice.Message.SignedThinking, dto.ClaudeMediaMessage{Type: "thinking", Thinking: &part.Text, Signature: signature})
+							choice.Message.ReasoningBlocks = append(choice.Message.ReasoningBlocks, dto.ClaudeMediaMessage{Type: "thinking", Thinking: &part.Text, Signature: signature})
+						} else if part.FunctionCall == nil && choice.Message.ReasoningSignature == nil {
+							choice.Message.ReasoningSignature = &signature
+						}
 					}
 				}
 				if part.InlineData != nil {
@@ -236,10 +241,16 @@ func StreamResponseGeminiChat2OpenAI(geminiResponse *dto.GeminiChatResponse) (*d
 			}
 		}
 		for _, part := range candidate.Content.Parts {
+			signedThought := false
 			if len(part.ThoughtSignature) > 0 {
 				var signature string
 				if kitutil.Unmarshal(part.ThoughtSignature, &signature) == nil && signature != "" {
-					choice.Delta.ReasoningSignature = &signature
+					if part.Thought {
+						signedThought = true
+						choice.Delta.ReasoningBlocks = append(choice.Delta.ReasoningBlocks, dto.ClaudeMediaMessage{Type: "thinking", Thinking: &part.Text, Signature: signature})
+					} else if part.FunctionCall == nil && choice.Delta.ReasoningSignature == nil {
+						choice.Delta.ReasoningSignature = &signature
+					}
 				}
 			}
 			if part.InlineData != nil {
@@ -259,8 +270,10 @@ func StreamResponseGeminiChat2OpenAI(geminiResponse *dto.GeminiChatResponse) (*d
 				}
 			} else if part.Thought {
 				isThought = true
-				writeSep()
-				content.WriteString(part.Text)
+				if !signedThought {
+					writeSep()
+					content.WriteString(part.Text)
+				}
 			} else {
 				if part.ExecutableCode != nil {
 					writeSep()
@@ -741,7 +754,7 @@ func geminiResponseToolCall(item *dto.GeminiPart) *dto.ToolCallResponse {
 	if callID == "" {
 		callID = fmt.Sprintf("call_%s", kitutil.GetUUID())
 	}
-	return &dto.ToolCallResponse{
+	call := &dto.ToolCallResponse{
 		ID:   callID,
 		Type: "function",
 		Function: dto.FunctionResponse{
@@ -749,4 +762,8 @@ func geminiResponseToolCall(item *dto.GeminiPart) *dto.ToolCallResponse {
 			Name:      item.FunctionCall.FunctionName,
 		},
 	}
+	if len(item.ThoughtSignature) > 0 {
+		_ = kitutil.Unmarshal(item.ThoughtSignature, &call.ThoughtSignature)
+	}
+	return call
 }

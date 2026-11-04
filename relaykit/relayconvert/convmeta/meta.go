@@ -87,6 +87,7 @@ type ClaudeStreamToolCall struct {
 	BlockIndex       int
 	ID               string
 	Name             string
+	ThoughtSignature string
 	PendingArguments string
 	Started          bool
 }

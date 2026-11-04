@@ -87,12 +87,13 @@ type ChatCompletionsStreamResponseChoice struct {
 }
 
 type ChatCompletionsStreamResponseChoiceDelta struct {
-	ReasoningSignature *string            `json:"reasoning_signature,omitempty"`
-	Content            *string            `json:"content,omitempty"`
-	ReasoningContent   *string            `json:"reasoning_content,omitempty"`
-	Reasoning          *string            `json:"reasoning,omitempty"`
-	Role               string             `json:"role,omitempty"`
-	ToolCalls          []ToolCallResponse `json:"tool_calls,omitempty"`
+	ReasoningSignature *string              `json:"reasoning_signature,omitempty"`
+	ReasoningBlocks    []ClaudeMediaMessage `json:"reasoning_blocks,omitempty"`
+	Content            *string              `json:"content,omitempty"`
+	ReasoningContent   *string              `json:"reasoning_content,omitempty"`
+	Reasoning          *string              `json:"reasoning,omitempty"`
+	Role               string               `json:"role,omitempty"`
+	ToolCalls          []ToolCallResponse   `json:"tool_calls,omitempty"`
 	// Annotations is an OpenAI-compatible streaming extension supported by
 	// providers such as OpenRouter. Relaykit uses it to preserve streaming URL
 	// citations, including Claude round-trip metadata.
@@ -127,10 +128,11 @@ func (c *ChatCompletionsStreamResponseChoiceDelta) SetReasoningContent(s string)
 
 type ToolCallResponse struct {
 	// Index is not nil only in chat completion chunk object
-	Index    *int             `json:"index,omitempty"`
-	ID       string           `json:"id,omitempty"`
-	Type     any              `json:"type"`
-	Function FunctionResponse `json:"function"`
+	Index            *int             `json:"index,omitempty"`
+	ID               string           `json:"id,omitempty"`
+	Type             any              `json:"type"`
+	Function         FunctionResponse `json:"function"`
+	ThoughtSignature string           `json:"thought_signature,omitempty"`
 }
 
 func (c *ToolCallResponse) SetIndex(i int) {

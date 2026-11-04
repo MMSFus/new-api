@@ -239,8 +239,9 @@ func ClaudeMessagesRequestToOpenAIChat(ctx context.Context, claudeRequest dto.Cl
 					})
 				case "tool_use":
 					toolCall := dto.ToolCallRequest{
-						ID:   mediaMsg.Id,
-						Type: "function",
+						ID:               mediaMsg.Id,
+						Type:             "function",
+						ThoughtSignature: mediaMsg.ThoughtSignature,
 						Function: dto.FunctionRequest{
 							Name:      mediaMsg.Name,
 							Arguments: requestToJSONString(mediaMsg.Input),

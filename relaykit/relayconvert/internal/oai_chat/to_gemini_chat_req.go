@@ -240,7 +240,11 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 		}
 
 		var parts []dto.GeminiPart
-		for _, block := range message.SignedThinking {
+		signedThinking := message.SignedThinking
+		if len(signedThinking) == 0 {
+			signedThinking = message.ReasoningBlocks
+		}
+		for _, block := range signedThinking {
 			signature, _ := kitutil.Marshal(block.Signature)
 			text := ""
 			if block.Thinking != nil {
@@ -271,6 +275,9 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 						FunctionName: call.Function.Name,
 						Arguments:    args,
 					},
+				}
+				if call.ThoughtSignature != "" {
+					toolCall.ThoughtSignature, _ = kitutil.Marshal(call.ThoughtSignature)
 				}
 				if shouldAttachThoughtSignature && !signatureAttached && sharedgemini.AttachFunctionCallThoughtSignature(opts, &toolCall) {
 					signatureAttached = true
