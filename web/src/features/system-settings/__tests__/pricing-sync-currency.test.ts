@@ -55,6 +55,45 @@ const snapshot: ModelPricingConfig = {
 }
 
 describe('upstream price sync with a currency mark', () => {
+  it('saves a currency-only change when the USD expression text is identical', () => {
+    const expression = 'tier("base", p * 7)'
+    const configured = {
+      ModelPriceCurrency: 'CNY',
+      'billing_setting.billing_mode': 'tiered_expr',
+      'billing_setting.billing_expr': expression,
+    }
+    const expressionBefore = pricingOptions({
+      ...before,
+      'billing_setting.billing_mode': JSON.stringify({
+        'cny-model': 'tiered_expr',
+      }),
+      'billing_setting.billing_expr': JSON.stringify({
+        'cny-model': expression,
+      }),
+    })
+    const expressionSnapshot: ModelPricingConfig = {
+      ...snapshot,
+      options: expressionBefore,
+      entries: [{ ...snapshot.entries[0], configured, effective: configured }],
+    }
+    const after = applyPriceSyncSelections(expressionBefore, {
+      'cny-model': { billing_mode: 'tiered_expr', billing_expr: expression },
+    })
+    expect(
+      buildPricingChanges(expressionSnapshot, expressionBefore, after)
+    ).toEqual([
+      {
+        model_name: 'cny-model',
+        expected_version: 'v1',
+        pricing: {
+          'billing_setting.billing_mode': 'tiered_expr',
+          'billing_setting.billing_expr': expression,
+        },
+      },
+    ])
+    expect(JSON.parse(after.ModelPriceCurrency)).toEqual({ other: 'CNY' })
+  })
+
   it.each([
     ['a USD ratio', { model_ratio: 0.5, billing_mode: 'ratio' }],
     ['a USD fixed price', { model_price: 0.02, billing_mode: 'ratio' }],

@@ -137,6 +137,18 @@ func getLocalPricingSyncData() map[string]any {
 	data["image_ratio"] = ratio_setting.GetImageRatioCopy()
 	data["audio_ratio"] = ratio_setting.GetAudioRatioCopy()
 	data["audio_completion_ratio"] = ratio_setting.GetAudioCompletionRatioCopy()
+	// Comparison needs the selected expression's currency, not the legacy
+	// price mark: configured expressions inherit aliases, built-ins are USD.
+	expressionCurrencies := make(map[string]string)
+	for name := range valueMap(data[billing_setting.BillingExprField]) {
+		// Only the code is compared. An unavailable foreign rate must still
+		// differ from an importable USD expression; no factor fallback is used.
+		code, _, _ := billing_setting.ResolveBillingExprCurrency(name)
+		if code != operation_setting.CurrencyUSD {
+			expressionCurrencies[name] = code
+		}
+	}
+	data[ratio_setting.ModelPriceCurrencyOptionSyncField] = expressionCurrencies
 	return data
 }
 
@@ -144,7 +156,9 @@ func getLocalPricingSyncData() map[string]any {
 // inactive expression and numeric settings covered by an active expression
 // are not separate prices and must not appear as synchronization differences.
 func effectivePricingSyncData(data map[string]any) map[string]any {
-	result := make(map[string]any, len(pricingSyncFields))
+	result := make(map[string]any, len(pricingSyncFields)+1)
+	// Currency is comparison/filtering metadata, never an importable field.
+	result[ratio_setting.ModelPriceCurrencyOptionSyncField] = valueMap(data[ratio_setting.ModelPriceCurrencyOptionSyncField])
 	names := make(map[string]struct{})
 	for _, field := range pricingSyncFields {
 		entries := make(map[string]any)
@@ -199,17 +213,20 @@ func effectivePricingSyncData(data map[string]any) map[string]any {
 	return result
 }
 
-// dropForeignCurrencyExpressions removes upstream expressions that the
-// upstream marked as CNY/CUSTOM. Synced prices are treated as USD, and an
-// expression cannot be converted, so importing it would misprice the model.
-// Numeric upstream prices are exported as USD effective values.
+// dropForeignCurrencyExpressions removes non-USD upstream expressions after
+// effectivePricingSyncData has removed their inactive numeric prices. Synced
+// prices are treated as USD, and expressions cannot safely be converted.
+// Numeric upstream prices are already exported as USD effective values.
 func dropForeignCurrencyExpressions(data map[string]any) {
-	for name, code := range valueMap(data[ratio_setting.ModelPriceCurrencyOptionSyncField]) {
-		if code == "" || code == operation_setting.CurrencyUSD {
+	currencies := valueMap(data[ratio_setting.ModelPriceCurrencyOptionSyncField])
+	for name := range valueMap(data[billing_setting.BillingExprField]) {
+		code := currencies[ratio_setting.FormatMatchingModelName(name)]
+		if code == nil || code == "" || code == operation_setting.CurrencyUSD {
 			continue
 		}
-		delete(valueMap(data[billing_setting.BillingExprField]), name)
-		delete(valueMap(data[billing_setting.BillingModeField]), name)
+		for _, field := range pricingSyncFields {
+			delete(valueMap(data[field]), name)
+		}
 	}
 }
 
@@ -614,13 +631,12 @@ func FetchUpstreamRatios(c *gin.Context) {
 				Name:   r.Name,
 				Status: "success",
 			})
+			data := effectivePricingSyncData(r.Data)
+			dropForeignCurrencyExpressions(data)
 			successfulChannels = append(successfulChannels, struct {
 				name string
 				data map[string]any
-			}{name: r.Name, data: func() map[string]any {
-				dropForeignCurrencyExpressions(r.Data)
-				return effectivePricingSyncData(r.Data)
-			}()})
+			}{name: r.Name, data: data})
 		}
 	}
 
@@ -777,9 +793,18 @@ func buildDifferences(localData map[string]any, successfulChannels []struct {
 					upstreamValue = normalizeSyncValue(ratioType, val)
 					hasUpstreamValue = true
 
-					if localValue != nil && !valuesEqual(localValue, upstreamValue) {
+					equal := valuesEqual(localValue, upstreamValue)
+					if ratioType == billing_setting.BillingExprField {
+						// All importable expressions are USD. Identical text in a
+						// local foreign currency still changes the billing contract.
+						code := valueMap(localData[ratio_setting.ModelPriceCurrencyOptionSyncField])[modelName]
+						if code != nil && code != "" && code != operation_setting.CurrencyUSD {
+							equal = false
+						}
+					}
+					if localValue != nil && !equal {
 						hasDifference = true
-					} else if valuesEqual(localValue, upstreamValue) {
+					} else if equal {
 						upstreamValue = "same"
 					}
 				}
