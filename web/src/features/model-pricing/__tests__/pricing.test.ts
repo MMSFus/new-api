@@ -235,3 +235,94 @@ it('commits source provider edits while preserving target providers during batch
     'beta::target': '2',
   })
 })
+
+it.each(['CNY', 'CUSTOM'] as const)(
+  'rejects copying %s pricing over retained USD provider overrides without changing any draft',
+  (currency) => {
+    const options = pricingOptions({
+      ModelPrice: '{"target":1}',
+      'billing_setting.plugin_billing_expr': JSON.stringify({
+        'alpha::target': 'tier("base", u("seconds") * 1)',
+      }),
+    })
+    const original = { ...options }
+    expect(() =>
+      applyPricingDraft(
+        options,
+        {
+          name: 'source',
+          billingMode: 'per-request',
+          price: '8',
+          priceCurrency: currency,
+        },
+        ['target']
+      )
+    ).toThrow(/provider overrides/)
+    expect(options).toEqual(original)
+  }
+)
+
+it.each(['CNY', 'CUSTOM'] as const)(
+  'rejects synchronizing USD pricing over retained %s provider overrides',
+  (currency) => {
+    const options = pricingOptions({
+      ModelPriceCurrency: JSON.stringify({ target: currency }),
+      'billing_setting.plugin_billing_expr': JSON.stringify({
+        'alpha::target': 'tier("base", u("seconds") * 1)',
+      }),
+    })
+    const selections: Record<string, number | string>[] = [
+      { model_price: 1 },
+      { billing_expr: 'tier("base", p * 1)' },
+    ]
+    for (const fields of selections) {
+      expect(() =>
+        applyPriceSyncSelections(options, { target: fields })
+      ).toThrow(/provider overrides/)
+    }
+  }
+)
+
+it('copies prices in the same currency while preserving target providers and explicit source edits', () => {
+  const key = 'billing_setting.plugin_billing_expr'
+  const options = pricingOptions({
+    ModelPriceCurrency: '{"target":"CNY"}',
+    [key]: JSON.stringify({ 'alpha::source': '1', 'beta::target': '2' }),
+  })
+  const after = applyPricingDraft(
+    options,
+    {
+      name: 'source',
+      billingMode: 'per-request',
+      price: '8',
+      priceCurrency: 'CNY',
+      pluginBillingExpr: { alpha: '8' },
+    },
+    ['source', 'target']
+  )
+  expect(JSON.parse(after.ModelPrice)).toEqual({ source: 8, target: 8 })
+  expect(JSON.parse(after[key])).toEqual({
+    'alpha::source': '8',
+    'beta::target': '2',
+  })
+})
+
+it('rejects copying USD pricing over retained non-USD providers, but allows currency changes without providers', () => {
+  const options = pricingOptions({
+    ModelPriceCurrency: '{"target":"CNY","unbound":"CNY"}',
+    'billing_setting.plugin_billing_expr': '{"alpha::target":"1"}',
+  })
+  const draft = {
+    name: 'source',
+    billingMode: 'per-request',
+    price: '1',
+  } as const
+  expect(() => applyPricingDraft(options, draft, ['target'])).toThrow(
+    /provider overrides/
+  )
+  expect(
+    JSON.parse(
+      applyPricingDraft(options, draft, ['unbound']).ModelPriceCurrency
+    )
+  ).toEqual({ target: 'CNY' })
+})

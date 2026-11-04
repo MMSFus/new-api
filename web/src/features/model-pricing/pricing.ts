@@ -280,7 +280,11 @@ export function applyPricingDraft(
   // to other models, while still committing the source provider draft.
   const copied = { ...values }
   delete copied['billing_setting.plugin_billing_expr']
-  const next = applyPricingValues(options, copied, names)
+  const next = applyPricingValues(
+    options,
+    copied,
+    names.filter((name) => name !== data.name)
+  )
   return names.includes(data.name)
     ? applyPricingValues(next, values, [data.name])
     : next
@@ -291,6 +295,28 @@ function applyPricingValues(
   values: PricingValues,
   names: string[]
 ): PricingOptions {
+  if (values['billing_setting.plugin_billing_expr'] === undefined) {
+    const currencies = JSON.parse(options.ModelPriceCurrency) as Record<
+      string,
+      string
+    >
+    const providers = Object.keys(
+      JSON.parse(options['billing_setting.plugin_billing_expr'])
+    )
+    for (const name of names) {
+      if (
+        parseAmountCurrency(currencies[name]) !==
+          parseAmountCurrency(values.ModelPriceCurrency) &&
+        providers.some((key) => splitPluginBillingExprKey(key)?.[1] === name)
+      ) {
+        throw new Error(
+          t(
+            'Cannot change price currency while retaining provider overrides. Edit or remove the provider prices first.'
+          )
+        )
+      }
+    }
+  }
   return Object.fromEntries(
     PRICING_KEYS.map((key) => {
       const map = JSON.parse(options[key] ?? '{}') as Record<

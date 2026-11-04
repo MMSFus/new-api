@@ -124,10 +124,14 @@ test('zero threshold disables bypass and saves as zero', async () => {
   })
   fireEvent.change(input, { target: { value: '0' } })
   fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+  // The threshold is an amount field: it is saved atomically together with
+  // its currency marks and the other amount fields.
   await waitFor(() =>
-    expect(api.put).toHaveBeenCalledWith('/api/option/', {
-      key: 'quota_setting.trust_quota_usd',
-      value: 0,
+    expect(api.put).toHaveBeenCalledWith('/api/option/quota/amounts', {
+      values: expect.objectContaining({
+        'quota_setting.amount_currency': '{}',
+        'quota_setting.trust_quota_usd': '0',
+      }),
     })
   )
 })

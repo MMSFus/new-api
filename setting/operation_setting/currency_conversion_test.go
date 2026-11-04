@@ -174,6 +174,9 @@ func withAmountCurrencies(t *testing.T, cny, custom float64, marks map[string]st
 // Unmarked reward fields keep their quota value; marked ones store a currency
 // amount converted with amount * factor * QuotaPerUnit at the current rate.
 func TestRewardQuotaAndTrustQuota(t *testing.T) {
+	previous, previousUnit := common.QuotaForNewUser, common.QuotaPerUnit
+	common.QuotaForNewUser, common.QuotaPerUnit = 123456, 500000
+	t.Cleanup(func() { common.QuotaForNewUser, common.QuotaPerUnit = previous, previousUnit })
 	withAmountCurrencies(t, 8, 2, map[string]string{
 		AmountFieldQuotaForInviter: CurrencyCNY,
 		AmountFieldQuotaForInvitee: CurrencyCustom,
@@ -185,16 +188,15 @@ func TestRewardQuotaAndTrustQuota(t *testing.T) {
 
 	tests := []struct {
 		field string
-		value int
 		want  int
 	}{
-		{AmountFieldQuotaForNewUser, 123456, 123456}, // unmarked: unchanged
-		{AmountFieldQuotaForInviter, 4, 250000},      // 4 CNY / 8 * 500000
-		{AmountFieldQuotaForInvitee, 0, 125000},      // 0.5 CUSTOM / 2 * 500000
+		{AmountFieldQuotaForNewUser, 123456}, // unmarked: unchanged
+		{AmountFieldQuotaForInviter, 250000}, // 4 CNY / 8 * 500000
+		{AmountFieldQuotaForInvitee, 125000}, // 0.5 CUSTOM / 2 * 500000
 	}
 	for _, tt := range tests {
 		t.Run(tt.field, func(t *testing.T) {
-			got, err := RewardQuota(tt.field, tt.value)
+			got, err := RewardQuota(tt.field)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 		})
@@ -203,9 +205,9 @@ func TestRewardQuotaAndTrustQuota(t *testing.T) {
 
 	// Invalid rate: rewards fail (callers skip them), trust bypass is disabled.
 	USDExchangeRate = math.NaN()
-	_, err := RewardQuota(AmountFieldQuotaForInviter, 4)
+	_, err := RewardQuota(AmountFieldQuotaForInviter)
 	assert.Error(t, err)
-	got, err := RewardQuota(AmountFieldQuotaForNewUser, 123456)
+	got, err := RewardQuota(AmountFieldQuotaForNewUser)
 	require.NoError(t, err)
 	assert.Equal(t, 123456, got)
 	assert.Equal(t, float64(0), TrustQuota())

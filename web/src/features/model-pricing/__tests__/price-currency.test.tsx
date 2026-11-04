@@ -17,7 +17,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { QueryClientProvider, type QueryClient } from '@tanstack/react-query'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { AxiosAdapter } from 'axios'
 import { toast } from 'sonner'
@@ -33,7 +39,7 @@ import {
   type CurrencyDisplayType,
 } from '@/stores/system-config-store'
 
-import type { ModelPricingConfig } from '../api'
+import type { ModelPricingConfig, ModelPricingEntry } from '../api'
 import { ModelPricingPanel } from '../model-pricing-panel'
 import { pricingOptions, type PricingValues } from '../pricing'
 
@@ -57,11 +63,13 @@ function renderPanel(
   configured: PricingValues,
   patch: () => { success: boolean; message?: string } = () => ({
     success: true,
-  })
+  }),
+  details: Pick<ModelPricingEntry, 'billing_details' | 'cache_write_mode'> = {}
 ) {
   const snapshot: ModelPricingConfig = {
     entries: [
       {
+        ...details,
         model_name: 'example',
         version: 'v1',
         configured,
@@ -211,4 +219,67 @@ describe('model price currency', () => {
       screen.getByRole('combobox', { name: 'Price currency' })
     ).toHaveTextContent('Chinese yuan (CNY)')
   })
+})
+
+it.each([
+  ['USD', '$0.5', '$1.25', '$2', '$3', '$6'],
+  ['site', '¥4', '¥10', '¥16', '¥24', '¥48'],
+] as const)(
+  'normalizes CNY cache, image and audio prices before %s display conversion',
+  async (preference, cache, write, image, audio, output) => {
+    usePricingPreferencesStore.setState({ currency: preference })
+    renderPanel({
+      ModelPriceCurrency: 'CNY',
+      ModelRatio: 4,
+      CacheRatio: 0.5,
+      CreateCacheRatio: 1.25,
+      ImageRatio: 2,
+      AudioRatio: 3,
+      AudioCompletionRatio: 2,
+    })
+    const current = within(
+      await screen.findByRole('region', { name: 'Current Billing' })
+    )
+    for (const [label, amount] of [
+      ['Cache read price', cache],
+      ['Cache write price', write],
+      ['Image input price', image],
+      ['Audio input price', audio],
+      ['Audio output price', output],
+    ]) {
+      expect(current.getByText(label).nextElementSibling).toHaveTextContent(
+        `${amount} / 1M`
+      )
+    }
+  }
+)
+
+it('keeps backend USD audio prices unchanged while normalizing CNY cache prices', async () => {
+  renderPanel(
+    {
+      ModelPriceCurrency: 'CNY',
+      ModelRatio: 4,
+      CacheRatio: 0.5,
+      CreateCacheRatio: 1.25,
+      AudioRatio: 3,
+      AudioCompletionRatio: 2,
+    },
+    undefined,
+    {
+      cache_write_mode: 'claude_ttl',
+      billing_details: { audio_input_price: 0.75, audio_output_price: 1.5 },
+    }
+  )
+  const current = within(
+    await screen.findByRole('region', { name: 'Current Billing' })
+  )
+  expect(
+    current.getByText('Audio input price').nextElementSibling
+  ).toHaveTextContent('$0.75 / 1M')
+  expect(
+    current.getByText('Audio output price').nextElementSibling
+  ).toHaveTextContent('$1.5 / 1M')
+  expect(
+    current.getByText('Cache create (1h) price').nextElementSibling
+  ).toHaveTextContent('$2 / 1M')
 })

@@ -45,6 +45,13 @@ export async function updateSystemOption(request: UpdateOptionRequest) {
   return res.data
 }
 
+export async function updateQuotaAmounts(values: Record<string, string>) {
+  const res = await api.put<UpdateOptionResponse>('/api/option/quota/amounts', {
+    values,
+  })
+  return res.data
+}
+
 export async function updatePasskeyDomains(
   request: UpdatePasskeyDomainsRequest
 ) {

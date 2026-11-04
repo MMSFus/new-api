@@ -55,7 +55,10 @@ import {
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useSettingsForm } from '../hooks/use-settings-form'
-import { useUpdateOption } from '../hooks/use-update-option'
+import {
+  useUpdateOption,
+  useUpdateQuotaAmounts,
+} from '../hooks/use-update-option'
 
 /** Reward options stored in quota units unless marked with a currency. */
 const REWARD_FIELDS = [
@@ -167,6 +170,7 @@ export function QuotaSettingsSection({
 }: QuotaSettingsSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const updateQuotaAmounts = useUpdateQuotaAmounts()
   const quotaPerUnit = useSystemConfigStore(
     (state) => state.config.currency.quotaPerUnit
   )
@@ -190,20 +194,21 @@ export function QuotaSettingsSection({
         QuotaFormValues
       >,
       defaultValues: normalizedDefaults,
-      onSubmit: async (_data, changedFields) => {
-        const nextMarks = changedFields[AMOUNT_CURRENCY_KEY]
-        const entries = Object.entries(changedFields).filter(
-          ([key]) => key !== AMOUNT_CURRENCY_KEY
-        )
-        // Marks go first so a later amount is never read in the old unit. A
-        // rejected mark (e.g. no valid rate) stops before amounts are saved.
-        if (typeof nextMarks === 'string') {
-          await updateOption.mutateAsync({
-            key: AMOUNT_CURRENCY_KEY,
-            value: nextMarks,
-          })
+      onSubmit: async (data, changedFields) => {
+        const amountValues: Record<string, string> = {
+          [AMOUNT_CURRENCY_KEY]: data.quota_setting.amount_currency ?? '{}',
+          'quota_setting.trust_quota_usd': String(
+            data.quota_setting.trust_quota_usd
+          ),
+          ...Object.fromEntries(
+            REWARD_FIELDS.map((field) => [field, String(data[field])])
+          ),
         }
-        for (const [key, value] of entries) {
+        if (Object.keys(changedFields).some((key) => key in amountValues)) {
+          await updateQuotaAmounts.mutateAsync(amountValues)
+        }
+        for (const [key, value] of Object.entries(changedFields)) {
+          if (key in amountValues) continue
           await updateOption.mutateAsync({
             key,
             value: value as string | number | boolean,

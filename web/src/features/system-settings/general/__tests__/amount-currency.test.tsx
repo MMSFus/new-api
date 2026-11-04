@@ -97,7 +97,7 @@ async function chooseCurrency(field: string, option: string) {
 function saved() {
   return vi
     .mocked(api.put)
-    .mock.calls.map(([, body]) => body as { key: string; value: unknown })
+    .mock.calls.map(([, body]) => body as { values: Record<string, string> })
 }
 
 beforeEach(() => {
@@ -167,42 +167,43 @@ describe('switching an amount field currency', () => {
     expect(input).toHaveValue(68493)
     await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
     await waitFor(() =>
-      expect(saved()).toContainEqual({ key: 'QuotaForNewUser', value: 68493 })
+      expect(saved()[0]?.values.QuotaForNewUser).toBe('68493')
     )
   })
 })
 
 describe('saving amount currencies', () => {
-  test('saves the mark before the converted amount', async () => {
+  test('saves currencies and all corresponding amounts in one request', async () => {
     await renderSettings({ rewards: 500000 })
     await chooseCurrency('New User Quota currency', 'Chinese yuan (CNY)')
     await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
-    await waitFor(() => expect(saved()).toHaveLength(2))
-    expect(saved()).toEqual([
-      {
-        key: 'quota_setting.amount_currency',
-        value: '{"QuotaForNewUser":"CNY"}',
+    await waitFor(() => expect(saved()).toHaveLength(1))
+    expect(api.put).toHaveBeenCalledWith('/api/option/quota/amounts', {
+      values: {
+        'quota_setting.amount_currency': '{"QuotaForNewUser":"CNY"}',
+        QuotaForNewUser: '8',
+        QuotaForInviter: '0',
+        QuotaForInvitee: '0',
+        'quota_setting.trust_quota_usd': '10',
       },
-      { key: 'QuotaForNewUser', value: 8 },
-    ])
+    })
   })
 
-  test('clearing the last mark saves an empty map rather than a USD entry', async () => {
+  test('clearing the last mark atomically saves the restored quota amount', async () => {
     await renderSettings({
       rewards: 8,
       amountCurrency: '{"QuotaForNewUser":"CNY"}',
     })
     await chooseCurrency('New User Quota currency', 'US dollar (USD)')
     await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
-    await waitFor(() => expect(saved()).toHaveLength(2))
-    expect(saved()[0]).toEqual({
-      key: 'quota_setting.amount_currency',
-      value: '{}',
+    await waitFor(() => expect(saved()).toHaveLength(1))
+    expect(saved()[0].values).toMatchObject({
+      'quota_setting.amount_currency': '{}',
+      QuotaForNewUser: '500000',
     })
-    expect(saved()[1]).toEqual({ key: 'QuotaForNewUser', value: 500000 })
   })
 
-  test('a rejected mark stops the amount from being saved in the new unit', async () => {
+  test('a rejected batch preserves the converted form for a complete retry', async () => {
     vi.mocked(api.put).mockResolvedValueOnce({
       data: {
         success: false,
@@ -212,8 +213,16 @@ describe('saving amount currencies', () => {
     await renderSettings({ rewards: 500000 })
     await chooseCurrency('New User Quota currency', 'Chinese yuan (CNY)')
     await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
-    await waitFor(() => expect(saved()).toHaveLength(1))
-    expect(saved()[0].key).toBe('quota_setting.amount_currency')
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Save Changes' })).toBeEnabled()
+    )
+    expect(saved()).toHaveLength(1)
+    expect(
+      screen.getByRole('spinbutton', { name: 'New User Quota' })
+    ).toHaveValue(8)
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+    await waitFor(() => expect(saved()).toHaveLength(2))
+    expect(saved()[1]).toEqual(saved()[0])
   })
 
   test('a decimal reward without a currency mark is rejected before saving', async () => {
@@ -233,9 +242,7 @@ describe('saving amount currencies', () => {
     })
     fireEvent.change(input, { target: { value: '0.5' } })
     await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
-    await waitFor(() =>
-      expect(saved()).toEqual([{ key: 'QuotaForNewUser', value: 0.5 }])
-    )
+    await waitFor(() => expect(saved()[0]?.values.QuotaForNewUser).toBe('0.5'))
   })
 })
 

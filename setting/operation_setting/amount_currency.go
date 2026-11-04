@@ -39,6 +39,63 @@ func IsAmountField(field string) bool {
 	return false
 }
 
+// IsAmountOption identifies options that must share a publication boundary.
+func IsAmountOption(key string) bool {
+	return key == AmountCurrencyOptionKey || key == "quota_setting."+AmountFieldTrustQuotaUSD || IsAmountField(key) && key != AmountFieldTrustQuotaUSD
+}
+
+// ValidateAmountOptions requires a complete set of values whenever currencies
+// are submitted. A legacy single-option request cannot change the unit alone.
+func ValidateAmountOptions(values map[string]string) error {
+	common.OptionMapRWMutex.RLock()
+	defer common.OptionMapRWMutex.RUnlock()
+	currencies := quotaSetting.AmountCurrency
+	if raw, ok := values[AmountCurrencyOptionKey]; ok {
+		if err := ValidateAmountCurrencyJSON(raw); err != nil {
+			return err
+		}
+		currencies = make(map[string]string)
+		if err := common.UnmarshalJsonStr(raw, &currencies); err != nil {
+			return err
+		}
+		for _, field := range amountFields {
+			key := field
+			if field == AmountFieldTrustQuotaUSD {
+				key = "quota_setting." + field
+			}
+			if _, ok := values[key]; !ok {
+				return common.NewMessage("Save amount currencies and their values together")
+			}
+		}
+	}
+	for _, field := range amountFields {
+		key := field
+		if field == AmountFieldTrustQuotaUSD {
+			key = "quota_setting." + field
+		}
+		raw, ok := values[key]
+		if !ok {
+			continue
+		}
+		number, err := strconv.ParseFloat(raw, 64)
+		if err != nil || math.IsNaN(number) || math.IsInf(number, 0) || number < 0 {
+			return common.NewMessage("Enter a finite, non-negative price")
+		}
+		if field != AmountFieldTrustQuotaUSD && currencies[field] == "" {
+			quota, err := strconv.Atoi(raw)
+			if err != nil || quota < 0 {
+				return common.NewMessage("Quota must be a whole number")
+			}
+			if err := common.ValidateWalletQuota(quota); err != nil {
+				return err
+			}
+		} else if _, err := currencyAmountToQuota(number, currencies[field]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // SetRewardAmountRaw records the decimal value of a reward option on load/save.
 func SetRewardAmountRaw(field, value string) {
 	number, err := strconv.ParseFloat(value, 64)
@@ -72,6 +129,12 @@ func ValidateAmountCurrencyJSON(jsonStr string) error {
 
 // GetAmountCurrency returns the currency of an amount field, or USD when unmarked.
 func GetAmountCurrency(field string) string {
+	common.OptionMapRWMutex.RLock()
+	defer common.OptionMapRWMutex.RUnlock()
+	return getAmountCurrency(field)
+}
+
+func getAmountCurrency(field string) string {
 	if code, ok := quotaSetting.AmountCurrency[field]; ok && code != "" {
 		return code
 	}
@@ -80,6 +143,8 @@ func GetAmountCurrency(field string) string {
 
 // UsedAmountCurrencies lists non-USD currencies referenced by amount fields.
 func UsedAmountCurrencies() map[string]bool {
+	common.OptionMapRWMutex.RLock()
+	defer common.OptionMapRWMutex.RUnlock()
 	used := make(map[string]bool)
 	for _, code := range quotaSetting.AmountCurrency {
 		if code != "" && code != CurrencyUSD {
@@ -104,10 +169,25 @@ func currencyAmountToQuota(amount float64, currency string) (int, error) {
 }
 
 // RewardQuota resolves QuotaForNewUser / QuotaForInviter / QuotaForInvitee.
-// Unmarked fields return quotaValue unchanged; marked fields convert the
+// Unmarked fields return their quota unchanged; marked fields convert the
 // stored currency amount at the current rate. Callers skip the reward on error.
-func RewardQuota(field string, quotaValue int) (int, error) {
-	currency := GetAmountCurrency(field)
+func RewardQuota(field string) (int, error) {
+	// The option writer publishes a whole batch under this lock. Read the
+	// legacy value, decimal value and currency from the same configuration.
+	common.OptionMapRWMutex.RLock()
+	defer common.OptionMapRWMutex.RUnlock()
+	var quotaValue int
+	switch field {
+	case AmountFieldQuotaForNewUser:
+		quotaValue = common.QuotaForNewUser
+	case AmountFieldQuotaForInviter:
+		quotaValue = common.QuotaForInviter
+	case AmountFieldQuotaForInvitee:
+		quotaValue = common.QuotaForInvitee
+	default:
+		return 0, fmt.Errorf("unsupported reward field: %s", field)
+	}
+	currency := getAmountCurrency(field)
 	if currency == CurrencyUSD {
 		return quotaValue, nil
 	}
@@ -127,8 +207,10 @@ func RewardQuota(field string, quotaValue int) (int, error) {
 // TrustQuota returns the wallet trust-bypass threshold in quota units. An
 // invalid exchange rate disables the bypass (returns 0).
 func TrustQuota() float64 {
+	common.OptionMapRWMutex.RLock()
+	defer common.OptionMapRWMutex.RUnlock()
 	amount := quotaSetting.TrustQuotaUSD
-	currency := GetAmountCurrency(AmountFieldTrustQuotaUSD)
+	currency := getAmountCurrency(AmountFieldTrustQuotaUSD)
 	if currency == CurrencyUSD {
 		return amount * common.QuotaPerUnit
 	}

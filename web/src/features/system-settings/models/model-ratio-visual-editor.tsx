@@ -55,6 +55,7 @@ import {
 import { usePricingData } from '@/features/pricing/hooks/use-pricing-data'
 import { splitPluginBillingExprKey } from '@/features/pricing/lib/plugin-pricing'
 import { useMediaQuery } from '@/hooks'
+import { handleServerError } from '@/lib/handle-server-error'
 
 import { safeJsonParse } from '../utils/json-parser'
 import type { PricingMode } from './model-pricing-core'
@@ -617,9 +618,14 @@ const ModelRatioVisualEditorComponent = forwardRef<
 
     // Persist to the source model too, so targets never carry pricing the
     // source itself would lose if the editor draft were abandoned.
-    persistPricingData(sourceData, [
-      ...new Set([sourceData.name, ...targetNames]),
-    ])
+    try {
+      persistPricingData(sourceData, [
+        ...new Set([sourceData.name, ...targetNames]),
+      ])
+    } catch (error) {
+      handleServerError(error)
+      return
+    }
     table.resetRowSelection()
     toast.success(
       t('Applied {{name}} pricing to {{count}} models', {
