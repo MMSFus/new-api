@@ -858,14 +858,15 @@ func (p *SimulatedCachePlan) patchJSON(doc []byte) []byte {
 		switch {
 		case path == "usageMetadata" || usage.Get("promptTokenCount").Exists():
 			doc = p.patchGeminiUsage(doc, path, usage)
-		case usage.Get("prompt_tokens").Exists():
-			doc = p.patchOpenAIChatUsage(doc, path, usage)
 		case path == "message.usage" || strings.HasPrefix(docType, "message") ||
 			usage.Get("cache_read_input_tokens").Exists() || usage.Get("cache_creation_input_tokens").Exists() ||
 			usage.Get("cache_creation").Exists():
 			doc = p.patchClaudeUsage(doc, path, usage)
-		case usage.Get("input_tokens").Exists():
+		case usage.Get("input_tokens").Exists() && (!usage.Get("prompt_tokens").Exists() ||
+			usage.Get("prompt_tokens").Int() == 0 && usage.Get("input_tokens").Int() > 0):
 			doc = p.patchResponsesUsage(doc, path, usage)
+		case usage.Get("prompt_tokens").Exists():
+			doc = p.patchOpenAIChatUsage(doc, path, usage)
 		}
 	}
 	// Moonshot reports cache hits per choice, llama.cpp in timings.cache_n;

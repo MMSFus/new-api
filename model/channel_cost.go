@@ -18,6 +18,14 @@ import (
 // granted authz.ChannelCostRead.
 const channelCostLogKey = "channel_cost"
 
+// ChannelCostBasis freezes the channel cost conversion used by a task.
+type ChannelCostBasis struct {
+	CostCurrency   string  `json:"cost_currency"`
+	CurrencyFactor float64 `json:"currency_factor"`
+	UpstreamRatio  float64 `json:"upstream_ratio"`
+	GroupRatio     float64 `json:"group_ratio"`
+}
+
 // ChannelCostSnapshot freezes the channel's upstream cost of one log, so later
 // changes to the channel's upstream_cost_ratio do not rewrite history.
 type ChannelCostSnapshot struct {
@@ -45,6 +53,39 @@ func (o *LogOther) SetCostBasisQuota(quota int) {
 	o.costBasisQuota = &quota
 }
 
+// CaptureChannelCostBasis freezes the configured channel cost conversion.
+func CaptureChannelCostBasis(channelID int, groupRatio, priceCurrencyFactor float64) *ChannelCostBasis {
+	unknown := &ChannelCostBasis{UpstreamRatio: -1, GroupRatio: groupRatio}
+	if channelID == 0 || !(groupRatio > 0) || math.IsInf(groupRatio, 0) || !(priceCurrencyFactor > 0) || math.IsNaN(priceCurrencyFactor) || math.IsInf(priceCurrencyFactor, 0) {
+		return unknown
+	}
+	channel, err := CacheGetChannel(channelID)
+	if err != nil {
+		return unknown
+	}
+	settings := channel.GetSetting()
+	ratio := settings.UpstreamCostRatio
+	if ratio == nil || !(*ratio >= 0 && *ratio <= dto.MaxUpstreamCostRatio) {
+		return unknown
+	}
+	currency := settings.UpstreamCostCurrency
+	if currency == "" {
+		currency = operation_setting.GetQuotaDisplayType()
+		if currency == operation_setting.QuotaDisplayTypeTokens {
+			currency = operation_setting.CurrencyUSD
+		}
+	}
+	upstreamFactor, err := operation_setting.CurrencyUSDFactor(currency)
+	if err != nil {
+		return unknown
+	}
+	factor := upstreamFactor / priceCurrencyFactor
+	if !(factor > 0) || math.IsNaN(factor) || math.IsInf(factor, 0) {
+		return unknown
+	}
+	return &ChannelCostBasis{CostCurrency: currency, CurrencyFactor: factor, UpstreamRatio: *ratio, GroupRatio: groupRatio}
+}
+
 // attachChannelCost snapshots the cost of a log that charged quota on the
 // channel. A missing group ratio (free groups, logs not produced by a relay)
 // or a channel without upstream_cost_ratio leaves the log uncosted.
@@ -52,47 +93,56 @@ func attachChannelCost(other *LogOther, channelId int, quota int, groupRatio flo
 	if other == nil || channelId == 0 || !(groupRatio > 0) {
 		return
 	}
-	channel, err := CacheGetChannel(channelId)
-	if err != nil {
-		return
+	var frozen *ChannelCostBasis
+	if other.costBasis != nil {
+		frozen = other.costBasis
+	} else {
+		channel, err := CacheGetChannel(channelId)
+		if err != nil {
+			return
+		}
+		settings := channel.GetSetting()
+		ratio := settings.UpstreamCostRatio
+		if ratio == nil || !(*ratio >= 0 && *ratio <= dto.MaxUpstreamCostRatio) || math.IsInf(groupRatio, 0) {
+			return
+		}
+		priceFactor := gjson.Result{}
+		if raw, exists := other.public["currency_usd_factor"]; exists {
+			encoded, err := common.Marshal(raw)
+			if err != nil {
+				return
+			}
+			priceFactor = gjson.ParseBytes(encoded)
+		}
+		currency, factor, valid := channelCostCurrencyFactor(settings.UpstreamCostCurrency, priceFactor)
+		if !valid {
+			return
+		}
+		frozen = &ChannelCostBasis{CostCurrency: currency, CurrencyFactor: factor, UpstreamRatio: *ratio, GroupRatio: groupRatio}
 	}
-	setting := channel.GetSetting()
-	ratio := setting.UpstreamCostRatio
-	if ratio == nil || !(*ratio >= 0 && *ratio <= dto.MaxUpstreamCostRatio) || math.IsInf(groupRatio, 0) {
+	if frozen.GroupRatio <= 0 || math.IsNaN(frozen.GroupRatio) || math.IsInf(frozen.GroupRatio, 0) || frozen.UpstreamRatio < 0 || frozen.UpstreamRatio > dto.MaxUpstreamCostRatio || frozen.CurrencyFactor <= 0 || math.IsNaN(frozen.CurrencyFactor) || math.IsInf(frozen.CurrencyFactor, 0) {
 		return
 	}
 	basis := quota
 	if other.costBasisQuota != nil {
 		basis = *other.costBasisQuota
 	}
-	priceFactor := gjson.Result{}
-	if raw, exists := other.public["currency_usd_factor"]; exists {
-		encoded, err := common.Marshal(raw)
-		if err != nil {
-			return
-		}
-		priceFactor = gjson.ParseBytes(encoded)
-	}
-	currency, factor, valid := channelCostCurrencyFactor(setting.UpstreamCostCurrency, priceFactor)
-	if !valid {
-		return
-	}
-	baseQuota := float64(basis) / groupRatio
-	costQuota := baseQuota * *ratio * factor
+	baseQuota := float64(basis) / frozen.GroupRatio
+	costQuota := baseQuota * frozen.UpstreamRatio * frozen.CurrencyFactor
 	if math.IsNaN(costQuota) || math.IsInf(costQuota, 0) || math.IsNaN(baseQuota) || math.IsInf(baseQuota, 0) {
 		return
 	}
-	storedFactor := factor
+	storedFactor := frozen.CurrencyFactor
 	if storedFactor == 1 {
 		storedFactor = 0
 	}
 
 	other.SetRoot(channelCostLogKey, ChannelCostSnapshot{
-		UpstreamRatio:  *ratio,
-		GroupRatio:     groupRatio,
+		UpstreamRatio:  frozen.UpstreamRatio,
+		GroupRatio:     frozen.GroupRatio,
 		BaseQuota:      baseQuota,
 		CostQuota:      costQuota,
-		CostCurrency:   currency,
+		CostCurrency:   frozen.CostCurrency,
 		CurrencyFactor: storedFactor,
 	})
 }

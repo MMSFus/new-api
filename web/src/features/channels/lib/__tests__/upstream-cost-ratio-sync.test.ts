@@ -21,6 +21,10 @@ import { describe, expect, test } from 'vitest'
 import { CHANNEL_TYPE_SUB2API } from '../../constants'
 import { channelSchema } from '../../types'
 import {
+  getChannelConfigurationSection,
+  getChannelConfigurationState,
+} from '../channel-configuration'
+import {
   CHANNEL_FORM_DEFAULT_VALUES,
   buildSettingJSON,
   channelFormSchema,
@@ -49,6 +53,28 @@ function issuePaths(values: ChannelFormValues): string[] {
 }
 
 describe('upstream cost ratio sync settings', () => {
+  test('sync field validation errors belong to the routing tab', () => {
+    for (const field of [
+      'upstream_cost_ratio_sync_enabled',
+      'upstream_cost_ratio_sync_min',
+      'upstream_cost_ratio_sync_max',
+    ]) {
+      expect(getChannelConfigurationSection(field)).toBe('routing')
+    }
+  })
+
+  test('configured sync settings mark the routing section configured', () => {
+    const state = getChannelConfigurationState(
+      channelFormSchema.parse({
+        ...sub2apiForm({ upstream_cost_ratio_sync_enabled: true }),
+      }),
+      {},
+      false
+    )
+
+    expect(state.sections.routing).toBe('configured')
+  })
+
   test('saving a Sub2API channel with sync and a range writes all sync fields', () => {
     const setting = JSON.parse(
       buildSettingJSON(

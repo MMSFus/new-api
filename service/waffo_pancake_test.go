@@ -182,10 +182,11 @@ func TestFormatWaffoPancakeAmountUsesCurrencyMinorUnits(t *testing.T) {
 
 func TestCreateWaffoPancakeCheckoutSessionSendsConfiguredCurrency(t *testing.T) {
 	api := newFakePancakeAPI(t, `{}`)
-	setting.WaffoPancakeCurrency = "JPY"
+	setting.WaffoPancakeCurrency = "USD"
 
 	_, err := CreateWaffoPancakeCheckoutSession(context.Background(), &WaffoPancakeCreateSessionParams{
 		ProductID:               testPancakeTopUpID,
+		Currency:                "JPY",
 		BuyerIdentity:           WaffoPancakeBuyerIdentityFromUserID(7),
 		PriceSnapshot:           &WaffoPancakePriceSnapshot{Amount: "1500", TaxCategory: "saas"},
 		OrderMerchantExternalID: "WAFFO_PANCAKE-7-1-abc",

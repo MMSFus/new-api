@@ -70,6 +70,12 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
 
   const amountValue = Number.parseFloat(amount) || 0
   const quotaValue = parseQuotaFromDollars(Math.abs(amountValue))
+  const currentDebt = props.buckets?.debt ?? 0
+  const debtRepayment =
+    mode === 'add' && target !== 'total' && props.buckets && currentDebt < 0
+      ? Math.min(quotaValue, -currentDebt)
+      : 0
+  const netBucketCredit = quotaValue - debtRepayment
 
   const getPreviewText = () => {
     const current =
@@ -79,7 +85,7 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
     const val = quotaValue
     switch (mode) {
       case 'add':
-        return `${t('Current quota')}: ${formatQuota(current)}  +${formatQuota(val)} = ${formatQuota(current + val)}`
+        return `${t('Current quota')}: ${formatQuota(current)}  +${formatQuota(target === 'total' ? val : netBucketCredit)} = ${formatQuota(current + (target === 'total' ? val : netBucketCredit))}`
       case 'subtract':
         return `${t('Current quota')}: ${formatQuota(current)}  -${formatQuota(val)} = ${formatQuota(current - val)}`
       case 'override': {
@@ -222,7 +228,22 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
           )}
         </div>
 
-        <div className='text-muted-foreground text-sm'>{getPreviewText()}</div>
+        <div className='text-muted-foreground space-y-1 text-sm'>
+          <div>{getPreviewText()}</div>
+          {mode === 'add' && target !== 'total' && debtRepayment > 0 && (
+            <>
+              <div>
+                {t('Outstanding Debt')}: {formatQuota(currentDebt)} +
+                {formatQuota(debtRepayment)} ={' '}
+                {formatQuota(currentDebt + debtRepayment)}
+              </div>
+              <div>
+                {t('Total Balance')}: {formatQuota(props.currentQuota)} →{' '}
+                {formatQuota(props.currentQuota + quotaValue)}
+              </div>
+            </>
+          )}
+        </div>
 
         <div className='space-y-2'>
           <Label>{t('Mode')}</Label>

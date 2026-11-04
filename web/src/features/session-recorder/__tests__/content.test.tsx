@@ -241,9 +241,10 @@ describe('session → records → content drill-down', () => {
 })
 
 describe('body formatting', () => {
-  test('valid JSON is pretty-printed', () => {
-    expect(bodyView(recordedBody({ text: '{"a":1}' }))).toEqual({
-      code: '{\n  "a": 1\n}',
+  test('valid JSON is displayed without changing its numeric literals', () => {
+    const text = '{"id":9007199254740993,"a":1}'
+    expect(bodyView(recordedBody({ text }))).toEqual({
+      code: text,
       language: 'json',
       extension: 'json',
     })

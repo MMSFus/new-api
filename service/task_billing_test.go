@@ -29,6 +29,7 @@ import (
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -757,6 +758,26 @@ func TestLogTaskConsumptionWithoutSnapshotKeepsRatioMode(t *testing.T) {
 		map[string]any{"key": "Action {{action}}", "params": map[string]any{"action": "GENERATE"}},
 		map[string]any{"key": "Billing parameters: {{params}}", "params": map[string]any{"params": "size: 2.00"}},
 	}, other["content_parts"])
+}
+
+func TestLogTaskConsumptionIncludesFrozenPriceCurrency(t *testing.T) {
+	truncate(t)
+	const userID, channelID = 42, 42
+	seedUser(t, userID, 10_000)
+	seedChannel(t, channelID)
+	priceData := types.PriceData{
+		ModelPrice: 0.02, Quota: 100, PriceCurrency: "CNY", CurrencyUSDFactor: 0.125,
+		GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
+	}
+	task := makeTask(userID, channelID, 100, 0, BillingSourceWallet, 0)
+	info := &relaycommon.RelayInfo{
+		UserId: userID, OriginModelName: "test-model", UsingGroup: "default",
+		ChannelMeta:   &relaycommon.ChannelMeta{ChannelId: channelID},
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{Action: "GENERATE"}, PriceData: priceData,
+	}
+	log := callLogTaskConsumption(t, info, task)
+	assert.Equal(t, "CNY", gjson.Get(log.Other, "price_currency").String())
+	assert.Equal(t, 0.125, gjson.Get(log.Other, "currency_usd_factor").Float())
 }
 
 // Task logs distinguish jobs the client polls from requests whose HTTP call

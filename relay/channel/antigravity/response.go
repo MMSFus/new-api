@@ -119,6 +119,7 @@ func aggregateResponse(s *responseStream) ([]byte, error) {
 	total := 0
 	events := 0
 	var usage *dto.GeminiUsageMetadata
+	finished := map[int]bool{}
 	for {
 		raw, err := s.event()
 		if err != nil {
@@ -164,6 +165,12 @@ func aggregateResponse(s *responseStream) ([]byte, error) {
 				return nil, errors.New("Invalid Antigravity candidate index")
 			}
 			id := int(index)
+			if reason, ok := candidate["finishReason"].(string); ok {
+				switch reason {
+				case "STOP", "MAX_TOKENS", "SAFETY", "RECITATION", "LANGUAGE", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "MALFORMED_FUNCTION_CALL", "IMAGE_SAFETY", "UNEXPECTED_TOOL_CALL", "MODEL_ARMOR", "OTHER":
+					finished[id] = true
+				}
+			}
 			previous := candidates[id]
 			if previous == nil {
 				candidates[id] = candidate
@@ -219,6 +226,9 @@ func aggregateResponse(s *responseStream) ([]byte, error) {
 	}
 	if events == 0 {
 		return nil, errors.New("Antigravity returned an empty stream")
+	}
+	if len(candidates) == 0 || len(finished) != len(candidates) {
+		return nil, errors.New("Antigravity response ended before candidate completion")
 	}
 	indices := make([]int, 0, len(candidates))
 	for i := range candidates {

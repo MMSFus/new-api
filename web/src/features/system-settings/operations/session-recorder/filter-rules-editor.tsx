@@ -31,6 +31,12 @@ import {
   ComboboxInput,
   type ComboboxInputOption,
 } from '@/components/ui/combobox-input'
+import {
+  FormControl,
+  FormField,
+  FormItem,
+  FormMessage,
+} from '@/components/ui/form'
 
 import {
   useRecorderChannels,
@@ -78,6 +84,7 @@ function RuleRow(props: RuleRowProps) {
     name: `${props.name}.${props.index}`,
   })
   const channelId = rule?.channel_id ?? 0
+  const channelSearch = rule?.channel_search ?? ''
   // A selected channel narrows the model list to that channel's models.
   const modelOptions = useMemo(() => {
     if (channelId <= 0) return props.allModelOptions
@@ -87,16 +94,44 @@ function RuleRow(props: RuleRowProps) {
 
   return (
     <div className='grid grid-cols-1 items-center gap-2 md:grid-cols-[1fr_1fr_1fr_auto]'>
-      <ComboboxInput
-        aria-label={t('Channel')}
-        options={props.channelOptions}
-        value={channelId > 0 ? String(channelId) : ''}
-        onValueChange={(value) =>
-          props.onChange(props.index, 'channel_id', value)
-        }
-        placeholder={t('Any channel')}
-        allowCustomValue
-        disabled={props.disabled}
+      <FormField
+        control={props.control}
+        name={`${props.name}.${props.index}.channel_search`}
+        render={({ field, fieldState }) => (
+          <FormItem className='gap-1'>
+            <FormControl>
+              <ComboboxInput
+                aria-label={t('Channel')}
+                aria-invalid={fieldState.invalid}
+                options={props.channelOptions}
+                value={
+                  channelSearch || (channelId > 0 ? String(channelId) : '')
+                }
+                onSearchValueChange={field.onChange}
+                onValueChange={(value) =>
+                  props.onChange(props.index, 'channel_id', value)
+                }
+                placeholder={t('Any channel')}
+                onKeyDown={(event) => {
+                  if (event.key !== 'Enter') return
+                  event.preventDefault()
+                  const value = event.currentTarget.value
+                    .trim()
+                    .replace(/^#/, '')
+                  if (
+                    /^\d+$/.test(value) &&
+                    Number.isSafeInteger(Number(value)) &&
+                    Number(value) > 0
+                  ) {
+                    props.onChange(props.index, 'channel_id', value)
+                  }
+                }}
+                disabled={props.disabled}
+              />
+            </FormControl>
+            <FormMessage />
+          </FormItem>
+        )}
       />
       <ComboboxInput
         aria-label={t('Group')}
@@ -139,12 +174,14 @@ export function FilterRulesEditor(props: FilterRulesEditorProps) {
 
   const channels = useMemo(() => channelsQuery.data ?? [], [channelsQuery.data])
   const channelOptions = useMemo(
-    () =>
-      channels.map((c) => ({
+    () => [
+      { value: '', label: t('Any channel') },
+      ...channels.map((c) => ({
         value: String(c.id),
         label: `#${c.id} ${c.name}`,
       })),
-    [channels]
+    ],
+    [channels, t]
   )
   const groupOptions = useMemo(
     () => toOptions(groupsQuery.data ?? []),
@@ -162,7 +199,10 @@ export function FilterRulesEditor(props: FilterRulesEditorProps) {
   ) => {
     const options = { shouldDirty: true, shouldValidate: true }
     if (field === 'channel_id') {
-      const parsed = Number.parseInt(value.replace(/^#/, ''), 10)
+      props.form.setValue(`${props.name}.${index}.channel_search`, '', options)
+      const text = value.replace(/^#/, '')
+      const parsed = /^\d+$/.test(text) ? Number(text) : 0
+      if (value !== '' && (!Number.isSafeInteger(parsed) || parsed <= 0)) return
       props.form.setValue(
         `${props.name}.${index}.channel_id`,
         Number.isFinite(parsed) && parsed > 0 ? parsed : 0,

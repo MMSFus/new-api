@@ -113,16 +113,25 @@ export function revenueTrendPoints(
   trend: RevenueBucket[],
   range: { start: number; end: number }
 ): RevenueTrendPoint[] {
+  const maxTimestamp = 8_640_000_000_000
+  if (
+    !Number.isSafeInteger(range.start) ||
+    !Number.isSafeInteger(range.end) ||
+    range.start <= 0 ||
+    range.end < range.start ||
+    range.end > maxTimestamp ||
+    range.end - range.start > REVENUE_MAX_RANGE_DAYS * 86400
+  ) {
+    return []
+  }
   const unit = revenueGranularity(range)
   const step = unit === 'hour' ? 3600 : 86400
+  const firstBucket = Math.floor(range.start / step) * step
+  const bucketCount = Math.floor((range.end - firstBucket) / step) + 1
+  if (bucketCount > REVENUE_MAX_RANGE_DAYS + 1) return []
   const byBucket = new Map(trend.map((bucket) => [bucket.bucket, bucket]))
   const points: RevenueTrendPoint[] = []
-  if (range.end < range.start) return points
-  for (
-    let time = Math.floor(range.start / step) * step;
-    time <= range.end;
-    time += step
-  ) {
+  for (let time = firstBucket; time <= range.end; time += step) {
     const bucket = byBucket.get(time) ?? {
       bucket: time,
       archive_bytes: 0,

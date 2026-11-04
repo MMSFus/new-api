@@ -24,7 +24,7 @@ func ValidateCurrency(code string) error {
 }
 
 // CurrencyUSDFactor returns how many USD equals 1 unit of the given currency.
-// Returns an error if the exchange rate is invalid (<=0, NaN, or Inf).
+// Returns an error if the exchange rate or its reciprocal is not finite and positive.
 //
 // Examples:
 //   - USD: returns 1.0 (1 USD = 1 USD)
@@ -49,7 +49,11 @@ func CurrencyUSDFactor(code string) (float64, error) {
 		return 0, fmt.Errorf("invalid exchange rate for %s: %v (must be positive and finite)", code, rate)
 	}
 
-	return 1 / rate, nil
+	factor := 1 / rate
+	if !validRate(factor) {
+		return 0, fmt.Errorf("invalid exchange rate for %s: reciprocal is not finite and positive", code)
+	}
+	return factor, nil
 }
 
 // Option keys holding the exchange rates behind CNY and CUSTOM.
@@ -62,6 +66,10 @@ const (
 
 func validRate(rate float64) bool {
 	return rate > 0 && !math.IsNaN(rate) && !math.IsInf(rate, 0)
+}
+
+func validCurrencyRate(rate float64) bool {
+	return validRate(rate) && validRate(1/rate)
 }
 
 // ValidateExchangeRateOption rejects saving an invalid rate for a currency
@@ -80,7 +88,7 @@ func ValidateExchangeRateOption(key, value string, used map[string]bool) error {
 		return nil
 	}
 	rate, err := strconv.ParseFloat(value, 64)
-	if err != nil || !validRate(rate) {
+	if err != nil || !validCurrencyRate(rate) {
 		return common.NewMessage(ErrCurrencyRateInUseMessage)
 	}
 	return nil

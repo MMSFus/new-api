@@ -38,6 +38,7 @@ export function RevenueTrendChart(props: {
   range: { start: number; end: number }
   format: RevenueFormat
   loading: boolean
+  enabled: boolean
   /** Opens the clicked hour or day. */
   onSelectPoint: (point: RevenueTrendPoint) => void
 }) {
@@ -45,8 +46,8 @@ export function RevenueTrendChart(props: {
   const { resolvedTheme, themeReady } = useChartTheme()
   const format = props.format
   const points = useMemo(
-    () => revenueTrendPoints(props.trend, props.range),
-    [props.trend, props.range]
+    () => (props.enabled ? revenueTrendPoints(props.trend, props.range) : []),
+    [props.enabled, props.trend, props.range]
   )
 
   const revenueLabel = t('Revenue')
@@ -108,7 +109,7 @@ export function RevenueTrendChart(props: {
       }
       loading={props.loading || !themeReady}
       // Zero buckets are filled in; with no bucket at all there is no trend.
-      empty={props.trend.length === 0}
+      empty={!props.enabled || props.trend.length === 0}
       height='h-72'
     >
       <div className='h-72'>

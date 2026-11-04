@@ -88,7 +88,7 @@ func resolveAntigravityCredential(ctx context.Context, raw, base string, setting
 }
 
 func FetchAntigravityModels(ctx context.Context, ch *model.Channel) ([]string, error) {
-	keys, err := antigravity.Import(ch.Key)
+	selected, err := selectAntigravityCredential(ch)
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +97,7 @@ func FetchAntigravityModels(ctx context.Context, ch *model.Channel) ([]string, e
 		base = antigravity.DefaultBaseURL
 	}
 	settings := ch.GetSetting()
-	c, err := ResolveAntigravityCredential(ctx, keys[0].Key(), base, settings)
+	c, err := ResolveAntigravityCredential(ctx, selected, base, settings)
 	if err != nil {
 		return nil, err
 	}
@@ -105,10 +105,25 @@ func FetchAntigravityModels(ctx context.Context, ch *model.Channel) ([]string, e
 	if err != nil {
 		return nil, err
 	}
-	if err := PersistAntigravityCredential(ch.Id, keys[0].Key(), c); err != nil {
+	if err := PersistAntigravityCredential(ch.Id, selected, c); err != nil {
 		return nil, err
 	}
 	return antigravity.Models(ctx, client, base, c)
+}
+
+func selectAntigravityCredential(ch *model.Channel) (string, error) {
+	selected, _, apiErr := ch.GetNextEnabledKey()
+	if apiErr != nil {
+		return "", apiErr
+	}
+	keys, err := antigravity.Import(selected)
+	if err != nil {
+		return "", err
+	}
+	if len(keys) == 0 {
+		return "", errors.New("Invalid Antigravity channel credential")
+	}
+	return keys[0].Key(), nil
 }
 
 func NormalizeAntigravityKeys(raw string) (string, int, error) {

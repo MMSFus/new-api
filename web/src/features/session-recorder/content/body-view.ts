@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import type { RecordBody } from '../api'
 
 /**
- * How a recorded body is shown: JSON is pretty-printed, SSE streams and other
+ * How a recorded body is shown: JSON is highlighted, SSE streams and other
  * text stay verbatim, base64 (binary) bodies are shown encoded. Truncated
  * JSON cannot be parsed and stays verbatim too.
  */
@@ -34,8 +34,8 @@ export function bodyView(body: RecordBody): {
   }
   if (type.includes('json') && !body.truncated) {
     try {
-      const code = JSON.stringify(JSON.parse(body.text), null, 2)
-      return { code, language: 'json', extension: 'json' }
+      JSON.parse(body.text)
+      return { code: body.text, language: 'json', extension: 'json' }
     } catch {
       // Not valid JSON despite the header; fall through to plain text.
     }

@@ -116,6 +116,9 @@ func syncSub2APIRatioContext(ctx context.Context, channel *model.Channel, automa
 	if eligible, reason := model.UpstreamRatioSyncEligibility(channel); !eligible {
 		return model.ChannelCostRatioSyncResult{}, common.NewMessage(reason)
 	}
+	probedChannel := *channel
+	baseURL := channel.GetBaseURL()
+	probedChannel.BaseURL = &baseURL
 	probe, err := probeSub2APIRatioContext(ctx, channel)
 	status, message := "success", ""
 	var value *float64
@@ -138,7 +141,7 @@ func syncSub2APIRatioContext(ctx context.Context, channel *model.Channel, automa
 		}
 		info = string(encoded)
 	}
-	return model.ApplyChannelCostRatioSync(channel.Id, value, status, message, info, automatic)
+	return model.ApplyChannelCostRatioSync(&probedChannel, value, status, message, info, automatic)
 }
 
 func channelForCostRatio(c *gin.Context) (*model.Channel, error) {
@@ -174,7 +177,7 @@ func SyncChannelUpstreamCostRatio(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	success := result.Status != "failed" && result.Status != "unsupported"
+	success := result.Status != "failed" && result.Status != "unsupported" && result.Status != "stale"
 	c.JSON(http.StatusOK, gin.H{"success": success, "message": result.Error, "data": result})
 }
 

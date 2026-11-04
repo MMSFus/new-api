@@ -47,12 +47,13 @@ func RequestWaffoPancakeAmount(c *gin.Context) {
 
 	payMoney := getWaffoPancakePayMoney(req.Amount, group)
 	cur := setting.GetWaffoPancakeCurrency()
+	payMoney = decimal.NewFromFloat(payMoney).Round(setting.WaffoPancakeCurrencyScale(cur)).InexactFloat64()
 	if decimal.NewFromFloat(payMoney).LessThanOrEqual(setting.WaffoPancakeMinChargeAmount(cur)) {
 		paymentError(c, common.NewMessage("Payment amount is too low"))
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "success", "data": formatWaffoPancakeAmount(payMoney)})
+	c.JSON(http.StatusOK, gin.H{"message": "success", "data": formatWaffoPancakeAmount(payMoney, cur)})
 }
 
 func getWaffoPancakePayMoney(amount int64, group string) float64 {
@@ -93,8 +94,7 @@ func normalizeWaffoPancakeTopUpAmount(amount int64) int64 {
 	return normalized
 }
 
-func formatWaffoPancakeAmount(payMoney float64) string {
-	cur := setting.GetWaffoPancakeCurrency()
+func formatWaffoPancakeAmount(payMoney float64, cur string) string {
 	return setting.FormatWaffoPancakeAmount(decimal.NewFromFloat(payMoney), cur)
 }
 
@@ -389,6 +389,7 @@ func RequestWaffoPancakePay(c *gin.Context) {
 
 	payMoney := getWaffoPancakePayMoney(req.Amount, group)
 	cur := setting.GetWaffoPancakeCurrency()
+	payMoney = decimal.NewFromFloat(payMoney).Round(setting.WaffoPancakeCurrencyScale(cur)).InexactFloat64()
 	if decimal.NewFromFloat(payMoney).LessThan(setting.WaffoPancakeMinChargeAmount(cur)) {
 		paymentError(c, common.NewMessage("Payment amount is too low"))
 		return
@@ -399,6 +400,7 @@ func RequestWaffoPancakePay(c *gin.Context) {
 		UserId:          id,
 		Amount:          normalizeWaffoPancakeTopUpAmount(req.Amount),
 		Money:           payMoney,
+		Currency:        cur,
 		TradeNo:         tradeNo,
 		PaymentMethod:   model.PaymentMethodWaffoPancake,
 		PaymentProvider: model.PaymentProviderWaffoPancake,
@@ -414,9 +416,10 @@ func RequestWaffoPancakePay(c *gin.Context) {
 	expiresInSeconds := 45 * 60
 	session, err := service.CreateWaffoPancakeCheckoutSession(c.Request.Context(), &service.WaffoPancakeCreateSessionParams{
 		ProductID:     setting.WaffoPancakeProductID,
+		Currency:      cur,
 		BuyerIdentity: getWaffoPancakeBuyerIdentity(user),
 		PriceSnapshot: &service.WaffoPancakePriceSnapshot{
-			Amount:      formatWaffoPancakeAmount(payMoney),
+			Amount:      formatWaffoPancakeAmount(payMoney, cur),
 			TaxCategory: "saas",
 		},
 		BuyerEmail:              getWaffoPancakeBuyerEmail(user),
@@ -430,7 +433,7 @@ func RequestWaffoPancakePay(c *gin.Context) {
 		paymentError(c, common.NewMessage("Failed to start payment"))
 		return
 	}
-	logger.LogInfo(c.Request.Context(), common.LogText("Waffo Pancake top-up order created user_id=%d trade_no=%s session_id=%s amount=%d money=%s currency=%s", id, tradeNo, session.SessionID, req.Amount, formatWaffoPancakeAmount(payMoney), cur))
+	logger.LogInfo(c.Request.Context(), common.LogText("Waffo Pancake top-up order created user_id=%d trade_no=%s session_id=%s amount=%d money=%s currency=%s", id, tradeNo, session.SessionID, req.Amount, formatWaffoPancakeAmount(payMoney, cur), cur))
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "success",

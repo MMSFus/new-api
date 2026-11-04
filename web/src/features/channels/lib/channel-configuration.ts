@@ -52,6 +52,9 @@ const CONFIGURATION_BLOCKS = {
       'priority',
       'weight',
       'upstream_cost_ratio',
+      'upstream_cost_ratio_sync_enabled',
+      'upstream_cost_ratio_sync_min',
+      'upstream_cost_ratio_sync_max',
       'test_model',
       'auto_ban',
     ],
@@ -153,6 +156,9 @@ export function getChannelConfigurationState(
       values.priority ||
       values.weight ||
       values.upstream_cost_ratio?.trim() ||
+      values.upstream_cost_ratio_sync_enabled ||
+      values.upstream_cost_ratio_sync_min?.trim() ||
+      values.upstream_cost_ratio_sync_max?.trim() ||
       values.test_model?.trim() ||
       (values.auto_ban ?? 1) !== 1
     ),

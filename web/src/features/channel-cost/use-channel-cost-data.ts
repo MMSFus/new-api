@@ -43,8 +43,8 @@ export function useChannelCostReport(
 ) {
   return useQuery({
     queryKey: ['channel-cost', 'report', filters],
-    queryFn: async () =>
-      requireServerSuccess(await getChannelCostReport(filters)),
+    queryFn: async ({ signal }) =>
+      requireServerSuccess(await getChannelCostReport(filters, signal)),
     enabled,
     retry: false,
   })
@@ -63,7 +63,8 @@ export function useChannelCostLogs(
   }
   const query = useQuery({
     queryKey: ['channel-cost', 'logs', params],
-    queryFn: async () => requireServerSuccess(await getChannelCostLogs(params)),
+    queryFn: async ({ signal }) =>
+      requireServerSuccess(await getChannelCostLogs(params, signal)),
     enabled,
     retry: false,
   })

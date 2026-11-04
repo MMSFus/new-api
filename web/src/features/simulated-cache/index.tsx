@@ -75,6 +75,7 @@ export function SimulatedCache() {
   const stat = canQuery ? data.statQuery.data : undefined
   const statLoading = canQuery && data.statQuery.isPending
   const onSearch = () => {
+    if (search.commitFilters()) return
     if (!search.refreshNow()) data.refetch()
   }
 
@@ -90,8 +91,8 @@ export function SimulatedCache() {
           </p>
           <SimulatedCacheFilterBar
             table={table}
-            filters={search.filters}
-            onChange={search.updateFilters}
+            filters={search.draftFilters}
+            onChange={search.editFilters}
             isFetching={data.isFetching}
             onSearch={onSearch}
             onReset={search.reset}

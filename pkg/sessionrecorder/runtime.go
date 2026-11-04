@@ -161,7 +161,7 @@ func Apply(raw string) (err error) {
 	// Producer.
 	producerKey := ""
 	if s.ProducerEnabled {
-		producerKey = keyOf([]any{s.SpoolRoot, s.QueueSize, s.EffectiveStatsPath()})
+		producerKey = keyOf([]any{s.SpoolRoot, s.RootID, s.QueueSize, s.EffectiveStatsPath()})
 	}
 	old := m.snapshot.Load()
 	var producer *Producer
@@ -218,11 +218,19 @@ func startConsumer(s Settings) *consumerRunner {
 			common.SysError("session recorder: cannot create work_dir: " + err.Error())
 			return
 		}
-		lock, err := AcquireProcessLock(filepath.Join(cfg.WorkDir, LockFileName))
-		if err != nil {
+		var lock *processLock
+		var err error
+		for {
+			lock, err = AcquireProcessLock(filepath.Join(cfg.WorkDir, LockFileName))
+			if err == nil {
+				break
+			}
 			r.setState("lock_held")
-			common.SysError("session recorder: " + err.Error())
-			return
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Second):
+			}
 		}
 		defer lock.Release()
 		interval := time.Duration(max(5, s.ScanIntervalSeconds)) * time.Second
@@ -281,6 +289,21 @@ func (r *consumerRunner) cycle(ctx context.Context, s Settings, cfg Config) {
 			})
 		}
 		r.consumer.Store(consumer)
+	} else if cfg.UploadEnabled {
+		oldCreds := r.store.Load()
+		if state != CredentialConfigured {
+			r.setState("credentials_" + string(state))
+			return
+		}
+		if oldCreds == nil || oldCreds.creds.AccessKeyID != creds.AccessKeyID || oldCreds.creds.SecretAccessKey != creds.SecretAccessKey {
+			r2, err := NewR2Store(cfg, creds)
+			if err != nil {
+				r.setState("r2_config_error")
+				return
+			}
+			r.store.Store(r2)
+			consumer.store = r2
+		}
 	}
 	result := consumer.RunCycle(ctx)
 	r.setState(result.State)

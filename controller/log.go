@@ -33,6 +33,7 @@ func logFilterFromQuery(c *gin.Context, admin bool) model.LogFilter {
 	if admin {
 		filter.Username = c.Query("username")
 		filter.Channel, _ = strconv.Atoi(c.Query("channel"))
+		filter.UserId, _ = strconv.Atoi(c.Query("user_id"))
 	}
 	return filter
 }
@@ -283,10 +284,16 @@ const simulatedCacheLogMaxRange = 7 * 24 * 60 * 60
 func boundLogFilterRange(filter *model.LogFilter, maxRange int64) error {
 	end := common.GetTimestamp()
 	if filter.EndTimestamp != 0 {
+		if filter.EndTimestamp < 0 {
+			return common.NewMessage("Invalid time range")
+		}
 		end = min(end, filter.EndTimestamp)
 	}
 	if filter.StartTimestamp == 0 {
 		filter.StartTimestamp = end - 24*60*60
+	}
+	if filter.StartTimestamp < 0 || filter.StartTimestamp > end {
+		return common.NewMessage("Invalid time range")
 	}
 	if end-filter.StartTimestamp > maxRange {
 		return common.NewMessage("The time range cannot exceed {{days}} days", map[string]any{"days": maxRange / (24 * 60 * 60)})

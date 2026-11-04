@@ -80,7 +80,8 @@ func SubscriptionRequestWaffoPancakePay(c *gin.Context) {
 	// unit (e.g. 0.4 under JPY) instead of sending "0" to Pancake.
 	cur := setting.GetWaffoPancakeCurrency()
 	priceAmount := decimal.NewFromFloat(plan.PriceAmount)
-	if priceAmount.Round(setting.WaffoPancakeCurrencyScale(cur)).LessThan(setting.WaffoPancakeMinChargeAmount(cur)) {
+	priceAmount = priceAmount.Round(setting.WaffoPancakeCurrencyScale(cur))
+	if priceAmount.LessThan(setting.WaffoPancakeMinChargeAmount(cur)) {
 		paymentError(c, common.NewMessage("Payment amount is too low"))
 		return
 	}
@@ -92,7 +93,8 @@ func SubscriptionRequestWaffoPancakePay(c *gin.Context) {
 	order := &model.SubscriptionOrder{
 		UserId:          userId,
 		PlanId:          plan.Id,
-		Money:           plan.PriceAmount,
+		Money:           priceAmount.InexactFloat64(),
+		Currency:        cur,
 		TradeNo:         tradeNo,
 		PaymentMethod:   model.PaymentMethodWaffoPancake,
 		PaymentProvider: model.PaymentProviderWaffoPancake,
@@ -108,6 +110,7 @@ func SubscriptionRequestWaffoPancakePay(c *gin.Context) {
 	expiresInSeconds := 45 * 60
 	session, err := service.CreateWaffoPancakeCheckoutSession(c.Request.Context(), &service.WaffoPancakeCreateSessionParams{
 		ProductID:     plan.WaffoPancakeProductId,
+		Currency:      cur,
 		BuyerIdentity: service.WaffoPancakeBuyerIdentityFromUserID(user.Id),
 		PriceSnapshot: &service.WaffoPancakePriceSnapshot{
 			Amount:      setting.FormatWaffoPancakeAmount(priceAmount, cur),

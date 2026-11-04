@@ -43,6 +43,7 @@ import { taskPriceLabel, taskUsageUnitLabel } from '../lib/task-price-display'
 import type { PricingModel, PriceType, TokenUnit } from '../types'
 import { ModelBillingModeBadge } from './model-billing-mode-badge'
 import { ModelPerfBadge, type ModelPerfBadgeData } from './model-perf-badge'
+import type { SelectedPricingGroup } from './model-price-cell'
 
 export interface ModelCardProps {
   model: PricingModel
@@ -51,7 +52,7 @@ export interface ModelCardProps {
   usdExchangeRate?: number
   tokenUnit?: TokenUnit
   showRechargePrice?: boolean
-  selectedGroup?: string
+  selectedGroup?: SelectedPricingGroup
   perf?: ModelPerfBadgeData
 }
 
@@ -61,6 +62,10 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
   const priceRate = props.priceRate ?? 1
   const usdExchangeRate = props.usdExchangeRate ?? 1
   const showRechargePrice = props.showRechargePrice ?? false
+  const selectedGroup =
+    typeof props.selectedGroup === 'function'
+      ? props.selectedGroup(props.model)
+      : props.selectedGroup
   const isTokenBased = isTokenBasedModel(props.model)
   const tokenUnitLabel = tokenUnit === 'K' ? '1K' : '1M'
   const tags = parseTags(props.model.tags)
@@ -81,12 +86,12 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
       usdExchangeRate,
       groupRatioMultiplier: getDynamicDisplayGroupRatio(
         props.model,
-        props.selectedGroup
+        selectedGroup
       ),
     }),
     [
       props.model,
-      props.selectedGroup,
+      selectedGroup,
       billingTime,
       tokenUnit,
       showRechargePrice,
@@ -237,7 +242,7 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
             showRechargePrice,
             priceRate,
             usdExchangeRate,
-            props.selectedGroup
+            selectedGroup
           )}
           <span className='text-muted-foreground text-xs font-normal'>
             {' '}
@@ -255,7 +260,7 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
             showRechargePrice,
             priceRate,
             usdExchangeRate,
-            props.selectedGroup
+            selectedGroup
           )}
           <span className='text-muted-foreground text-xs font-normal'>
             {' '}

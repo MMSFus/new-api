@@ -14,16 +14,18 @@ func TestFormatWaffoPancakeAmount_UsesDisplayPriceString(t *testing.T) {
 	testCases := []struct {
 		name     string
 		amount   float64
+		currency string
 		expected string
 	}{
-		{name: "whole amount", amount: 29, expected: "29.00"},
-		{name: "decimal amount", amount: 29.9, expected: "29.90"},
-		{name: "round half up to cents", amount: 29.999, expected: "30.00"},
+		{name: "whole amount", amount: 29, currency: "USD", expected: "29.00"},
+		{name: "decimal amount", amount: 29.9, currency: "USD", expected: "29.90"},
+		{name: "round half up to cents", amount: 29.999, currency: "USD", expected: "30.00"},
+		{name: "JPY minor units", amount: 1234.5, currency: "JPY", expected: "1235"},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.expected, formatWaffoPancakeAmount(tc.amount))
+			require.Equal(t, tc.expected, formatWaffoPancakeAmount(tc.amount, tc.currency))
 		})
 	}
 }

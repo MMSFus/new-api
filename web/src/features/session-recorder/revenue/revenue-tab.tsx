@@ -136,6 +136,7 @@ export function RevenueTab(props: {
         range={range}
         format={format}
         loading={loading}
+        enabled={props.canQuery}
         onSelectPoint={(point) =>
           props.onFilter({
             start_timestamp: point.start,

@@ -28,36 +28,52 @@ const recorderReserveChunk = 64 << 10
 
 type recorderWriter struct {
 	gin.ResponseWriter
-	c        *gin.Context
-	snap     *sessionrecorder.Snapshot
-	decided  bool
-	matched  bool
-	capture  bool
-	capped   bool
-	body     []byte
-	full     int64
-	reserved int64
+	c           *gin.Context
+	snap        *sessionrecorder.Snapshot
+	decision    sessionrecorder.RequestInfo
+	hasDecision bool
+	matched     bool
+	capture     bool
+	capped      bool
+	body        []byte
+	full        int64
+	reserved    int64
+}
+
+func (w *recorderWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
 }
 
 func (w *recorderWriter) decide() {
-	if w.decided {
+	info := sessionrecorder.RequestInfo{
+		ChannelID: common.GetContextKeyInt(w.c, constant.ContextKeyChannelId),
+		Group:     common.GetContextKeyString(w.c, constant.ContextKeyUsingGroup),
+		Model:     common.GetContextKeyString(w.c, constant.ContextKeyOriginalModel),
+	}
+	if w.hasDecision && w.decision == info {
 		return
 	}
-	w.decided = true
+	if w.hasDecision {
+		w.snap.Producer.Release(w.reserved)
+		w.reserved = 0
+		w.body = nil
+		w.full = 0
+		w.capped = false
+	}
+	w.decision = info
+	w.hasDecision = true
+	w.matched = false
 	defer func() {
 		if recover() != nil {
 			w.matched = false
+			w.capture = false
 		}
 	}()
-	channelID := common.GetContextKeyInt(w.c, constant.ContextKeyChannelId)
-	if channelID <= 0 || !w.snap.Producer.Accepting() {
+	if info.ChannelID <= 0 {
+		w.capture = false
 		return
 	}
-	w.matched = w.snap.Filter.Match(sessionrecorder.RequestInfo{
-		ChannelID: channelID,
-		Group:     common.GetContextKeyString(w.c, constant.ContextKeyUsingGroup),
-		Model:     common.GetContextKeyString(w.c, constant.ContextKeyOriginalModel),
-	})
+	w.matched = w.snap.Filter.Match(info)
 	w.capture = w.matched && w.snap.Settings.RecordResponseBody && w.snap.Settings.MaxBodyBytes > 0
 }
 
@@ -91,7 +107,7 @@ func (w *recorderWriter) Write(p []byte) (int, error) {
 	w.decide()
 	n, err := w.ResponseWriter.Write(p)
 	if n > 0 && w.matched {
-		w.tee(p[:n])
+		w.safeTee(p[:n])
 	}
 	return n, err
 }
@@ -100,9 +116,23 @@ func (w *recorderWriter) WriteString(s string) (int, error) {
 	w.decide()
 	n, err := w.ResponseWriter.WriteString(s)
 	if n > 0 && w.matched {
-		w.tee([]byte(s[:n]))
+		w.safeTee([]byte(s[:n]))
 	}
 	return n, err
+}
+
+func (w *recorderWriter) safeTee(p []byte) {
+	defer func() {
+		if recover() != nil {
+			w.snap.Producer.Release(w.reserved)
+			w.reserved = 0
+			w.body = nil
+			w.capture = false
+			w.matched = false
+			common.SysError("session recorder capture panic recovered")
+		}
+	}()
+	w.tee(p)
 }
 
 // SessionRecorder captures matching relay traffic into the session-recorder
@@ -117,18 +147,24 @@ func SessionRecorder() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		started := time.Now()
-		w := &recorderWriter{ResponseWriter: c.Writer, c: c, snap: snap}
-		c.Writer = w
+		sessionRecorderWithSnapshot(c, snap)
+	}
+}
+
+func sessionRecorderWithSnapshot(c *gin.Context, snap *sessionrecorder.Snapshot) {
+	started := time.Now()
+	w := &recorderWriter{ResponseWriter: c.Writer, c: c, snap: snap}
+	c.Writer = w
+	defer func() { snap.Producer.Release(w.reserved) }()
+	c.Next()
+	func() {
 		defer func() {
-			if r := recover(); r != nil {
-				snap.Producer.Release(w.reserved)
+			if recover() != nil {
 				common.SysError("session recorder capture panic recovered")
 			}
 		}()
-		c.Next()
 		finishRecording(c, w, started)
-	}
+	}()
 }
 
 func finishRecording(c *gin.Context, w *recorderWriter, started time.Time) {
@@ -193,17 +229,20 @@ func finishRecording(c *gin.Context, w *recorderWriter, started time.Time) {
 	reserved := w.reserved
 	if settings.RecordRequestBody {
 		capture.RequestType = c.GetHeader("Content-Type")
-		body, full, capped, extra := readRequestBody(c, producer, settings.MaxBodyBytes)
+		reader, full, capped, extra := readRequestBody(c, producer, settings.MaxBodyBytes)
 		reserved += extra
-		capture.RequestBody, capture.RequestFull, capture.RequestCapped = body, full, capped
+		capture.RequestBodyReader = reader
+		capture.RequestBodyLimit = min(full, settings.MaxBodyBytes)
+		capture.RequestFull, capture.RequestCapped = full, capped
 	}
 	w.body = nil
 	w.reserved = 0
 	producer.Enqueue(capture, reserved)
 }
 
-// readRequestBody copies at most limit bytes of the cached request body.
-func readRequestBody(c *gin.Context, producer *sessionrecorder.Producer, limit int64) ([]byte, int64, bool, int64) {
+// readRequestBody reserves space and opens an independent reader; the producer
+// worker copies at most limit bytes after the capture is queued.
+func readRequestBody(c *gin.Context, producer *sessionrecorder.Producer, limit int64) (io.ReadCloser, int64, bool, int64) {
 	value, ok := c.Get(common.KeyBodyStorage)
 	if !ok || value == nil {
 		return nil, 0, false, 0
@@ -226,12 +265,5 @@ func readRequestBody(c *gin.Context, producer *sessionrecorder.Producer, limit i
 		producer.Release(take)
 		return nil, full, true, 0
 	}
-	defer reader.Close()
-	buf := make([]byte, take)
-	n, err := io.ReadFull(reader, buf)
-	if err != nil && n == 0 {
-		producer.Release(take)
-		return nil, full, true, 0
-	}
-	return buf[:n], full, int64(n) < full, take
+	return reader, full, take < full, take
 }

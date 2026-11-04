@@ -23,6 +23,7 @@ type WaffoPancakePriceSnapshot struct {
 // OrderMerchantExternalID = our trade_no; Pancake echoes it back in webhooks.
 type WaffoPancakeCreateSessionParams struct {
 	ProductID               string
+	Currency                string
 	BuyerIdentity           string
 	PriceSnapshot           *WaffoPancakePriceSnapshot
 	BuyerEmail              string
@@ -114,6 +115,9 @@ func CreateWaffoPancakeCheckoutSession(ctx context.Context, params *WaffoPancake
 	if strings.TrimSpace(params.OrderMerchantExternalID) == "" {
 		return nil, fmt.Errorf("missing order merchant external id")
 	}
+	if err := setting.ValidateWaffoPancakeCurrency(params.Currency); err != nil {
+		return nil, fmt.Errorf("invalid checkout currency: %w", err)
+	}
 	if strings.TrimSpace(setting.WaffoPancakeStoreID) == "" {
 		return nil, fmt.Errorf("missing Waffo Pancake store id")
 	}
@@ -125,7 +129,7 @@ func CreateWaffoPancakeCheckoutSession(ctx context.Context, params *WaffoPancake
 	sdkParams := pancake.AuthenticatedCheckoutParams{
 		CreateCheckoutSessionParams: pancake.CreateCheckoutSessionParams{
 			ProductID:               params.ProductID,
-			Currency:                setting.GetWaffoPancakeCurrency(),
+			Currency:                params.Currency,
 			BuyerEmail:              optionalString(params.BuyerEmail),
 			ExpiresInSeconds:        params.ExpiresInSeconds,
 			OrderMerchantExternalID: optionalString(params.OrderMerchantExternalID),
@@ -232,6 +236,9 @@ func ResolveWaffoPancakeTradeNo(event *WaffoPancakeWebhookEvent) (string, error)
 			actualIdentity,
 		)
 	}
+	if topUp.Currency != "" && !strings.EqualFold(strings.TrimSpace(event.Data.Currency), topUp.Currency) {
+		return "", fmt.Errorf("waffo pancake currency mismatch for tradeNo=%s", tradeNo)
+	}
 	return tradeNo, nil
 }
 
@@ -258,6 +265,9 @@ func ResolveWaffoPancakeSubscriptionTradeNo(event *WaffoPancakeWebhookEvent) (st
 			expectedIdentity,
 			actualIdentity,
 		)
+	}
+	if order.Currency != "" && !strings.EqualFold(strings.TrimSpace(event.Data.Currency), order.Currency) {
+		return "", fmt.Errorf("waffo pancake currency mismatch for subscription tradeNo=%s", tradeNo)
 	}
 	return tradeNo, nil
 }

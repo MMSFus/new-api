@@ -91,4 +91,22 @@ describe('revenue trend buckets', () => {
       revenueTrendPoints([], { start: MIDNIGHT, end: MIDNIGHT - 1 })
     ).toEqual([])
   })
+
+  test('a range over the query limit returns before creating buckets', () => {
+    expect(
+      revenueTrendPoints([], {
+        start: MIDNIGHT,
+        end: MIDNIGHT + 93 * DAY,
+      })
+    ).toEqual([])
+  })
+
+  test('an invalid date range returns without formatting a date', () => {
+    expect(
+      revenueTrendPoints([], {
+        start: 8_640_000_000_000,
+        end: 8_640_000_086_400,
+      })
+    ).toEqual([])
+  })
 })

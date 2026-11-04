@@ -57,8 +57,8 @@ export function useSimulatedCacheData(
 ) {
   const statQuery = useQuery({
     queryKey: ['simulated-cache', 'stat', filters],
-    queryFn: async () =>
-      requireServerSuccess(await getSimulatedCacheStat(filters)),
+    queryFn: async ({ signal }) =>
+      requireServerSuccess(await getSimulatedCacheStat(filters, signal)),
     enabled,
     retry: false,
   })
@@ -69,8 +69,8 @@ export function useSimulatedCacheData(
   }
   const listQuery = useQuery({
     queryKey: ['simulated-cache', 'logs', listParams],
-    queryFn: async () =>
-      requireServerSuccess(await getSimulatedCacheLogs(listParams)),
+    queryFn: async ({ signal }) =>
+      requireServerSuccess(await getSimulatedCacheLogs(listParams, signal)),
     enabled,
     retry: false,
   })

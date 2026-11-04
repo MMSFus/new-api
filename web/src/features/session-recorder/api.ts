@@ -215,12 +215,14 @@ export function getRevenueRules(): Promise<RevenueRuleSet> {
   )
 }
 
-/** Fails with the server's validation message when the rules are rejected. */
-export async function saveRevenueRules(body: RevenueRuleSet): Promise<void> {
-  const response = await api.put<ApiResponse>(`${BASE}/revenue/rules`, body)
-  if (!response.data.success) {
-    throw createServerError(response.data, t('Failed to save revenue rules'))
-  }
+/** Returns the canonical rule snapshot stored by the server. */
+export function saveRevenueRules(
+  body: RevenueRuleSet
+): Promise<RevenueRuleSet> {
+  return unwrap(
+    api.put<ApiResponse<RevenueRuleSet>>(`${BASE}/revenue/rules`, body),
+    t('Failed to save revenue rules')
+  )
 }
 
 export function testRevenueRules(body: {

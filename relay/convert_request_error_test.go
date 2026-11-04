@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
+	"github.com/QuantumNous/new-api/pkg/kimi"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
@@ -193,6 +194,17 @@ func TestUnknownModelModifierIsBadRequestWithoutRetry(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, apiErr.StatusCode)
 	assert.Equal(t, types.ErrorCodeConvertRequestFailed, apiErr.GetErrorCode())
 	assert.True(t, types.IsSkipRetryError(apiErr))
+}
+
+func TestKimiMetadataFailurePreservesUpstreamStatusAndRetryability(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	apiErr := newConvertRequestFailedError(c, &relaycommon.RelayInfo{}, &kimi.MetadataError{Status: http.StatusServiceUnavailable})
+
+	require.Equal(t, http.StatusServiceUnavailable, apiErr.StatusCode)
+	require.False(t, types.IsSkipRetryError(apiErr))
 }
 
 func hasHostDiagnosticCode(diagnostics []types.ConversionDiagnostic, code string) bool {

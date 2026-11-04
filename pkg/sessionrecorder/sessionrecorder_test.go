@@ -19,6 +19,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/stretchr/testify/assert"
@@ -245,6 +246,37 @@ func TestProducerQueueFullDropsWithoutBlocking(t *testing.T) {
 	require.False(t, p.Reserve(1000), "memory budget is enforced")
 }
 
+func TestProducerWritesRequestReaderToSpool(t *testing.T) {
+	s := DefaultSettings()
+	s.SpoolRoot = filepath.Join(t.TempDir(), "spool")
+	p := NewProducer(s)
+	body := `{"model":"gpt-4o"}`
+	finished := time.Date(2026, 9, 28, 5, 17, 0, 0, time.UTC)
+	capture := &Capture{
+		Record:            Record{RecordID: "reader-req", SessionID: "session", Model: "gpt-4o"},
+		RequestBodyReader: io.NopCloser(strings.NewReader(body)),
+		RequestBodyLimit:  int64(len(body)),
+		RequestFull:       int64(len(body)),
+		IncludeRequest:    true,
+		FinishedAt:        finished,
+	}
+	require.True(t, p.Reserve(int64(len(body))))
+	p.write(capture)
+	require.EqualValues(t, 1, p.Counters().Written)
+
+	shard := filepath.Join(s.SpoolRoot, "gpt-4o", "jsonl", "2026", "09", "28", "05", "10-"+p.instance+".jsonl")
+	raw, err := os.ReadFile(shard)
+	require.NoError(t, err)
+	var record Record
+	require.NoError(t, common.Unmarshal(bytes.TrimSpace(raw), &record))
+	require.Len(t, record.BodyFiles, 1)
+	require.Equal(t, "request", record.BodyFiles[0].Kind)
+	bodyPath := filepath.Join(s.SpoolRoot, "gpt-4o", filepath.FromSlash(record.BodyFiles[0].File))
+	actualBody, err := os.ReadFile(bodyPath)
+	require.NoError(t, err)
+	require.Equal(t, body, string(actualBody))
+}
+
 func TestProducerWritesSpoolProtocol(t *testing.T) {
 	withStorageUsage(t, 10, 10)
 	sink := installFakeSink(t)
@@ -255,12 +287,13 @@ func TestProducerWritesSpoolProtocol(t *testing.T) {
 	p.Start()
 	finished := time.Date(2026, 9, 28, 5, 17, 0, 0, time.UTC)
 	ok := p.Enqueue(&Capture{
-		Record:          Record{RecordID: "req-1", SessionID: "sess/1", Model: "gpt-4o", Stream: true},
-		RequestBody:     []byte(`{"model":"gpt-4o"}`),
-		ResponseBody:    []byte("data: hi\n\n"),
-		IncludeRequest:  true,
-		IncludeResponse: true,
-		FinishedAt:      finished,
+		Record:            Record{RecordID: "req-1", SessionID: "sess/1", Model: "gpt-4o", Stream: true},
+		RequestBodyReader: io.NopCloser(strings.NewReader(`{"model":"gpt-4o"}`)),
+		RequestBodyLimit:  int64(len(`{"model":"gpt-4o"}`)),
+		ResponseBody:      []byte("data: hi\n\n"),
+		IncludeRequest:    true,
+		IncludeResponse:   true,
+		FinishedAt:        finished,
 	}, 0)
 	require.True(t, ok)
 	p.Stop(5 * time.Second)
@@ -283,9 +316,15 @@ func TestProducerWritesSpoolProtocol(t *testing.T) {
 	require.True(t, strings.HasPrefix(rec.BodyFiles[0].File, "body/2026/09/28/05/"))
 	require.True(t, strings.HasSuffix(rec.BodyFiles[1].File, "_response.sse"))
 	for _, b := range rec.BodyFiles {
-		_, err := os.Stat(filepath.Join(s.SpoolRoot, "gpt-4o", filepath.FromSlash(b.File)))
+		bodyPath := filepath.Join(s.SpoolRoot, "gpt-4o", filepath.FromSlash(b.File))
+		_, err := os.Stat(bodyPath)
 		require.NoError(t, err)
 		require.False(t, strings.HasSuffix(b.File, ".json"), "body files must not look like records")
+		if b.Kind == "request" {
+			body, readErr := os.ReadFile(bodyPath)
+			require.NoError(t, readErr)
+			require.Equal(t, `{"model":"gpt-4o"}`, string(body))
+		}
 	}
 	var stats ProducerStats
 	statsRaw, err := os.ReadFile(s.StatsPath)
@@ -313,6 +352,7 @@ type fakeR2 struct {
 	uploads   map[string]map[int][]byte
 	upMeta    map[string]map[string]string
 	failPuts  int
+	failParts bool
 	pageSize  int
 	lists     int
 	methods   map[string]int
@@ -392,6 +432,10 @@ func (f *fakeR2) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	case r.Method == http.MethodPut && q.Has("partNumber"):
+		if f.failParts {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
 		n, _ := strconv.Atoi(q.Get("partNumber"))
 		body, _ := io.ReadAll(r.Body)
 		sum := sha256.Sum256(body)
@@ -438,6 +482,10 @@ func (f *fakeR2) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.objects[key] = buf.Bytes()
 		f.meta[key] = f.upMeta[id]
 		_, _ = io.WriteString(w, `<CompleteMultipartUploadResult><Key>`+key+`</Key></CompleteMultipartUploadResult>`)
+	case r.Method == http.MethodDelete && q.Has("uploadId"):
+		delete(f.uploads, q.Get("uploadId"))
+		delete(f.upMeta, q.Get("uploadId"))
+		w.WriteHeader(http.StatusNoContent)
 	default:
 		f.forbidden = append(f.forbidden, r.Method+" "+r.URL.String())
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -552,6 +600,79 @@ func TestMultipartUploadAndCheck(t *testing.T) {
 	fake.objects[CheckObjectKey(cfg.R2.ObjectPrefix, other.InstallationID)] = nil
 	require.Error(t, Check(context.Background(), other, store), "foreign probe is never overwritten")
 	require.Empty(t, fake.forbidden)
+}
+
+func TestMultipartFailureAbortsUpload(t *testing.T) {
+	fake := newFakeR2()
+	fake.failParts = true
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	cfg := testConfig(t)
+	cfg.R2.Endpoint = srv.URL
+	old := multipartPart
+	multipartPart = 7
+	defer func() { multipartPart = old }()
+	file := filepath.Join(t.TempDir(), "a.tar.gz")
+	require.NoError(t, os.WriteFile(file, []byte("0123456789abcdef"), 0o600))
+	store := newTestStore(t, cfg)
+	err := store.PutFile(context.Background(), "key", file, 16, strings.Repeat("0", 64))
+	require.Error(t, err)
+	require.Equal(t, 1, fake.methods[http.MethodDelete])
+	require.Empty(t, fake.uploads)
+}
+
+func TestSafeSegmentPreservesUTF8(t *testing.T) {
+	got := SafeSegment(strings.Repeat("会", 50), "s")
+	assert.True(t, utf8.ValidString(got))
+	assert.LessOrEqual(t, len(got), 120)
+}
+
+func TestConsumerRunnerRetriesHeldWorkLock(t *testing.T) {
+	s := DefaultSettings()
+	s.SpoolRoot = filepath.Join(t.TempDir(), "spool")
+	s.WorkDir = filepath.Join(t.TempDir(), "work")
+	s.UploadEnabled = false
+	cfg := s.ToConfig()
+	require.NoError(t, EnsureDirectories(cfg))
+	lock, err := AcquireProcessLock(filepath.Join(cfg.WorkDir, LockFileName))
+	require.NoError(t, err)
+	runner := startConsumer(s)
+	t.Cleanup(func() { runner.shutdown(time.Second) })
+	require.Eventually(t, func() bool {
+		state := runner.state.Load()
+		return state != nil && *state == "lock_held"
+	}, time.Second, 10*time.Millisecond)
+	lock.Release()
+	require.Eventually(t, func() bool {
+		state := runner.state.Load()
+		return state != nil && *state == "upload_disabled"
+	}, 3*time.Second, 10*time.Millisecond)
+}
+
+func TestConsumerRunnerRefreshesRotatedCredentials(t *testing.T) {
+	dir := t.TempDir()
+	writePair := func(access, secret string) {
+		t.Helper()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, credentialAccessKeyFile), []byte(access), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, credentialSecretKeyFile), []byte(secret), 0o600))
+	}
+	writePair("first-access", "first-secret")
+	s := DefaultSettings()
+	s.SpoolRoot = filepath.Join(t.TempDir(), "spool")
+	s.WorkDir = filepath.Join(t.TempDir(), "work")
+	s.CredentialsDir = dir
+	s.R2Endpoint, s.R2Bucket = "https://r2.example.test", "bucket"
+	r := &consumerRunner{}
+	cfg := s.ToConfig()
+	r.cycle(context.Background(), s, cfg)
+	first := r.store.Load()
+	require.NotNil(t, first)
+	writePair("second-access", "second-secret")
+	r.cycle(context.Background(), s, cfg)
+	second := r.store.Load()
+	require.NotNil(t, second)
+	require.NotSame(t, first, second)
+	assert.Equal(t, "second-access", second.creds.AccessKeyID)
 }
 
 func TestCredentialsAndQueueGuard(t *testing.T) {

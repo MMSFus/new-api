@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/tidwall/sjson"
 	"gorm.io/gorm"
 )
@@ -61,6 +62,7 @@ type ChannelCostRatioHistory struct {
 	ChannelID    int      `json:"channel_id" gorm:"index:idx_channel_cost_ratio_time,priority:1"`
 	OldRatio     *float64 `json:"old_ratio"`
 	NewRatio     *float64 `json:"new_ratio"`
+	OldCurrency  string   `json:"old_currency" gorm:"type:varchar(16)"`
 	Currency     string   `json:"currency" gorm:"type:varchar(16)"`
 	Source       string   `json:"source" gorm:"type:varchar(16)"`
 	OperatorID   int      `json:"operator_id"`
@@ -123,11 +125,28 @@ func recordChannelCostRatioChange(tx *gorm.DB, old dto.ChannelSettings, channel 
 	if sameRatio && old.UpstreamCostCurrency == next.UpstreamCostCurrency {
 		return nil
 	}
+	oldCurrency := old.UpstreamCostCurrency
+	if oldCurrency == "" {
+		oldCurrency = currentChannelCostCurrency()
+	}
+	currency := next.UpstreamCostCurrency
+	if currency == "" {
+		currency = currentChannelCostCurrency()
+	}
 	return tx.Create(&ChannelCostRatioHistory{
 		ChannelID: channel.Id, OldRatio: old.UpstreamCostRatio, NewRatio: next.UpstreamCostRatio,
-		Currency: next.UpstreamCostCurrency, Source: source, OperatorID: channel.CostRatioOperatorID,
+		OldCurrency: oldCurrency,
+		Currency:    currency, Source: source, OperatorID: channel.CostRatioOperatorID,
 		UpstreamInfo: upstreamInfo, CreatedAt: common.GetTimestamp(),
 	}).Error
+}
+
+func currentChannelCostCurrency() string {
+	currency := operation_setting.GetQuotaDisplayType()
+	if currency == operation_setting.QuotaDisplayTypeTokens {
+		return operation_setting.CurrencyUSD
+	}
+	return currency
 }
 
 // UpdateChannelCostRatioSyncSettings changes only the sync-related setting
@@ -239,9 +258,16 @@ func GetChannelCostRatioHistory(channelID, page, pageSize int) ([]ChannelCostRat
 }
 
 // ApplyChannelCostRatioSync serializes settings, history and attempt state with
-// channel edits. It reads settings again after the network call, so a sync never
-// replaces unrelated settings or bypasses a newly changed range.
-func ApplyChannelCostRatioSync(channelID int, value *float64, status, message, upstreamInfo string, automatic bool) (result ChannelCostRatioSyncResult, err error) {
+// channel edits, rejecting results for an upstream identity that changed
+// during the network request.
+func ApplyChannelCostRatioSync(probed *Channel, value *float64, status, message, upstreamInfo string, automatic bool) (result ChannelCostRatioSyncResult, err error) {
+	if probed == nil {
+		return result, common.NewMessage("Channel configuration changed during upstream ratio sync")
+	}
+	return applyChannelCostRatioSync(probed, probed.Id, value, status, message, upstreamInfo, automatic)
+}
+
+func applyChannelCostRatioSync(probed *Channel, channelID int, value *float64, status, message, upstreamInfo string, automatic bool) (result ChannelCostRatioSyncResult, err error) {
 	var channel Channel
 	err = DB.Transaction(func(tx *gorm.DB) error {
 		if err := lockForUpdate(tx).First(&channel, channelID).Error; err != nil {
@@ -252,6 +278,11 @@ func ApplyChannelCostRatioSync(channelID int, value *float64, status, message, u
 		}
 		settings := channel.GetSetting()
 		result = ChannelCostRatioSyncResult{Status: status, OldRatio: settings.UpstreamCostRatio, NewRatio: settings.UpstreamCostRatio, Value: value, Error: message}
+		if probed != nil && (channel.Type != probed.Type || channel.Key != probed.Key || channel.GetBaseURL() != probed.GetBaseURL() || channel.ChannelInfo.IsMultiKey != probed.ChannelInfo.IsMultiKey) {
+			result.Status = "stale"
+			result.Error = "Channel configuration changed during upstream ratio sync"
+			return nil
+		}
 		if automatic && !settings.UpstreamCostRatioSyncEnabled {
 			return nil
 		}

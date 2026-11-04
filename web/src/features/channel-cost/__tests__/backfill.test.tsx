@@ -55,6 +55,7 @@ const task: CostBackfillTask = {
       StartTimestamp: 300,
       EndTimestamp: 400,
       Channel: 9,
+      UserId: 0,
       ModelName: 'active-model',
       Username: 'active-user',
       Group: 'active-group',

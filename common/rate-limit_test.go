@@ -80,7 +80,8 @@ func TestInMemoryRateLimiterEvictsOnlyExpiredLRUTail(t *testing.T) {
 
 	idleEntry := limiter.store["idle"]
 	now := time.Now()
-	idleEntry.lastActive = now.Add(-10 * time.Second)
+	// Idle longer than both the shared expiration and the 100s request window.
+	idleEntry.lastActive = now.Add(-100 * time.Second)
 	limiter.store["active"].lastActive = now
 	limiter.deleteExpiredEntries(now)
 
@@ -93,6 +94,52 @@ func TestInMemoryRateLimiterEvictsOnlyExpiredLRUTail(t *testing.T) {
 	assert.Zero(t, idleEntry.requests.length)
 }
 
+func TestInMemoryRateLimiterRetainsRequestsThroughRuleWindow(t *testing.T) {
+	var limiter InMemoryRateLimiter
+	limiter.Init(0)
+	limiter.expirationDuration = 20 * time.Minute
+	require.True(t, limiter.Request("group", 1, 60*60))
+
+	entry := limiter.store["group"]
+	entry.lastActive = time.Now().Add(-45 * time.Minute)
+	limiter.deleteExpiredEntries(time.Now())
+
+	assert.Contains(t, limiter.store, "group")
+	assert.False(t, limiter.Request("group", 1, 60*60))
+}
+
+func TestInMemoryRateLimiterReservationRetainsRuleWindow(t *testing.T) {
+	var limiter InMemoryRateLimiter
+	limiter.Init(0)
+	limiter.expirationDuration = 20 * time.Minute
+	reservation := limiter.Reserve("group", 1, 60*60)
+	require.NotNil(t, reservation)
+	reservation.Complete(true)
+
+	entry := limiter.store["group"]
+	entry.lastActive = time.Now().Add(-45 * time.Minute)
+	limiter.deleteExpiredEntries(time.Now())
+
+	assert.Contains(t, limiter.store, "group")
+	assert.Nil(t, limiter.Reserve("group", 1, 60*60))
+}
+
+func TestInMemoryRateLimiterCleanupEvictsExpiredEntriesBehindLongWindow(t *testing.T) {
+	var limiter InMemoryRateLimiter
+	limiter.Init(0)
+	limiter.expirationDuration = 20 * time.Minute
+	require.True(t, limiter.Request("long", 1, 60*60))
+	require.True(t, limiter.Request("short", 1, 10*60))
+
+	now := time.Now()
+	limiter.store["long"].lastActive = now.Add(-45 * time.Minute)
+	limiter.store["short"].lastActive = now.Add(-30 * time.Minute)
+	limiter.deleteExpiredEntries(now)
+
+	assert.Contains(t, limiter.store, "long")
+	assert.NotContains(t, limiter.store, "short")
+}
+
 func TestInMemoryRateLimiterCleanupTicksEvictExpiredKeys(t *testing.T) {
 	var limiter InMemoryRateLimiter
 	limiter.Init(0)
@@ -100,7 +147,7 @@ func TestInMemoryRateLimiterCleanupTicksEvictExpiredKeys(t *testing.T) {
 	require.True(t, limiter.Request("idle", 1, 100))
 
 	now := time.Now()
-	limiter.store["idle"].lastActive = now.Add(-10 * time.Second)
+	limiter.store["idle"].lastActive = now.Add(-100 * time.Second)
 	ticks := make(chan time.Time, 1)
 	done := make(chan struct{})
 	go func() {

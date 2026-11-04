@@ -43,8 +43,11 @@ export function CachedPriceCell(props: {
     priceRate = 1,
     usdExchangeRate = 1,
     showRechargePrice = false,
-    selectedGroup,
   } = props.options
+  const selectedGroup =
+    typeof props.options.selectedGroup === 'function'
+      ? props.options.selectedGroup(props.model)
+      : props.options.selectedGroup
 
   const tokenUnitLabel = tokenUnit === 'K' ? '1K' : '1M'
 

@@ -221,7 +221,8 @@ export function upsertRateLimitEntry(
 /**
  * Converts the legacy table into global rules. The legacy table was looked
  * up by the token group, falling back to the user group — that is, by the
- * group being called — so each entry becomes a global rule for that group.
+ * group being called — so concrete group entries become global rules. Auto
+ * stays legacy because it refers to the token group before auto group choice.
  * Existing global rules win over legacy entries of the same group.
  */
 export function migrateLegacyRateLimits(
@@ -230,8 +231,31 @@ export function migrateLegacyRateLimits(
 ): string {
   const global = parseForWrite(globalValue)
   for (const entry of parseRateLimitEntries('legacy', legacyValue)) {
+    if (entry.groupName === 'auto') continue
     if (entry.groupName in global) continue
     global[entry.groupName] = toRule(entry)
   }
   return JSON.stringify(global, null, 2)
+}
+
+export function remainingLegacyRateLimits(legacyValue: string): string {
+  const parsed = parseForWrite(legacyValue)
+  return JSON.stringify(
+    Object.hasOwn(parsed, 'auto') ? { auto: parsed.auto } : {},
+    null,
+    2
+  )
+}
+
+export function orderRateLimitOptionUpdates<T>(
+  updates: Array<[string, T]>
+): Array<[string, T]> {
+  return [...updates].sort(([left], [right]) => {
+    const priority = (key: string) => {
+      if (key === 'ModelRequestRateLimitGlobalGroup') return 0
+      if (key === 'ModelRequestRateLimitGroup') return 1
+      return 0
+    }
+    return priority(left) - priority(right)
+  })
 }

@@ -29,6 +29,7 @@ import { DEFAULT_PRICING_PAGE_SIZE, DEFAULT_TOKEN_UNIT } from '../constants'
 import type { PricingModel, TokenUnit } from '../types'
 import { ModelCard } from './model-card'
 import type { ModelPerfBadgeData } from './model-perf-badge'
+import type { SelectedPricingGroup } from './model-price-cell'
 
 export interface ModelCardGridProps {
   models: PricingModel[]
@@ -37,7 +38,7 @@ export interface ModelCardGridProps {
   usdExchangeRate?: number
   tokenUnit?: TokenUnit
   showRechargePrice?: boolean
-  selectedGroup?: string
+  selectedGroup?: SelectedPricingGroup
 }
 
 export const ModelCardGrid = memo(function ModelCardGrid(

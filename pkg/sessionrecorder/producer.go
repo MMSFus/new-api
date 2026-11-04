@@ -6,6 +6,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -14,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
 )
@@ -67,22 +70,24 @@ type Record struct {
 	BodyFiles      []BodyFile        `json:"body_files"`
 }
 
-// Capture is one finished request handed to the producer. The byte slices
-// are owned by the producer after Enqueue.
+// Capture is one finished request handed to the producer. Body bytes and
+// request readers are owned by the producer after Enqueue.
 type Capture struct {
-	Record          Record
-	RequestBody     []byte
-	RequestFull     int64
-	RequestType     string
-	ResponseBody    []byte
-	ResponseFull    int64
-	ResponseType    string
-	RequestCapped   bool
-	ResponseCapped  bool
-	FinishedAt      time.Time
-	reservedBytes   int64
-	IncludeRequest  bool
-	IncludeResponse bool
+	Record            Record
+	RequestBody       []byte
+	RequestBodyReader io.ReadCloser
+	RequestBodyLimit  int64
+	RequestFull       int64
+	RequestType       string
+	ResponseBody      []byte
+	ResponseFull      int64
+	ResponseType      string
+	RequestCapped     bool
+	ResponseCapped    bool
+	FinishedAt        time.Time
+	reservedBytes     int64
+	IncludeRequest    bool
+	IncludeResponse   bool
 }
 
 // ProducerCounters are exposed through the admin status API.
@@ -130,10 +135,23 @@ type Producer struct {
 	indexErrors  atomic.Int64
 	indexDone    chan struct{}
 
-	stop chan struct{}
-	done chan struct{}
-	once sync.Once
+	stop   chan struct{}
+	done   chan struct{}
+	once   sync.Once
+	shards map[string]producerShard
 }
+
+type producerShard struct {
+	sequence int
+	bytes    int64
+	records  int
+}
+
+const (
+	producerShardMaxBytes  = 1 << 30
+	producerShardMaxFiles  = 4000
+	producerShardMaxRecord = 1500
+)
 
 const (
 	indexQueueSize     = 4096
@@ -156,6 +174,7 @@ func NewProducer(s Settings) *Producer {
 
 		indexQueue: make(chan IndexRow, indexQueueSize),
 		indexDone:  make(chan struct{}),
+		shards:     make(map[string]producerShard),
 
 		stop: make(chan struct{}),
 		done: make(chan struct{}),
@@ -201,6 +220,9 @@ func (p *Producer) Enqueue(c *Capture, reserved int64) bool {
 	c.reservedBytes = reserved
 	if p.storagePaused.Load() {
 		p.droppedStorage.Add(1)
+		if c.RequestBodyReader != nil {
+			_ = c.RequestBodyReader.Close()
+		}
 		p.Release(reserved)
 		return false
 	}
@@ -210,6 +232,9 @@ func (p *Producer) Enqueue(c *Capture, reserved int64) bool {
 		return true
 	default:
 		p.droppedFull.Add(1)
+		if c.RequestBodyReader != nil {
+			_ = c.RequestBodyReader.Close()
+		}
 		p.Release(reserved)
 		return false
 	}
@@ -428,7 +453,11 @@ func SafeSegment(v, fallback string) string {
 	}
 	if len(v) > 120 {
 		sum := sha256.Sum256([]byte(v))
-		v = v[:80] + "-" + hex.EncodeToString(sum[:8])
+		prefix := v[:80]
+		for !utf8.ValidString(prefix) {
+			prefix = prefix[:len(prefix)-1]
+		}
+		v = prefix + "-" + hex.EncodeToString(sum[:8])
 	}
 	return v
 }
@@ -475,7 +504,21 @@ func (p *Producer) write(c *Capture) {
 	}()
 	if p.storagePaused.Load() {
 		p.droppedStorage.Add(1)
+		if c.RequestBodyReader != nil {
+			_ = c.RequestBodyReader.Close()
+		}
 		return
+	}
+	if c.RequestBodyReader != nil {
+		reader := c.RequestBodyReader
+		c.RequestBodyReader = nil
+		defer reader.Close()
+		body := make([]byte, c.RequestBodyLimit)
+		n, err := io.ReadFull(reader, body)
+		c.RequestBody = body[:n]
+		if err != nil && int64(n) < c.RequestBodyLimit {
+			c.RequestCapped = true
+		}
 	}
 	t := c.FinishedAt
 	if t.IsZero() {
@@ -525,11 +568,29 @@ func (p *Producer) write(c *Capture) {
 	}
 	line = append(line, '\n')
 	bucket := t.UTC().Minute() / 10 * 10
-	shard := filepath.Join(base, filepath.FromSlash(jsonlRel), twoDigits(bucket)+"-"+p.instance+".jsonl")
+	shardKey := path.Join(modelDir, jsonlRel, twoDigits(bucket))
+	state := p.shards[shardKey]
+	rowBytes := int64(len(line))
+	for _, body := range rec.BodyFiles {
+		rowBytes += body.Size
+	}
+	if state.records > 0 && (state.bytes+rowBytes > producerShardMaxBytes || state.records*3+3 > producerShardMaxFiles || state.records >= producerShardMaxRecord) {
+		state.sequence++
+		state.bytes, state.records = 0, 0
+	}
+	p.shards[shardKey] = state
+	name := twoDigits(bucket) + "-" + p.instance
+	if state.sequence > 0 {
+		name += "-" + fmt.Sprintf("%03d", state.sequence)
+	}
+	shard := filepath.Join(base, filepath.FromSlash(jsonlRel), name+".jsonl")
 	if err := writeFileRetry(shard, line, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640); err != nil {
 		p.setErr(err)
 		return
 	}
+	state.bytes += rowBytes
+	state.records++
+	p.shards[shardKey] = state
 	p.written.Add(1)
 	if currentIndexSink() == nil {
 		return

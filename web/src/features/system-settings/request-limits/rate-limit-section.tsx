@@ -48,7 +48,9 @@ import { useUpdateOption } from '../hooks/use-update-option'
 import {
   isValidRateLimitJSON,
   migrateLegacyRateLimits,
+  orderRateLimitOptionUpdates,
   parseRateLimitEntries,
+  remainingLegacyRateLimits,
   type RateLimitMode,
 } from './rate-limit-rules'
 import { RateLimitVisualEditor } from './rate-limit-visual-editor'
@@ -116,7 +118,7 @@ const LEGACY_RULE_FIELD: GroupRuleField = {
   mode: 'legacy',
   label: 'Legacy group rate limits',
   description:
-    'Deprecated. Looked up by the token group, falling back to the user group, and counted per user across all groups. Still applied when no global or private rule matches. Migrating copies each entry to a global rule for that group (existing global rules are kept) and clears this table.',
+    'Deprecated. Looked up by the token group, falling back to the user group, and counted per user across all groups. Still applied when no global or private rule matches. Migrating copies concrete groups to global rules (existing global rules are kept) and leaves auto rules in this table.',
   placeholder: `{\n  "default": [200, 100],\n  "vip": [0, 1000]\n}`,
   format: '{"groupName": [maxRequests, maxSuccess]}',
 }
@@ -139,13 +141,12 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
   })
 
   useEffect(() => {
-    form.reset(defaultValues)
+    form.reset(defaultValues, { keepDirtyValues: true })
   }, [defaultValues, form])
 
   const legacyValue = form.watch('ModelRequestRateLimitGroup') || ''
   const hasLegacyRules = parseRateLimitEntries('legacy', legacyValue).length > 0
-  // Keep the legacy table visible while it was non-empty when loaded, so a
-  // migration can be reviewed before saving.
+  // Keep remaining legacy rules visible while a migration is reviewed.
   const showLegacy =
     hasLegacyRules ||
     parseRateLimitEntries(
@@ -162,10 +163,11 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
       shouldDirty: true,
       shouldValidate: true,
     })
-    form.setValue('ModelRequestRateLimitGroup', '{}', {
-      shouldDirty: true,
-      shouldValidate: true,
-    })
+    form.setValue(
+      'ModelRequestRateLimitGroup',
+      remainingLegacyRateLimits(legacyValue),
+      { shouldDirty: true, shouldValidate: true }
+    )
   }
 
   const onSubmit = async (values: RateLimitFormValues) => {
@@ -174,7 +176,7 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
         value !== defaultValues[key as keyof RateLimitFormValues]
     )
 
-    for (const [key, value] of updates) {
+    for (const [key, value] of orderRateLimitOptionUpdates(updates)) {
       await updateOption.mutateAsync({ key, value: value ?? '' })
     }
   }

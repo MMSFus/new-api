@@ -25,6 +25,7 @@ import { useAuthStore } from '@/stores/auth-store'
 
 import type { RevenueRuleSet } from '../api'
 import { reorderMove } from '../revenue/rules-schema'
+import { REVENUE_RULES_QUERY_KEY } from '../use-session-recorder-data'
 import {
   fail,
   FULL_GRANTS,
@@ -72,7 +73,7 @@ function savedRules(api: ReturnType<typeof mockApi>) {
 
 describe('ordering', () => {
   test('moving a rule up saves the new priority order', async () => {
-    const api = mockApi({ [`PUT ${BASE}/rules`]: ok() })
+    const api = mockApi({ [`PUT ${BASE}/rules`]: (body) => ok(body)() })
     await renderPage()
     const { user, list } = await openEditor()
 
@@ -87,7 +88,7 @@ describe('ordering', () => {
   })
 
   test('the drag handle reorders with the arrow keys', async () => {
-    const api = mockApi({ [`PUT ${BASE}/rules`]: ok() })
+    const api = mockApi({ [`PUT ${BASE}/rules`]: (body) => ok(body)() })
     await renderPage()
     const { user, list } = await openEditor()
 
@@ -116,8 +117,67 @@ describe('ordering', () => {
 })
 
 describe('editing and validation', () => {
+  test('reopening waits for the refreshed rules instead of showing the old cached form', async () => {
+    const latest = { ...rules, currency_label: 'server-normalized' }
+    let saved = false
+    let finishRefresh: (() => void) | undefined
+    const api = mockApi({
+      [`GET ${BASE}/rules`]: () => {
+        if (!saved) return ok(rules)()
+        return new Promise((resolve) => {
+          finishRefresh = () =>
+            resolve({ data: { success: true, data: latest } })
+        })
+      },
+      [`PUT ${BASE}/rules`]: () => {
+        saved = true
+        return ok(latest)()
+      },
+    })
+    const { client } = await renderPage()
+    const { user, dialog } = await openEditor()
+    const label = within(dialog).getByRole('textbox', {
+      name: 'Currency label',
+    })
+    await user.clear(label)
+    await user.type(label, 'custom')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Revenue rules' })).toBeNull()
+    )
+    expect(client.getQueryData(REVENUE_RULES_QUERY_KEY)).toEqual(latest)
+    void client.invalidateQueries({ queryKey: REVENUE_RULES_QUERY_KEY })
+    await waitFor(() => expect(finishRefresh).toBeTypeOf('function'))
+
+    await user.click(await screen.findByRole('button', { name: 'Edit rules' }))
+    const reopened = await screen.findByRole('dialog', {
+      name: 'Revenue rules',
+    })
+    expect(
+      within(reopened).queryByRole('textbox', { name: 'Currency label' })
+    ).toBeNull()
+    finishRefresh?.()
+
+    expect(
+      await within(reopened).findByRole('textbox', { name: 'Currency label' })
+    ).toHaveValue('server-normalized')
+    const refreshedLabel = within(reopened).getByRole('textbox', {
+      name: 'Currency label',
+    })
+    await user.clear(refreshedLabel)
+    await user.type(refreshedLabel, 'second edit')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() =>
+      expect(api.bodies('put', `${BASE}/rules`)).toHaveLength(2)
+    )
+    expect(api.bodies('put', `${BASE}/rules`)[1]).toMatchObject({
+      currency_label: 'second edit',
+      rules: latest.rules,
+    })
+  })
+
   test('an edited price, type and switch are sent as a typed rule', async () => {
-    const api = mockApi({ [`PUT ${BASE}/rules`]: ok() })
+    const api = mockApi({ [`PUT ${BASE}/rules`]: (body) => ok(body)() })
     await renderPage()
     const { user, list } = await openEditor()
     const row = ruleRow(list, 1)
@@ -142,7 +202,7 @@ describe('editing and validation', () => {
   })
 
   test('a currency label over 16 characters is rejected before saving', async () => {
-    const api = mockApi({ [`PUT ${BASE}/rules`]: ok() })
+    const api = mockApi({ [`PUT ${BASE}/rules`]: (body) => ok(body)() })
     await renderPage()
     const { user, dialog } = await openEditor()
 
@@ -161,7 +221,7 @@ describe('editing and validation', () => {
   })
 
   test('empty fields and a negative price are rejected before saving', async () => {
-    const api = mockApi({ [`PUT ${BASE}/rules`]: ok() })
+    const api = mockApi({ [`PUT ${BASE}/rules`]: (body) => ok(body)() })
     await renderPage()
     const { user, list } = await openEditor()
     const row = ruleRow(list, 0)
@@ -209,7 +269,7 @@ describe('editing and validation', () => {
   })
 
   test('a successful save closes the dialog and reloads the summary', async () => {
-    const api = mockApi({ [`PUT ${BASE}/rules`]: ok() })
+    const api = mockApi({ [`PUT ${BASE}/rules`]: (body) => ok(body)() })
     await renderPage()
     const before = api.params(`${BASE}/summary`).length
     const { user } = await openEditor()

@@ -62,6 +62,7 @@ func (q *rateLimitQueue) clear() {
 // rateLimitEntry is both a rate-limit bucket and a node in the key-level LRU.
 type rateLimitEntry struct {
 	lastActive time.Time
+	retention  time.Duration
 	element    *list.Element
 	requests   rateLimitQueue
 	key        string
@@ -103,7 +104,8 @@ func (l *InMemoryRateLimiter) clearExpiredItems(ticks <-chan time.Time) {
 	}
 }
 
-// deleteExpiredEntries walks only the oldest LRU entries and stops at the first active key.
+// deleteExpiredEntries scans the LRU from oldest to newest because buckets may
+// have different retention windows.
 func (l *InMemoryRateLimiter) deleteExpiredEntries(now time.Time) {
 	if l.expirationDuration <= 0 {
 		return
@@ -112,38 +114,36 @@ func (l *InMemoryRateLimiter) deleteExpiredEntries(now time.Time) {
 	l.mutex.Lock()
 	defer l.mutex.Unlock()
 
-	for {
-		oldest := l.lru.Back()
-		if oldest == nil {
-			return
+	for element := l.lru.Back(); element != nil; {
+		previous := element.Prev()
+		entry := element.Value.(*rateLimitEntry)
+		if now.Sub(entry.lastActive) >= max(l.expirationDuration, entry.retention) {
+			delete(l.store, entry.key)
+			l.lru.Remove(element)
+			entry.element = nil
+			entry.requests.clear()
 		}
-
-		entry := oldest.Value.(*rateLimitEntry)
-		if now.Sub(entry.lastActive) < l.expirationDuration {
-			return
-		}
-
-		delete(l.store, entry.key)
-		l.lru.Remove(oldest)
-		entry.element = nil
-		entry.requests.clear()
+		element = previous
 	}
 }
 
 // touchEntry returns the key's bucket, creating it on demand, and marks it as
 // the most recently active key. The caller must hold the mutex.
-func (l *InMemoryRateLimiter) touchEntry(key string, now time.Time) *rateLimitEntry {
+func (l *InMemoryRateLimiter) touchEntry(key string, now time.Time, duration int64) *rateLimitEntry {
+	retention := time.Duration(duration) * time.Second
 	entry, ok := l.store[key]
 	if !ok {
 		entry = &rateLimitEntry{
 			key:        key,
 			lastActive: now,
+			retention:  retention,
 		}
 		entry.element = l.lru.PushFront(entry)
 		l.store[key] = entry
 		return entry
 	}
 	entry.lastActive = now
+	entry.retention = max(entry.retention, retention)
 	l.lru.MoveToFront(entry.element)
 	return entry
 }
@@ -154,7 +154,7 @@ func (l *InMemoryRateLimiter) Request(key string, maxRequestNum int, duration in
 	defer l.mutex.Unlock()
 
 	now := time.Now()
-	entry := l.touchEntry(key, now)
+	entry := l.touchEntry(key, now, duration)
 	entry.requests.removeExpired(now.Unix(), duration)
 
 	allowed := entry.requests.length < maxRequestNum
@@ -168,9 +168,10 @@ func (l *InMemoryRateLimiter) Request(key string, maxRequestNum int, duration in
 // RateLimitReservation counts an active request towards admission until its
 // outcome is known. Failed requests release the slot without consuming quota.
 type RateLimitReservation struct {
-	limiter *InMemoryRateLimiter
-	key     string
-	once    sync.Once
+	limiter  *InMemoryRateLimiter
+	key      string
+	duration int64
+	once     sync.Once
 }
 
 // Reserve admits a request when the key's accepted requests plus its in-flight
@@ -180,13 +181,13 @@ func (l *InMemoryRateLimiter) Reserve(key string, maxRequests int, duration int6
 	defer l.mutex.Unlock()
 
 	now := time.Now()
-	entry := l.touchEntry(key, now)
+	entry := l.touchEntry(key, now, duration)
 	entry.requests.removeExpired(now.Unix(), duration)
 	if entry.requests.length+l.reservations[key] >= maxRequests {
 		return nil
 	}
 	l.reservations[key]++
-	return &RateLimitReservation{limiter: l, key: key}
+	return &RateLimitReservation{limiter: l, key: key, duration: duration}
 }
 
 // Complete releases the reservation. A successful outcome records the request
@@ -205,7 +206,7 @@ func (r *RateLimitReservation) Complete(success bool) {
 		}
 		if success {
 			now := time.Now()
-			l.touchEntry(r.key, now).requests.append(now.Unix())
+			l.touchEntry(r.key, now, r.duration).requests.append(now.Unix())
 		}
 	})
 }
