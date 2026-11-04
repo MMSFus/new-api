@@ -1,18 +1,19 @@
 package controller
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"net/http"
-	"net/http/httptest"
 )
 
 func TestPricingSyncExpressionPriority(t *testing.T) {
@@ -148,4 +149,173 @@ func TestPricingSyncCompleteSourcesAndArrayFormats(t *testing.T) {
 	assert.NotContains(t, response.Data.Prices, "sync-unpriced")
 	assert.NotContains(t, response.Data.Prices, "sync-invalid-expression")
 	assert.NotContains(t, response.Data.Differences, "sync-already")
+}
+
+func TestPricingSyncForeignCurrencyExpressions(t *testing.T) {
+	before := config.GlobalConfig.ExportAllConfigs()
+	oldRatios, oldPrices, oldCurrencies := ratio_setting.ModelRatio2JSONString(), ratio_setting.ModelPrice2JSONString(), ratio_setting.ModelPriceCurrency2JSONString()
+	t.Cleanup(func() {
+		config.UpdateConfigFromMap(config.GlobalConfig.Get("billing_setting"), map[string]string{"billing_mode": before["billing_setting.billing_mode"], "billing_expr": before["billing_setting.billing_expr"]})
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(oldRatios))
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(oldPrices))
+		require.NoError(t, ratio_setting.UpdateModelPriceCurrencyByJSONString(oldCurrencies))
+	})
+	config.UpdateConfigFromMap(config.GlobalConfig.Get("billing_setting"), map[string]string{"billing_mode": "{}", "billing_expr": "{}"})
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"sync-cny-token":1,"sync-custom-fixed":1}`))
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{}`))
+	require.NoError(t, ratio_setting.UpdateModelPriceCurrencyByJSONString(`{}`))
+	expression := `tier("base", p * 70)`
+	cases := []struct {
+		name        string
+		model       string
+		currencyKey string
+		currency    string
+		legacyField string
+		mode        string
+		want        map[string]any
+	}{
+		{name: "CNY expression with stale token ratios", model: "sync-cny-token", currency: "CNY", legacyField: "model_ratio"},
+		{name: "CUSTOM expression with stale fixed price", model: "sync-custom-fixed", currency: "CUSTOM", legacyField: "model_price"},
+		{name: "CNY thinking alias", model: "gemini-2.5-pro-thinking-128", currencyKey: "gemini-2.5-pro-thinking-*", currency: "CNY"},
+		{name: "CUSTOM gizmo alias", model: "gpt-4-gizmo-sync", currencyKey: "gpt-4-gizmo-*", currency: "CUSTOM"},
+		{name: "unsupported currency fails closed", model: "sync-unknown", currency: "EUR", legacyField: "model_ratio"},
+		{name: "unmarked expression", model: "sync-usd", want: map[string]any{"billing_mode": "tiered_expr", "billing_expr": expression}},
+		{name: "explicit USD expression", model: "sync-explicit-usd", currency: "USD", want: map[string]any{"billing_mode": "tiered_expr", "billing_expr": expression}},
+		{name: "currency lookup uses normalized key only", model: "gemini-2.5-flash-thinking-128", currency: "CNY", want: map[string]any{"billing_mode": "tiered_expr", "billing_expr": expression}},
+		{name: "inactive foreign expression keeps USD numeric export", model: "sync-inactive", currency: "CNY", legacyField: "model_ratio", mode: "ratio", want: map[string]any{"billing_mode": "ratio", "model_ratio": float64(2), "completion_ratio": float64(3)}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			currencyKey := tc.currencyKey
+			if currencyKey == "" {
+				currencyKey = tc.model
+			}
+			mode := "tiered_expr"
+			if tc.mode != "" {
+				mode = tc.mode
+			}
+			data := map[string]any{
+				"billing_mode":         map[string]string{tc.model: mode},
+				"billing_expr":         map[string]string{tc.model: expression},
+				"model_price_currency": map[string]string{currencyKey: tc.currency},
+			}
+			if tc.legacyField != "" {
+				data[tc.legacyField] = map[string]float64{tc.model: 2}
+				data["completion_ratio"] = map[string]float64{tc.model: 3}
+			}
+			encoded, err := common.Marshal(map[string]any{"success": true, "data": data})
+			require.NoError(t, err)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write(encoded)
+			}))
+			t.Cleanup(server.Close)
+			for _, includeUnchanged := range []bool{false, true} {
+				var response struct {
+					Success bool
+					Data    struct {
+						Differences map[string]map[string]dto.DifferenceItem
+						Prices      map[string]struct {
+							Upstreams map[string]map[string]any
+						}
+						TestResults []dto.TestResult `json:"test_results"`
+					}
+				}
+				recorder := modelManagementRequest(t, FetchUpstreamRatios, http.MethodPost, "/api/ratio_sync/fetch", map[string]any{
+					"upstreams":         []map[string]any{{"name": "source", "base_url": server.URL, "endpoint": "/api/ratio_config"}},
+					"include_unchanged": includeUnchanged,
+				}, &response)
+				require.True(t, response.Success, recorder.Body.String())
+				require.Len(t, response.Data.TestResults, 1)
+				require.Equal(t, "success", response.Data.TestResults[0].Status, response.Data.TestResults[0].Error)
+				if tc.want == nil {
+					assert.NotContains(t, response.Data.Prices, tc.model)
+					assert.NotContains(t, response.Data.Differences, tc.model)
+					continue
+				}
+				assert.Equal(t, tc.want, response.Data.Prices[tc.model].Upstreams["source"])
+			}
+		})
+	}
+}
+
+func TestPricingSyncLocalExpressionCurrency(t *testing.T) {
+	before := config.GlobalConfig.ExportAllConfigs()
+	oldCurrencies := ratio_setting.ModelPriceCurrency2JSONString()
+	oldRatios, oldPrices := ratio_setting.ModelRatio2JSONString(), ratio_setting.ModelPrice2JSONString()
+	oldUSD, oldCustom := operation_setting.USDExchangeRate, operation_setting.GetGeneralSetting().CustomCurrencyExchangeRate
+	t.Cleanup(func() {
+		config.UpdateConfigFromMap(config.GlobalConfig.Get("billing_setting"), map[string]string{"billing_mode": before["billing_setting.billing_mode"], "billing_expr": before["billing_setting.billing_expr"]})
+		require.NoError(t, ratio_setting.UpdateModelPriceCurrencyByJSONString(oldCurrencies))
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(oldRatios))
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(oldPrices))
+		operation_setting.USDExchangeRate = oldUSD
+		operation_setting.GetGeneralSetting().CustomCurrencyExchangeRate = oldCustom
+	})
+	operation_setting.USDExchangeRate = 7
+	operation_setting.GetGeneralSetting().CustomCurrencyExchangeRate = 5
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{}`))
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{}`))
+	expression := `tier("base", p * 7)`
+	models := []string{"sync-local-cny", "sync-local-custom", "gemini-2.5-pro-thinking-128", "sync-local-usd"}
+	modes, expressions := make(map[string]string), make(map[string]string)
+	for _, name := range models {
+		modes[name], expressions[name] = "tiered_expr", expression
+	}
+	encodedModes, err := common.Marshal(modes)
+	require.NoError(t, err)
+	encodedExpressions, err := common.Marshal(expressions)
+	require.NoError(t, err)
+	config.UpdateConfigFromMap(config.GlobalConfig.Get("billing_setting"), map[string]string{"billing_mode": string(encodedModes), "billing_expr": string(encodedExpressions)})
+	require.NoError(t, ratio_setting.UpdateModelPriceCurrencyByJSONString(`{"sync-local-cny":"CNY","sync-local-custom":"CUSTOM","gemini-2.5-pro-thinking-*":"CNY","gpt-image-2":"CNY"}`))
+	builtin, ok := billing_setting.GetBuiltinBillingExpr("gpt-image-2")
+	require.True(t, ok)
+	expressions["gpt-image-2"], modes["gpt-image-2"] = builtin, "tiered_expr"
+	var items []map[string]any
+	for name, expr := range expressions {
+		items = append(items, map[string]any{"model_name": name, "billing_mode": "tiered_expr", "billing_expr": expr, "price_currency": "USD"})
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var data any = map[string]any{"billing_mode": modes, "billing_expr": expressions}
+		if r.URL.Path == "/api/pricing" {
+			data = items
+		}
+		encoded, err := common.Marshal(map[string]any{"success": true, "data": data})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(encoded)
+	}))
+	t.Cleanup(server.Close)
+	for _, endpoint := range []string{"/api/ratio_config", "/api/pricing"} {
+		t.Run(endpoint, func(t *testing.T) {
+			var response struct {
+				Success bool
+				Data    struct {
+					Differences map[string]map[string]dto.DifferenceItem
+					Prices      map[string]struct {
+						Current   map[string]any
+						Upstreams map[string]map[string]any
+					}
+				}
+			}
+			recorder := modelManagementRequest(t, FetchUpstreamRatios, http.MethodPost, "/api/ratio_sync/fetch", map[string]any{
+				"upstreams": []map[string]any{{"name": "USD", "base_url": server.URL, "endpoint": endpoint}},
+			}, &response)
+			require.True(t, response.Success, recorder.Body.String())
+			for _, name := range models[:3] {
+				assert.Equal(t, expression, response.Data.Differences[name]["billing_expr"].Current)
+				assert.Equal(t, expression, response.Data.Differences[name]["billing_expr"].Upstreams["USD"], "equal source text in another currency is a real price difference")
+				want := map[string]any{"billing_mode": "tiered_expr", "billing_expr": expression}
+				assert.Equal(t, want, response.Data.Prices[name].Current)
+				assert.Equal(t, want, response.Data.Prices[name].Upstreams["USD"], "comparison metadata must not enter the USD import draft")
+			}
+			for _, name := range []string{"sync-local-usd", "gpt-image-2"} {
+				assert.NotContains(t, response.Data.Differences, name, "built-in expressions are USD even when the legacy model currency is marked")
+				assert.NotContains(t, response.Data.Prices, name)
+			}
+		})
+	}
 }
