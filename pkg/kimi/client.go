@@ -153,6 +153,8 @@ type MetadataError struct{ Status int }
 
 func (e *MetadataError) Error() string { return "Kimi metadata request failed" }
 
+func (e *MetadataError) StatusCode() int { return e.Status }
+
 type Model struct {
 	ID              string `json:"id"`
 	Protocol        string `json:"protocol"`
@@ -193,7 +195,7 @@ func Get(ctx context.Context, client *http.Client, c Credential, path string) ([
 	Headers(req.Header, c)
 	resp, err := NewClient(client).Do(req)
 	if err != nil {
-		return nil, errors.New("Kimi metadata connection failed")
+		return nil, &MetadataError{Status: http.StatusServiceUnavailable}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {

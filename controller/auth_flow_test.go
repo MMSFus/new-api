@@ -1782,6 +1782,99 @@ func TestKimiConcurrentRenewalRotatesOnceAndRemovedCredentialStaysRemoved(t *tes
 	require.EqualValues(t, 1, calls.Load())
 }
 
+func TestKimiRenewalPersistsWhenInitiatingRequestIsCancelled(t *testing.T) {
+	setupSecurityEnrollmentTest(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.Channel{}, &model.Ability{}))
+	master := common.IsMasterNode
+	common.IsMasterNode = true
+	t.Cleanup(func() { common.IsMasterNode = master })
+	before := kimiTestCredential(t, "cancelled-renewal")
+	before.ExpiresAt = time.Now().Add(-time.Minute).Unix()
+	ch := model.Channel{Type: constant.ChannelTypeKimi, Key: before.Key()}
+	require.NoError(t, model.DB.Create(&ch).Error)
+
+	client, err := service.GetHttpClientWithProxySettings("", dto.ChannelSettings{})
+	require.NoError(t, err)
+	transport := client.Transport
+	t.Cleanup(func() { client.Transport = transport })
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	var enteredOnce sync.Once
+	client.Transport = emailHTTPTransport(func(req *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		enteredOnce.Do(func() { close(entered) })
+		<-release
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"access_token":"test-renewed-access","refresh_token":"test-renewed-refresh","expires_in":3600,"token_type":"Bearer"}`))}, nil
+	})
+
+	firstContext, cancelFirst := context.WithCancel(context.Background())
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := service.ResolveKimiCredential(firstContext, ch.Id, before.Key(), dto.ChannelSettings{}, "")
+		firstDone <- err
+	}()
+	<-entered
+
+	secondStarted := make(chan struct{})
+	secondDone := make(chan error, 1)
+	go func() {
+		close(secondStarted)
+		credential, err := service.ResolveKimiCredential(context.Background(), ch.Id, before.Key(), dto.ChannelSettings{}, "")
+		if err == nil && credential.AccessToken != "test-renewed-access" {
+			err = errors.New("shared renewal returned an unexpected credential")
+		}
+		secondDone <- err
+	}()
+	<-secondStarted
+	cancelFirst()
+	require.Error(t, <-firstDone)
+	close(release)
+	require.NoError(t, <-secondDone)
+	require.EqualValues(t, 1, calls.Load())
+
+	stored, err := model.GetChannelById(ch.Id, true)
+	require.NoError(t, err)
+	rotated, err := kimi.Parse(stored.Key)
+	require.NoError(t, err)
+	require.Equal(t, "test-renewed-refresh", rotated.RefreshToken)
+}
+
+func TestKimiModelDiscoveryCachesResultWhenInitiatorIsCancelled(t *testing.T) {
+	credential := kimiTestCredential(t, "cancelled-metadata")
+	client, err := service.GetHttpClientWithProxySettings("", dto.ChannelSettings{})
+	require.NoError(t, err)
+	transport := client.Transport
+	t.Cleanup(func() { client.Transport = transport })
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	var enteredOnce sync.Once
+	client.Transport = emailHTTPTransport(func(req *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		enteredOnce.Do(func() { close(entered) })
+		<-release
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"data":[{"id":"kimi-cached-model"}]}`))}, nil
+	})
+
+	firstContext, cancelFirst := context.WithCancel(context.Background())
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := service.KimiModels(firstContext, credential, dto.ChannelSettings{})
+		firstDone <- err
+	}()
+	<-entered
+
+	cancelFirst()
+	require.Error(t, <-firstDone)
+	close(release)
+	models, err := service.KimiModels(context.Background(), credential, dto.ChannelSettings{})
+	require.NoError(t, err)
+	require.Len(t, models, 1)
+	require.Equal(t, "kimi-cached-model", models[0].ID)
+	require.EqualValues(t, 1, calls.Load())
+}
+
 func TestKimiUsageIgnoresMalformedBucketsWithoutDroppingValidOnes(t *testing.T) {
 	_, identity := setupSecurityEnrollmentTest(t)
 	require.NoError(t, model.DB.AutoMigrate(&model.Channel{}, &model.Ability{}))

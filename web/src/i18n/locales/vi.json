@@ -1999,7 +1999,7 @@
     "Deployment requested": "Yêu cầu triển khai",
     "Deployments": "Triển khai",
     "Deprecated": "Đã ngừng dùng",
-    "Deprecated. Looked up by the token group, falling back to the user group, and counted per user across all groups. Still applied when no global or private rule matches. Migrating copies each entry to a global rule for that group (existing global rules are kept) and clears this table.": "Đã ngừng sử dụng. Tra cứu theo nhóm token, nếu không có thì theo nhóm người dùng, và đếm chung cho mỗi người dùng trên mọi nhóm. Vẫn được áp dụng khi không có quy tắc toàn cục hoặc riêng nào khớp. Chuyển đổi sẽ sao chép từng mục thành quy tắc toàn cục cho nhóm đó (giữ nguyên quy tắc toàn cục hiện có) và xóa bảng này.",
+    "Deprecated. Looked up by the token group, falling back to the user group, and counted per user across all groups. Still applied when no global or private rule matches. Migrating copies concrete groups to global rules (existing global rules are kept) and leaves auto rules in this table.": "Đã ngừng sử dụng. Tra cứu theo nhóm token, nếu không có thì theo nhóm người dùng, và đếm chung cho mỗi người dùng trên mọi nhóm. Vẫn được áp dụng khi không có quy tắc toàn cục hoặc riêng nào khớp. Chuyển đổi sao chép các nhóm cụ thể thành quy tắc toàn cục (giữ nguyên quy tắc hiện có) và giữ quy tắc auto trong bảng này.",
     "Derives the request names your users call": "Tạo tên yêu cầu mà người dùng gọi",
     "Derives the upstream names sent to the provider": "Tạo tên gửi tới thượng nguồn",
     "Desc": "Giảm dần",

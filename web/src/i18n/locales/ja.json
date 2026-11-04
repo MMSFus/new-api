@@ -1999,7 +1999,7 @@
     "Deployment requested": "デプロイメントが要求されました",
     "Deployments": "デプロイ",
     "Deprecated": "非推奨",
-    "Deprecated. Looked up by the token group, falling back to the user group, and counted per user across all groups. Still applied when no global or private rule matches. Migrating copies each entry to a global rule for that group (existing global rules are kept) and clears this table.": "非推奨。トークングループ（なければユーザーグループ）で検索され、ユーザーごとに全グループ共通でカウントされます。一致するグローバルまたはプライベートルールがない場合は引き続き適用されます。移行すると各エントリがそのグループのグローバルルールにコピーされ（既存のグローバルルールは保持）、この表はクリアされます。",
+    "Deprecated. Looked up by the token group, falling back to the user group, and counted per user across all groups. Still applied when no global or private rule matches. Migrating copies concrete groups to global rules (existing global rules are kept) and leaves auto rules in this table.": "非推奨。トークングループ（なければユーザーグループ）で検索され、ユーザーごとに全グループ共通でカウントされます。一致するグローバルまたはプライベートルールがない場合は引き続き適用されます。移行では具体的なグループをグローバルルールにコピーし（既存ルールは保持）、auto ルールはこの表に残します。",
     "Derives the request names your users call": "ユーザーが呼び出すリクエストモデル名を生成します",
     "Derives the upstream names sent to the provider": "上流に送信するモデル名を生成します",
     "Desc": "降順",

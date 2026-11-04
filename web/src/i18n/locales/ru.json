@@ -1999,7 +1999,7 @@
     "Deployment requested": "Развертывание запрошено",
     "Deployments": "Развертывания",
     "Deprecated": "Устарело",
-    "Deprecated. Looked up by the token group, falling back to the user group, and counted per user across all groups. Still applied when no global or private rule matches. Migrating copies each entry to a global rule for that group (existing global rules are kept) and clears this table.": "Устарело. Ищется по группе токена, иначе по группе пользователя, и считается для пользователя по всем группам вместе. Всё ещё применяется, если не подходит ни одно глобальное или частное правило. Перенос копирует каждую запись в глобальное правило для этой группы (существующие глобальные правила сохраняются) и очищает эту таблицу.",
+    "Deprecated. Looked up by the token group, falling back to the user group, and counted per user across all groups. Still applied when no global or private rule matches. Migrating copies concrete groups to global rules (existing global rules are kept) and leaves auto rules in this table.": "Устарело. Ищется по группе токена, иначе по группе пользователя, и считается для пользователя по всем группам вместе. Всё ещё применяется, если не подходит ни одно глобальное или частное правило. Перенос копирует конкретные группы в глобальные правила (существующие правила сохраняются), а правила auto оставляет в этой таблице.",
     "Derives the request names your users call": "Формирует имена запроса, которые вызывают пользователи",
     "Derives the upstream names sent to the provider": "Формирует имена, отправляемые провайдеру",
     "Desc": "По убыванию",

@@ -134,7 +134,7 @@ func resolveKimiCredential(ctx context.Context, raw string, settings dto.Channel
 		return c, nil
 	}
 	result := kimiRefreshGroup.DoChan(scope+":"+c.Region+":"+c.ID, func() (any, error) {
-		grantCtx, cancel := context.WithTimeout(ctx, 40*time.Second)
+		grantCtx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 		defer cancel()
 		release, verifyLease, err := acquireKimiRefreshLock(grantCtx, c.Region+":"+c.ID, cancel)
 		if err != nil {
@@ -263,11 +263,13 @@ func KimiModels(ctx context.Context, c kimi.Credential, settings dto.ChannelSett
 		return models, nil
 	}
 	result := kimiModelGroup.DoChan(key, func() (any, error) {
+		metadataCtx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+		defer cancel()
 		client, err := KimiHTTPClient(settings)
 		if err != nil {
 			return nil, err
 		}
-		models, err := kimi.Models(ctx, client, c)
+		models, err := kimi.Models(metadataCtx, client, c)
 		if err == nil {
 			kimiModels.Set(key, models)
 		}

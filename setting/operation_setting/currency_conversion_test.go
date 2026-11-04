@@ -119,6 +119,15 @@ func TestCurrencyUSDFactor(t *testing.T) {
 			errorMessage: "invalid exchange rate",
 		},
 		{
+			name: "CNY reciprocal overflow fails",
+			code: CurrencyCNY,
+			setupRate: func() {
+				USDExchangeRate = 1e-309
+			},
+			wantError:    true,
+			errorMessage: "reciprocal is not finite",
+		},
+		{
 			name: "CUSTOM with zero rate fails",
 			code: CurrencyCustom,
 			setupRate: func() {
@@ -226,6 +235,7 @@ func TestCurrencyOptionValidation(t *testing.T) {
 		assert.Error(t, ValidateExchangeRateOption(USDExchangeRateOptionKey, value, used), value)
 	}
 	assert.NoError(t, ValidateExchangeRateOption(USDExchangeRateOptionKey, "7.1", used))
+	assert.Error(t, ValidateExchangeRateOption(USDExchangeRateOptionKey, "1e-309", used))
 	// Unused currencies keep their previous, unrestricted behavior.
 	assert.NoError(t, ValidateExchangeRateOption(CustomCurrencyRateOptionKey, "0", used))
 	assert.Error(t, ValidateExchangeRateOption(CustomCurrencyRateOptionKey, "0", map[string]bool{CurrencyCustom: true}))
@@ -235,4 +245,11 @@ func TestCurrencyOptionValidation(t *testing.T) {
 	assert.Error(t, ValidateQuotaOption(AmountCurrencyOptionKey, `{"PreConsumedQuota":"CNY"}`))
 	// CUSTOM has rate 0 here, so marking a field with it is rejected.
 	assert.Error(t, ValidateQuotaOption(AmountCurrencyOptionKey, `{"trust_quota_usd":"CUSTOM"}`))
+}
+
+func TestCurrencyAmountRejectsOverflowingReciprocal(t *testing.T) {
+	withAmountCurrencies(t, 1e-309, 1, map[string]string{AmountFieldTrustQuotaUSD: CurrencyCNY})
+
+	_, err := currencyAmountToQuota(1, CurrencyCNY)
+	require.Error(t, err)
 }

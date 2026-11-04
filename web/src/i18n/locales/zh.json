@@ -1999,7 +1999,7 @@
     "Deployment requested": "部署已请求",
     "Deployments": "部署",
     "Deprecated": "已弃用",
-    "Deprecated. Looked up by the token group, falling back to the user group, and counted per user across all groups. Still applied when no global or private rule matches. Migrating copies each entry to a global rule for that group (existing global rules are kept) and clears this table.": "已弃用。按令牌分组查找（无则使用用户分组），每个用户跨所有分组共用一个计数。当没有匹配的全局或私域规则时仍会生效。迁移会把每一项复制为对应分组的全局规则（保留已有全局规则），并清空此表。",
+    "Deprecated. Looked up by the token group, falling back to the user group, and counted per user across all groups. Still applied when no global or private rule matches. Migrating copies concrete groups to global rules (existing global rules are kept) and leaves auto rules in this table.": "已弃用。按令牌分组查找（无则使用用户分组），每个用户跨所有分组共用一个计数。当没有匹配的全局或私域规则时仍会生效。迁移会将具体分组复制为全局规则（保留已有全局规则），并将 auto 规则保留在此表中。",
     "Derives the request names your users call": "生成用户调用的请求模型名",
     "Derives the upstream names sent to the provider": "生成发送给上游的模型名",
     "Desc": "降序",

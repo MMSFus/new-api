@@ -164,6 +164,9 @@ func currencyAmountToQuota(amount float64, currency string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	if math.IsNaN(factor) || math.IsInf(factor, 0) || factor <= 0 {
+		return 0, fmt.Errorf("currency conversion factor must be finite and positive")
+	}
 	value := decimal.NewFromFloat(amount).Mul(decimal.NewFromFloat(factor)).Mul(decimal.NewFromFloat(common.QuotaPerUnit))
 	return common.WalletQuotaFromDecimalStrict(value)
 }
