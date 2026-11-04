@@ -1,5 +1,13 @@
 package model
 
+import (
+	"errors"
+
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting"
+	"gorm.io/gorm"
+)
+
 type Midjourney struct {
 	Id          int    `json:"id"`
 	Code        int    `json:"code"`
@@ -24,8 +32,10 @@ type Midjourney struct {
 	Buttons     string `json:"buttons"`
 	Properties  string `json:"properties"`
 
-	TokenId          int `json:"-" gorm:"default:0"`
-	BillingChannelId int `json:"-" gorm:"default:0"`
+	TokenId          int                  `json:"-" gorm:"default:0"`
+	BillingChannelId int                  `json:"-" gorm:"default:0"`
+	WalletGroup      string               `json:"-" gorm:"type:varchar(64)"`
+	WalletBuckets    common.BalanceLedger `json:"-" gorm:"type:text;serializer:json"`
 }
 
 // TaskQueryParams 用于包含所有搜索条件的结构体，可以根据需求添加更多字段
@@ -175,8 +185,43 @@ func (midjourney *Midjourney) Update() error {
 
 func (midjourney *Midjourney) UpdateBillingState() error {
 	return DB.Model(midjourney).
-		Select("quota", "token_id", "billing_channel_id").
+		Select("quota", "token_id", "billing_channel_id", "wallet_group", "wallet_buckets").
 		Updates(midjourney).Error
+}
+
+// DebitWallet 把钱包扣款与任务的原始资金来源在同一事务内保存。
+func (midjourney *Midjourney) DebitWallet(group string, amount int) (common.BalanceLedger, error) {
+	if amount < 0 {
+		return nil, errors.New("quota cannot be negative")
+	}
+	order := setting.GetGroupBalanceBuckets(group)
+	var ledger common.BalanceLedger
+	chargedTask := *midjourney
+	_, err := runBalanceTransaction(midjourney.UserId, func(tx *gorm.DB) (int, error) {
+		delta, err := mutateUserBalanceTx(tx, midjourney.UserId, func(b *BalanceBuckets) error {
+			ledger, _ = b.debit(order, amount, true)
+			return nil
+		})
+		if err != nil {
+			return 0, err
+		}
+		chargedTask.WalletGroup = group
+		chargedTask.WalletBuckets = ledger.Clone()
+		result := tx.Model(&chargedTask).Select("wallet_group", "wallet_buckets").Updates(&chargedTask)
+		if result.Error != nil {
+			return 0, result.Error
+		}
+		if result.RowsAffected != 1 {
+			return 0, gorm.ErrRecordNotFound
+		}
+		return delta, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	midjourney.WalletGroup = chargedTask.WalletGroup
+	midjourney.WalletBuckets = chargedTask.WalletBuckets
+	return ledger, nil
 }
 
 func (midjourney *Midjourney) GetBillingChannelId() int {

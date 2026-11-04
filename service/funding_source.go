@@ -172,23 +172,19 @@ func (w *WalletFunding) release(amount int) error {
 }
 
 // switchGroup 在跨分组重试选中新分组后迁移钱包扣费：先按账本把已扣额度
-// 原样退回原余额桶，再在新分组允许的余额桶中重新扣减，不足部分记欠费
-// （与结算补扣语义一致）。新分组永远不会动用它不被允许的余额桶。
+// 退回原余额桶，再在新分组允许的余额桶中重新扣减，两步在同一事务中完成。
+// strict=true 时余额不足则整笔回滚；结算迁移允许记欠费。
 // group 为空或 "auto"（尚未确定真实分组）时保持原分组。
-func (w *WalletFunding) switchGroup(group string) error {
+func (w *WalletFunding) switchGroup(group string, strict bool) error {
 	if !isConcreteBillingGroup(group) || group == w.group {
 		return nil
 	}
-	amount := w.consumed
-	if amount > 0 {
-		if err := w.release(amount); err != nil {
-			return err
-		}
+	ledger, err := model.ReallocateUserBalance(w.userId, group, w.ledger, strict)
+	if err != nil {
+		return err
 	}
 	w.group = group
-	if amount > 0 {
-		return w.overdraft(amount)
-	}
+	w.ledger = ledger
 	return nil
 }
 

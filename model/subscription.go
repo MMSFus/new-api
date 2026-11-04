@@ -796,6 +796,9 @@ func PurchaseSubscriptionWithBalance(userId int, planId int) error {
 		// 余额购买订阅不属于某个分组的调用，可使用全部余额，按默认顺序扣减。
 		if requiredQuota > 0 {
 			if _, err := mutateUserBalanceTx(tx, userId, func(b *BalanceBuckets) error {
+				if b.Total() < requiredQuota {
+					return common.NewMessage("Insufficient balance")
+				}
 				ledger, remaining := b.debit(common.DefaultBalanceBucketOrder(), requiredQuota, false)
 				if remaining > 0 || ledger.Total() != requiredQuota {
 					return common.NewMessage("Insufficient balance")

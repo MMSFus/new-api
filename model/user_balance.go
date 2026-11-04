@@ -356,7 +356,7 @@ func ReserveUserBalance(userId int, group string, amount int) (common.BalanceLed
 	order := setting.GetGroupBalanceBuckets(group)
 	var ledger common.BalanceLedger
 	_, err := mutateUserBalance(userId, func(b *BalanceBuckets) error {
-		available := b.Available(order)
+		available := min(b.Total(), b.Available(order))
 		if available < amount {
 			return &GroupBalanceInsufficientError{Group: group, Buckets: order, Available: available, Required: amount}
 		}
@@ -392,6 +392,42 @@ func DebitUserBalance(userId int, group string, amount int) (common.BalanceLedge
 
 // RefundUserBalance 按账本退回原余额桶（一次事务完成）。
 func RefundUserBalance(userId int, entries common.BalanceLedger) error {
+	if entries.Total() <= 0 {
+		return nil
+	}
+	_, err := mutateUserBalance(userId, func(b *BalanceBuckets) error {
+		return b.refund(entries)
+	})
+	return err
+}
+
+// ReallocateUserBalance 在同一事务内退回旧账本并按新分组重新扣减。
+// strict 用于发送前迁移：净余额或目标组余额不足时整笔回滚。
+func ReallocateUserBalance(userId int, group string, entries common.BalanceLedger, strict bool) (common.BalanceLedger, error) {
+	order := setting.GetGroupBalanceBuckets(group)
+	amount := entries.Total()
+	if amount <= 0 {
+		return nil, nil
+	}
+	var ledger common.BalanceLedger
+	_, err := mutateUserBalance(userId, func(b *BalanceBuckets) error {
+		if err := b.refund(entries); err != nil {
+			return err
+		}
+		available := min(b.Total(), b.Available(order))
+		if strict && available < amount {
+			return &GroupBalanceInsufficientError{Group: group, Buckets: order, Available: available, Required: amount}
+		}
+		ledger, _ = b.debit(order, amount, !strict)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return ledger, nil
+}
+
+func (b *BalanceBuckets) refund(entries common.BalanceLedger) error {
 	total := entries.Total()
 	if total <= 0 {
 		return nil
@@ -401,25 +437,22 @@ func RefundUserBalance(userId int, entries common.BalanceLedger) error {
 			return err
 		}
 	}
-	_, err := mutateUserBalance(userId, func(b *BalanceBuckets) error {
-		if b.Total() > common.MaxWalletQuota-total {
-			return ErrWalletQuotaLimitExceeded
+	if b.Total() > common.MaxWalletQuota-total {
+		return ErrWalletQuotaLimitExceeded
+	}
+	// 先冲回欠费条目，再退回各余额桶：结果与条目顺序无关，
+	// 且不会出现"先退的桶额度被拿去还欠费、再冲欠费溢出到赠送"的错位。
+	for _, entry := range entries {
+		if entry.Bucket == common.BalanceBucketDebt {
+			b.credit(entry.Bucket, entry.Amount)
 		}
-		// 先冲回欠费条目，再退回各余额桶：结果与条目顺序无关，
-		// 且不会出现"先退的桶额度被拿去还欠费、再冲欠费溢出到赠送"的错位。
-		for _, entry := range entries {
-			if entry.Bucket == common.BalanceBucketDebt {
-				b.credit(entry.Bucket, entry.Amount)
-			}
+	}
+	for _, entry := range entries {
+		if entry.Bucket != common.BalanceBucketDebt {
+			b.credit(entry.Bucket, entry.Amount)
 		}
-		for _, entry := range entries {
-			if entry.Bucket != common.BalanceBucketDebt {
-				b.credit(entry.Bucket, entry.Amount)
-			}
-		}
-		return nil
-	})
-	return err
+	}
+	return nil
 }
 
 // unknownRefundBucket 返回来源未知的退款应计入的余额桶：分组允许赠送余额时

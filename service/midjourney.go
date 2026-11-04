@@ -38,6 +38,8 @@ func PrepareMidjourneyTaskBilling(relayInfo *relaycommon.RelayInfo, task *model.
 	task.Quota = 0
 	task.TokenId = 0
 	task.BillingChannelId = 0
+	task.WalletGroup = ""
+	task.WalletBuckets = nil
 	if !shouldBill {
 		return false, nil
 	}
@@ -71,11 +73,13 @@ func SettleMidjourneyTaskBilling(relayInfo *relaycommon.RelayInfo, task *model.M
 		return false, errors.New("Midjourney task must be persisted before billing")
 	}
 
-	result, billingErr := postConsumeQuotaWithResult(relayInfo, task.Quota, 0, true)
+	result, billingErr := postConsumeQuotaWithResult(relayInfo, task.Quota, 0, true, task)
 	if !result.FundingApplied {
 		task.Quota = 0
 		task.TokenId = 0
 		task.BillingChannelId = 0
+		task.WalletGroup = ""
+		task.WalletBuckets = nil
 		if updateErr := task.UpdateBillingState(); updateErr != nil {
 			return false, errors.Join(billingErr, fmt.Errorf("clear Midjourney billing state: %w", updateErr))
 		}
@@ -99,10 +103,19 @@ func RefundMidjourneyQuota(ctx context.Context, task *model.Midjourney, reason s
 		return true
 	}
 
-	if err := model.IncreaseUserQuota(task.UserId, quota, false); err != nil {
-		logger.LogWarn(ctx, common.LogText("failed to refund Midjourney user quota, task %s: %s", task.MjId, err.Error()))
+	ledger := task.WalletBuckets.Clone()
+	var refundErr error
+	if len(ledger) > 0 || isConcreteBillingGroup(task.WalletGroup) {
+		refundErr = model.RefundUserBalanceWithLedger(task.UserId, task.WalletGroup, &ledger, quota)
+	} else {
+		// 仅历史记录没有原始资金来源，保留按用户当前组退款的兼容策略。
+		refundErr = model.IncreaseUserQuota(task.UserId, quota, false)
+	}
+	if refundErr != nil {
+		logger.LogWarn(ctx, common.LogText("failed to refund Midjourney user quota, task %s: %s", task.MjId, refundErr.Error()))
 		return false
 	}
+	task.WalletBuckets = ledger
 
 	if task.TokenId > 0 {
 		tokenKey := resolveTokenKey(ctx, task.TokenId, task.MjId)
