@@ -51,7 +51,7 @@ func (s *BillingSession) Settle(actualQuota int) error {
 		return nil
 	}
 	if !s.fundingSettled {
-		if err := s.syncWalletGroup(); err != nil {
+		if err := s.syncWalletGroup(false); err != nil {
 			return err
 		}
 	}
@@ -180,7 +180,14 @@ func (s *BillingSession) reserve(targetQuota int, requireAvailableQuota bool) er
 		_, imageRequest := s.relayInfo.Request.(*dto.ImageRequest)
 		requireAvailableQuota = requireAvailableQuota || imageRequest || s.relayInfo.ImageRequestCount > 0
 	}
-	if s.settled || s.refunded || s.trusted && !requireAvailableQuota || targetQuota <= s.preConsumedQuota {
+	if s.settled || s.refunded {
+		return nil
+	}
+	// 同价、降价和信任旁路也必须在任务持久化前同步最终资金来源。
+	if err := s.syncWalletGroup(true); err != nil {
+		return err
+	}
+	if s.trusted && !requireAvailableQuota || targetQuota <= s.preConsumedQuota {
 		return nil
 	}
 
@@ -189,9 +196,6 @@ func (s *BillingSession) reserve(targetQuota int, requireAvailableQuota bool) er
 		return nil
 	}
 
-	if err := s.syncWalletGroup(); err != nil {
-		return err
-	}
 	if err := s.reserveFunding(delta, requireAvailableQuota); err != nil {
 		return err
 	}
@@ -382,12 +386,16 @@ func (s *BillingSession) shouldTrust(c *gin.Context) bool {
 // syncWalletGroup 在跨分组重试切换到新的真实分组后，把钱包已扣额度迁移到
 // 新分组允许的余额桶（见 WalletFunding.switchGroup），并同步账本到 RelayInfo。
 // relayInfo.UsingGroup 由 HandleGroupRatio 在每次选渠道后更新；仍为 "auto" 时不切换。
-func (s *BillingSession) syncWalletGroup() error {
+func (s *BillingSession) syncWalletGroup(strict bool) error {
 	wallet, ok := s.funding.(*WalletFunding)
 	if !ok || s.relayInfo == nil {
 		return nil
 	}
-	if err := wallet.switchGroup(s.relayInfo.UsingGroup); err != nil {
+	if err := wallet.switchGroup(s.relayInfo.UsingGroup, strict); err != nil {
+		var detail *model.GroupBalanceInsufficientError
+		if errors.As(err, &detail) {
+			return NewGroupBalanceInsufficientAPIError(s.lang, detail)
+		}
 		return err
 	}
 	s.relayInfo.WalletBillingGroup = wallet.group

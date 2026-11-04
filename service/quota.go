@@ -437,11 +437,11 @@ type postConsumeQuotaResult struct {
 }
 
 func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQuota int, sendEmail bool) error {
-	_, err := postConsumeQuotaWithResult(relayInfo, quota, preConsumedQuota, sendEmail)
+	_, err := postConsumeQuotaWithResult(relayInfo, quota, preConsumedQuota, sendEmail, nil)
 	return err
 }
 
-func postConsumeQuotaWithResult(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQuota int, sendEmail bool) (result postConsumeQuotaResult, err error) {
+func postConsumeQuotaWithResult(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQuota int, sendEmail bool, midjourney *model.Midjourney) (result postConsumeQuotaResult, err error) {
 
 	// 1) Consume from wallet quota OR subscription item
 	if relayInfo != nil && relayInfo.BillingSource == BillingSourceSubscription {
@@ -461,9 +461,14 @@ func postConsumeQuotaWithResult(relayInfo *relaycommon.RelayInfo, quota int, pre
 		if !isConcreteBillingGroup(group) {
 			group = ResolveWalletBillingGroup(nil, relayInfo)
 		}
+		relayInfo.WalletBillingGroup = group
 		if quota > 0 {
 			var ledger common.BalanceLedger
-			ledger, err = model.DebitUserBalance(relayInfo.UserId, group, quota)
+			if midjourney != nil {
+				ledger, err = midjourney.DebitWallet(group, quota)
+			} else {
+				ledger, err = model.DebitUserBalance(relayInfo.UserId, group, quota)
+			}
 			relayInfo.WalletBalanceLedger.Append(ledger)
 		} else if quota < 0 {
 			err = model.RefundUserBalanceWithLedger(relayInfo.UserId, group, &relayInfo.WalletBalanceLedger, -quota)
