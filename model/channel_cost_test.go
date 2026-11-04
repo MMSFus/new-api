@@ -384,6 +384,34 @@ func TestSumChannelCostNetsRefundsAndSplitsUncostedRevenue(t *testing.T) {
 	assert.Equal(t, int64(-200), *logs[2].SimulatedCacheDelta)
 }
 
+func TestChannelCostUserFilterIncludesLogsFromRenamedUser(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+		t.Run(dialect, func(t *testing.T) {
+			db := setupChannelCostDialect(t, dialect)
+			createCostChannel(t, db, 1, nil)
+			now := common.GetTimestamp()
+			rows := []Log{
+				{CreatedAt: now - 2, Type: LogTypeConsume, UserId: 711, Username: "alice", ChannelId: 1, Quota: 100, Other: `{}`},
+				{CreatedAt: now - 1, Type: LogTypeConsume, UserId: 711, Username: "bob", ChannelId: 1, Quota: 200, Other: `{}`},
+				{CreatedAt: now - 1, Type: LogTypeConsume, UserId: 712, Username: "carol", ChannelId: 1, Quota: 900, Other: `{}`},
+			}
+			require.NoError(t, db.Create(&rows).Error)
+			filter := LogFilter{StartTimestamp: now - 10, EndTimestamp: now, UserId: 711}
+
+			report, err := SumChannelCost(filter)
+			require.NoError(t, err)
+			assert.EqualValues(t, 300, report.Total.Revenue)
+			require.Len(t, report.Users, 1)
+			assert.Equal(t, 711, report.Users[0].UserId)
+
+			logs, total, err := GetChannelCostLogs(filter, 0, 10)
+			require.NoError(t, err)
+			assert.EqualValues(t, 2, total)
+			assert.Len(t, logs, 2)
+		})
+	}
+}
+
 func TestHideSimulatedCacheAuditKeepsOtherAdminInfo(t *testing.T) {
 	log := &Log{Other: `{"admin_info":{"simulated_cache":{"quota_delta":1},"use_channel":[1]},"cache_tokens":3}`}
 	log.HideSimulatedCacheAudit()

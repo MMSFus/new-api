@@ -53,6 +53,7 @@ export function ChannelCostTrendChart(props: {
     const values = points.flatMap((point) =>
       series.map((item) => ({
         Time: point.label,
+        Bucket: point.key,
         Metric: item.label,
         Value: item.value(point.amount),
       }))
@@ -62,13 +63,21 @@ export function ChannelCostTrendChart(props: {
     return {
       type: 'line' as const,
       data: [{ id: 'trend', values }],
-      xField: 'Time',
+      xField: 'Bucket',
       yField: 'Value',
       seriesField: 'Metric',
       point: { visible: values.length <= 60 },
       line: { style: { curveType: 'monotone' as const } },
       legends: { visible: true },
       axes: [
+        {
+          orient: 'bottom' as const,
+          label: {
+            formatMethod: (value: unknown) =>
+              points.find((point) => point.key === String(value))?.label ??
+              String(value),
+          },
+        },
         {
           orient: 'left' as const,
           label: {
@@ -98,8 +107,8 @@ export function ChannelCostTrendChart(props: {
     }
   }, [points, t])
 
-  const selectByLabel = (label: unknown) => {
-    const point = points.find((item) => item.label === label)
+  const selectByBucket = (bucket: unknown) => {
+    const point = points.find((item) => item.key === String(bucket))
     if (point) props.onSelectPoint(point)
   }
 
@@ -122,11 +131,11 @@ export function ChannelCostTrendChart(props: {
           }}
           option={VCHART_OPTION}
           onClick={(event: { datum?: Record<string, unknown> }) =>
-            selectByLabel(event.datum?.Time)
+            selectByBucket(event.datum?.Bucket)
           }
           onDimensionClick={(event: {
             dimensionInfo?: { value?: unknown }[]
-          }) => selectByLabel(event.dimensionInfo?.[0]?.value)}
+          }) => selectByBucket(event.dimensionInfo?.[0]?.value)}
         />
       </div>
     </PanelWrapper>

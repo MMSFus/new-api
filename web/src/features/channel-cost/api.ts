@@ -30,6 +30,7 @@ export interface ChannelCostFilters {
   channel?: number
   model_name?: string
   username?: string
+  user_id?: number
   group?: string
 }
 
@@ -126,11 +127,12 @@ export const CHANNEL_COST_MAX_RANGE_SECONDS = 31 * 24 * 3600
 export const LOG_TYPE_REFUND = 6
 
 export async function getChannelCostReport(
-  params: ChannelCostFilters
+  params: ChannelCostFilters,
+  signal?: AbortSignal
 ): Promise<ChannelCostReport> {
   const response = await api.get<ApiResponse<ChannelCostReport>>(
     '/api/channel_cost/report',
-    { params }
+    { params, signal }
   )
   if (!response.data.success || !response.data.data) {
     throw createServerError(response.data, t('Failed to load cost report'))
@@ -139,11 +141,12 @@ export async function getChannelCostReport(
 }
 
 export async function getChannelCostLogs(
-  params: ChannelCostFilters & { p: number; page_size: number }
+  params: ChannelCostFilters & { p: number; page_size: number },
+  signal?: AbortSignal
 ): Promise<ChannelCostLogPage> {
   const response = await api.get<ApiResponse<ChannelCostLogPage>>(
     '/api/channel_cost/logs',
-    { params }
+    { params, signal }
   )
   if (!response.data.success || !response.data.data) {
     throw createServerError(response.data, t('Failed to load cost logs'))
@@ -166,6 +169,7 @@ export type CostBackfillTask = SystemTask<
       StartTimestamp: number
       EndTimestamp: number
       Channel: number
+      UserId: number
       ModelName: string
       Username: string
       Group: string

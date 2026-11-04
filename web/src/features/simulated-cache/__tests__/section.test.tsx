@@ -111,6 +111,7 @@ const stat = {
   simulated_quota: 2600,
   quota_delta: -1600,
   original_cache_read_tokens: 0,
+  original_cache_creation_tokens: 2000,
   simulated_cache_read_tokens: 8000,
   simulated_cache_creation_tokens: 2000,
 }
@@ -209,17 +210,23 @@ test('loads the last 24h by default and expands a row into the comparison', asyn
   await renderSection()
 
   expect(await screen.findByText('alice')).toBeVisible()
-  expect(get).toHaveBeenCalledWith('/api/log/simulated_cache', {
-    params: {
-      start_timestamp: NOW - 24 * 3600,
-      end_timestamp: NOW,
-      p: 1,
-      page_size: 20,
-    },
-  })
-  expect(get).toHaveBeenCalledWith('/api/log/simulated_cache/stat', {
-    params: { start_timestamp: NOW - 24 * 3600, end_timestamp: NOW },
-  })
+  expect(get).toHaveBeenCalledWith(
+    '/api/log/simulated_cache',
+    expect.objectContaining({
+      params: {
+        start_timestamp: NOW - 24 * 3600,
+        end_timestamp: NOW,
+        p: 1,
+        page_size: 20,
+      },
+    })
+  )
+  expect(get).toHaveBeenCalledWith(
+    '/api/log/simulated_cache/stat',
+    expect.objectContaining({
+      params: { start_timestamp: NOW - 24 * 3600, end_timestamp: NOW },
+    })
+  )
   expect(screen.getByText('$0.0052')).toBeVisible()
   expect(screen.getByText('$0.0084')).toBeVisible()
 
@@ -244,6 +251,72 @@ test('loads the last 24h by default and expands a row into the comparison', asyn
   expect(
     screen.getByText('Target hit rate').nextElementSibling
   ).toHaveTextContent('85.37%')
+})
+
+test('text edits do not query until Search commits them', async () => {
+  const get = mockApi()
+  await renderSection()
+  await screen.findByText('alice')
+  const initialCalls = get.mock.calls.length
+
+  await userEvent
+    .setup()
+    .type(screen.getByRole('textbox', { name: 'Model Name' }), 'claude')
+  expect(get).toHaveBeenCalledTimes(initialCalls)
+
+  await userEvent.setup().click(screen.getByRole('button', { name: 'Search' }))
+  await waitFor(() =>
+    expect(listParams(get)).toContainEqual(
+      expect.objectContaining({ model_name: 'claude' })
+    )
+  )
+})
+
+test('changing quick range aborts obsolete list and statistic requests', async () => {
+  const get = mockApi({
+    stat: () => new Promise(() => {}),
+    list: () => new Promise(() => {}),
+  })
+  await renderSection()
+  await waitFor(() => expect(get).toHaveBeenCalledTimes(2))
+  const previousSignals = get.mock.calls.map(
+    (call) => (call[1] as { signal: AbortSignal }).signal
+  )
+
+  await userEvent
+    .setup()
+    .click(screen.getByRole('button', { name: 'Last hour' }))
+
+  await waitFor(() => expect(get).toHaveBeenCalledTimes(4))
+  expect(previousSignals.every((signal) => signal.aborted)).toBe(true)
+})
+
+test('the cache write chart includes original upstream tokens', async () => {
+  mockApi()
+  await renderSection()
+  await screen.findByText('alice')
+  const tokenChart = [...chart.mock.calls]
+    .reverse()
+    .find(([props]) => props.spec.data[0].values[0]?.Metric === 'Cache Read')
+
+  expect(tokenChart?.[0].spec.data[0].values).toContainEqual({
+    Metric: 'Cache Write',
+    Side: 'Original',
+    Value: 2000,
+  })
+})
+
+test('a URL page size above the server limit leaves later cache logs reachable', async () => {
+  const get = mockApi({
+    list: async () => ({
+      data: { success: true, data: { items: [logItem], total: 150 } },
+    }),
+  })
+  await renderSection('/simulated-cache?pageSize=200')
+
+  await screen.findByText('alice')
+  await waitFor(() => expect(listParams(get)[0].page_size).toBe(100))
+  expect(screen.getByRole('button', { name: 'Go to next page' })).toBeEnabled()
 })
 
 test('the expanded row spans the table and lays comparison and meta out side by side when wide', async () => {
@@ -298,6 +371,7 @@ test('a range longer than 7 days is rejected before any request', async () => {
   const user = userEvent.setup()
   await user.click(screen.getByRole('button', { name: /~/ }))
   await user.click(await screen.findByRole('button', { name: '30 Days' }))
+  await user.click(screen.getAllByRole('button', { name: 'Search' })[0])
 
   expect(
     await screen.findByText('Time range cannot exceed 7 days')

@@ -20,6 +20,7 @@ import { describe, expect, it } from 'vitest'
 
 import { FILTER_ALL } from '../constants'
 import { filterByGroup, isModelInConfigGroup } from '../lib/filters'
+import { getDisplayGroupRatio, resolveDisplayGroup } from '../lib/model-helpers'
 import type { PricingConfigGroup, PricingModel } from '../types'
 
 function pricingModel(name: string, groups: string[]): PricingModel {
@@ -72,5 +73,18 @@ describe('config group filtering', () => {
     expect(isModelInConfigGroup(models[0], { ...premium, groups: [] })).toBe(
       false
     )
+  })
+
+  it('uses the first reachable config-group route for the displayed price', () => {
+    const model = {
+      ...pricingModel('routed', ['cheap', 'vip']),
+      group_ratio: { cheap: 0.1, vip: 2 },
+    }
+    const routeGroup = resolveDisplayGroup(model, 'cfg:premium', [
+      { ...premium, groups: ['vip'] },
+    ])
+
+    expect(routeGroup).toBe('vip')
+    expect(getDisplayGroupRatio(model, routeGroup)).toBe(2)
   })
 })

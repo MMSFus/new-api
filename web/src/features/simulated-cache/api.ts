@@ -30,6 +30,7 @@ export interface SimulatedCacheFilters {
   channel?: number
   model_name?: string
   username?: string
+  user_id?: number
 }
 
 export interface SimulatedCacheStat {
@@ -38,6 +39,7 @@ export interface SimulatedCacheStat {
   simulated_quota: number
   quota_delta: number
   original_cache_read_tokens: number
+  original_cache_creation_tokens: number
   simulated_cache_read_tokens: number
   simulated_cache_creation_tokens: number
 }
@@ -51,11 +53,12 @@ export interface SimulatedCacheLogPage {
 export const SIMULATED_CACHE_MAX_RANGE_SECONDS = 7 * 24 * 3600
 
 export async function getSimulatedCacheLogs(
-  params: SimulatedCacheFilters & { p: number; page_size: number }
+  params: SimulatedCacheFilters & { p: number; page_size: number },
+  signal?: AbortSignal
 ): Promise<SimulatedCacheLogPage> {
   const response = await api.get<ApiResponse<SimulatedCacheLogPage>>(
     '/api/log/simulated_cache',
-    { params }
+    { params, signal }
   )
   if (!response.data.success || !response.data.data) {
     throw createServerError(
@@ -67,11 +70,12 @@ export async function getSimulatedCacheLogs(
 }
 
 export async function getSimulatedCacheStat(
-  params: SimulatedCacheFilters
+  params: SimulatedCacheFilters,
+  signal?: AbortSignal
 ): Promise<SimulatedCacheStat> {
   const response = await api.get<ApiResponse<SimulatedCacheStat>>(
     '/api/log/simulated_cache/stat',
-    { params }
+    { params, signal }
   )
   if (!response.data.success || !response.data.data) {
     throw createServerError(

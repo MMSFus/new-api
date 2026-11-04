@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { useTableUrlState, type NavigateFn } from '@/hooks/use-table-url-state'
@@ -48,12 +48,39 @@ export function useLogRangeSearch(options: {
     () => resolveLogRangeFilters(search, options.defaultPreset, now),
     [search, options.defaultPreset, now]
   )
+  const [draftFilters, setDraftFilters] = useState(filters)
+  useEffect(() => {
+    setDraftFilters(filters)
+  }, [filters])
   const table = useTableUrlState({
     search,
     navigate,
     pagination: { defaultPage: 1, defaultPageSize: 20 },
     globalFilter: { enabled: false },
   })
+  useEffect(() => {
+    if (search.pageSize === undefined || search.pageSize <= 100) return
+    navigate({
+      replace: true,
+      search: (prev) => ({ ...prev, pageSize: 100 }),
+    })
+  }, [navigate, search.pageSize])
+  const pagination = useMemo(
+    () => ({
+      ...table.pagination,
+      pageSize: Math.min(table.pagination.pageSize, 100),
+    }),
+    [table.pagination]
+  )
+  const onPaginationChange = (
+    updater: Parameters<typeof table.onPaginationChange>[0]
+  ) => {
+    const next = typeof updater === 'function' ? updater(pagination) : updater
+    table.onPaginationChange({
+      ...next,
+      pageSize: Math.min(next.pageSize, 100),
+    })
+  }
 
   /** Merges a filter patch into the URL and returns to the first page. */
   const updateFilters = (patch: Partial<LogRangeFilters>) => {
@@ -68,6 +95,27 @@ export function useLogRangeSearch(options: {
         page: undefined,
       }),
     })
+  }
+
+  /** Keeps edits local until the user submits the filter form. */
+  const editFilters = (patch: Partial<LogRangeFilters>) => {
+    setDraftFilters((current) => ({ ...current, ...patch }))
+  }
+
+  /** Commits the current draft and reports whether it changed the search. */
+  const commitFilters = (): boolean => {
+    if (JSON.stringify(draftFilters) === JSON.stringify(filters)) return false
+    const next = logRangeFiltersToSearch(draftFilters)
+    navigate({
+      replace: true,
+      search: (prev) => ({
+        ...prev,
+        ...next,
+        range: undefined,
+        page: undefined,
+      }),
+    })
+    return true
   }
 
   const selectPreset = (preset: LogRangePreset) => {
@@ -104,10 +152,13 @@ export function useLogRangeSearch(options: {
 
   return {
     filters,
+    draftFilters,
     preset: activeLogRangePreset(search, options.defaultPreset),
-    pagination: table.pagination,
-    onPaginationChange: table.onPaginationChange,
+    pagination,
+    onPaginationChange,
     updateFilters,
+    editFilters,
+    commitFilters,
     selectPreset,
     refreshNow,
     reset,

@@ -33,6 +33,7 @@ func logFilterFromQuery(c *gin.Context, admin bool) model.LogFilter {
 	if admin {
 		filter.Username = c.Query("username")
 		filter.Channel, _ = strconv.Atoi(c.Query("channel"))
+		filter.UserId, _ = strconv.Atoi(c.Query("user_id"))
 	}
 	return filter
 }

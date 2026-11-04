@@ -482,7 +482,7 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 }
 
 // LogFilter is the usage-log search shared by the log list and the log export.
-// Username and Channel are administrator filters.
+// Username, UserId, and Channel are administrator filters.
 type LogFilter struct {
 	Type int
 	// Types keeps logs of any listed type; it applies together with Type.
@@ -491,6 +491,7 @@ type LogFilter struct {
 	EndTimestamp      int64
 	ModelName         string
 	Username          string
+	UserId            int
 	TokenName         string
 	Channel           int
 	Group             string
@@ -518,6 +519,9 @@ func (f LogFilter) apply(tx *gorm.DB) (*gorm.DB, error) {
 	}
 	if tx, err = applyExplicitLogTextFilter(tx, "logs.username", f.Username); err != nil {
 		return nil, err
+	}
+	if f.UserId > 0 {
+		tx = tx.Where("logs.user_id = ?", f.UserId)
 	}
 	if f.TokenName != "" {
 		tx = tx.Where("logs.token_name = ?", f.TokenName)

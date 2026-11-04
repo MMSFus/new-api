@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { EXCLUDED_GROUPS, FILTER_ALL, QUOTA_TYPE_VALUES } from '../constants'
-import type { PricingModel } from '../types'
+import type { PricingConfigGroup, PricingModel } from '../types'
 
 // ----------------------------------------------------------------------------
 // Model Helper Utilities
@@ -92,6 +92,21 @@ export function getDisplayGroupRatio(
   }
 
   return minRatio === Number.POSITIVE_INFINITY ? 1 : minRatio
+}
+
+/** Resolves a config-group filter to the model's first reachable route group. */
+export function resolveDisplayGroup(
+  model: PricingModel,
+  selectedGroup: string | undefined,
+  configGroups: PricingConfigGroup[]
+): string | undefined {
+  const configGroup = configGroups.find(
+    (group) => group.value === selectedGroup
+  )
+  if (!configGroup) return selectedGroup
+  return configGroup.groups.find((group) =>
+    model.enable_groups?.includes(group)
+  )
 }
 
 /**

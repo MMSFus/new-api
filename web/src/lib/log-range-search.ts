@@ -50,6 +50,7 @@ export const logRangeSearchSchema = z.object({
   start: optionalPositiveInt.catch(undefined),
   end: optionalPositiveInt.catch(undefined),
   channel: optionalPositiveInt.catch(undefined),
+  user_id: optionalPositiveInt.catch(undefined),
   model: optionalText.catch(undefined),
   username: optionalText.catch(undefined),
   group: optionalText.catch(undefined),
@@ -64,6 +65,7 @@ export interface LogRangeFilters {
   start_timestamp?: number
   end_timestamp?: number
   channel?: number
+  user_id?: number
   model_name?: string
   username?: string
   group?: string
@@ -90,6 +92,7 @@ export function resolveLogRangeFilters(
       search.start ?? filters.end_timestamp - LOG_RANGE_PRESET_SECONDS['24h']
   }
   if (search.channel !== undefined) filters.channel = search.channel
+  if (search.user_id !== undefined) filters.user_id = search.user_id
   if (search.model !== undefined) filters.model_name = search.model
   if (search.username !== undefined) filters.username = search.username
   if (search.group !== undefined) filters.group = search.group
@@ -104,6 +107,7 @@ export function logRangeFiltersToSearch(
   if ('start_timestamp' in patch) search.start = patch.start_timestamp
   if ('end_timestamp' in patch) search.end = patch.end_timestamp
   if ('channel' in patch) search.channel = patch.channel
+  if ('user_id' in patch) search.user_id = patch.user_id
   if ('model_name' in patch) search.model = patch.model_name || undefined
   if ('username' in patch) search.username = patch.username || undefined
   if ('group' in patch) search.group = patch.group || undefined

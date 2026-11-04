@@ -43,6 +43,7 @@ export function SimulatedCacheFilterBar<TData>(props: {
   onChange: (patch: Partial<LogRangeFilters>) => void
   /** Shows the group filter. */
   withGroup?: boolean
+  withUserId?: boolean
   /**
    * Replaces the channel/model/username/group inputs for reports filtered by
    * other fields; `textFilterCount` is then their active count on mobile.
@@ -119,6 +120,23 @@ export function SimulatedCacheFilterBar<TData>(props: {
           }}
         />
       </LogsFilterField>
+      {props.withUserId && (
+        <LogsFilterField>
+          <LogsFilterInput
+            aria-label={t('User ID')}
+            placeholder={t('User ID')}
+            inputMode='numeric'
+            value={props.filters.user_id ?? ''}
+            onChange={(event) => {
+              const userId = Number(event.target.value)
+              props.onChange({
+                user_id:
+                  Number.isInteger(userId) && userId > 0 ? userId : undefined,
+              })
+            }}
+          />
+        </LogsFilterField>
+      )}
       <LogsFilterField>
         <LogsFilterInput
           aria-label={t('Model Name')}
@@ -159,6 +177,7 @@ export function SimulatedCacheFilterBar<TData>(props: {
       props.filters.channel,
       props.filters.model_name,
       props.filters.username,
+      props.filters.user_id,
       props.filters.group,
     ].filter(Boolean).length
   return (

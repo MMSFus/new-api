@@ -145,6 +145,11 @@ export function SimulatedCacheComparisonCharts(props: {
           },
           {
             Metric: t('Cache Write'),
+            Side: original,
+            Value: stat.original_cache_creation_tokens,
+          },
+          {
+            Metric: t('Cache Write'),
             Side: simulated,
             Value: stat.simulated_cache_creation_tokens,
           },

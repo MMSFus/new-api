@@ -54,6 +54,7 @@ const chart = vi.hoisted(() =>
     (_props: {
       spec: { type: string }
       onClick?: (event: { datum?: Record<string, unknown> }) => void
+      onDimensionClick?: (event: { dimensionInfo?: { value?: unknown }[] }) => void
     }) => null
   )
 )
@@ -273,7 +274,23 @@ test('URL filters seed the report and a quick range rewrites the URL', async () 
   )
 })
 
-test('typing a filter writes it to the URL and returns to the first page', async () => {
+test('a URL page size above the server limit uses 100 rows and keeps later pages reachable', async () => {
+  const get = mockApi({
+    '/api/channel_cost/logs': async () => ({
+      data: { success: true, data: { items: [log], total: 150 } },
+    }),
+  })
+  const router = await renderPage('/channel-cost?pageSize=200')
+
+  await waitFor(() =>
+    expect(paramsOf(get, '/api/channel_cost/logs')[0].page_size).toBe(100)
+  )
+  await waitFor(() => expect(router.state.location.search.pageSize).toBe(100))
+  await screen.findAllByRole('button', { name: 'View details' })
+  expect(screen.getByRole('button', { name: 'Go to next page' })).toBeEnabled()
+})
+
+test('typing a filter keeps edits local until Search submits them', async () => {
   mockApi()
   const router = await renderPage('/channel-cost?page=3')
   await screen.findByRole('button', { name: 'anthropic #3' })
@@ -282,9 +299,14 @@ test('typing a filter writes it to the URL and returns to the first page', async
     .setup()
     .type(screen.getByRole('textbox', { name: 'Username' }), 'bob')
 
+  expect(router.state.location.search).toEqual({ page: 3 })
+  await userEvent
+    .setup()
+    .click(screen.getAllByRole('button', { name: 'Search' })[0])
   await waitFor(() =>
-    expect(router.state.location.search).toEqual({ username: 'bob' })
+    expect(router.state.location.search).toMatchObject({ username: 'bob' })
   )
+  expect(router.state.location.search.page).toBeUndefined()
 })
 
 test('the breakdown dimension is kept in the URL and restored on load', async () => {
@@ -374,21 +396,46 @@ test('clicking a revenue share slice drills into that row', async () => {
   )
 })
 
+test('user breakdown drills and applies filters by stable user ID', async () => {
+  const get = mockApi()
+  await renderPage('/channel-cost?dimension=user')
+  await screen.findByRole('button', { name: 'alice #1' })
+  await userEvent
+    .setup()
+    .click(screen.getByRole('button', { name: 'alice #1' }))
+
+  const sheet = await screen.findByRole('dialog', { name: 'User: alice #1' })
+  await userEvent
+    .setup()
+    .click(within(sheet).getByRole('button', { name: 'Apply as filter' }))
+
+  await waitFor(() =>
+    expect(paramsOf(get, '/api/channel_cost/logs')).toContainEqual(
+      expect.objectContaining({ user_id: 1 })
+    )
+  )
+  expect(screen.getByRole('textbox', { name: 'User ID' })).toHaveValue('1')
+})
+
 test('clicking a trend point drills into its day within the range', async () => {
   const get = mockApi()
   await renderPage()
   await screen.findByRole('button', { name: 'anthropic #3' })
   const day = dayjs.unix(NOW - 3600)
+  const hourLabel = day.format('MM-DD HH:mm Z')
 
-  chartProps('line').onClick?.({ datum: { Time: day.format('YYYY-MM-DD') } })
+  chartProps('line').onClick?.({ datum: { Bucket: String(NOW - 3600) } })
+  chartProps('line').onDimensionClick?.({
+    dimensionInfo: [{ value: String(NOW - 3600) }],
+  })
 
   expect(
-    await screen.findByRole('dialog', { name: day.format('YYYY-MM-DD') })
+    await screen.findByRole('dialog', { name: hourLabel })
   ).toBeVisible()
   await waitFor(() =>
     expect(paramsOf(get, '/api/channel_cost/logs')).toContainEqual({
-      start_timestamp: Math.max(NOW - WEEK, day.startOf('day').unix()),
-      end_timestamp: Math.min(NOW, day.endOf('day').unix()),
+      start_timestamp: Math.max(NOW - WEEK, NOW - 3600),
+      end_timestamp: Math.min(NOW, NOW - 3600 + 3599),
       p: 1,
       page_size: 10,
     })

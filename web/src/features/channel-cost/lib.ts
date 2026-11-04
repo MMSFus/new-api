@@ -50,14 +50,12 @@ export function formatPercent(
 
 /** Cost and profit are fractional quota; show them like charged quota. */
 export function formatCostQuota(value: number): string {
-  return formatLogQuota(Math.round(value))
+  return formatLogQuota(value)
 }
 
 /** True when the snapshot converted between the upstream and price currencies. */
 export function hasCurrencyFactor(cost: ChannelCostSnapshot): boolean {
-  return (
-    typeof cost.currency_factor === 'number' && cost.currency_factor !== 1
-  )
+  return typeof cost.currency_factor === 'number' && cost.currency_factor !== 1
 }
 
 /** "Official price X × ratio", with "× factor" when currencies differ. */
@@ -169,7 +167,7 @@ export function breakdownRows(
         key: String(row.user_id),
         label: [row.username, `#${row.user_id}`].filter(Boolean).join(' '),
         amount: row,
-        patch: row.username ? { username: row.username } : null,
+        patch: row.user_id > 0 ? { user_id: row.user_id } : null,
       }))
   }
 }
@@ -179,33 +177,38 @@ const HOURLY_RANGE_SECONDS = 2 * 24 * 3600
 
 export interface TrendPoint {
   label: string
+  /** Stable chart identity; hourly values are UTC bucket timestamps. */
+  key: string
   /** Inclusive bounds of the bucket, clamped to the searched range. */
   start: number
   end: number
   amount: ChannelCostAmount
 }
 
-/** Folds hourly buckets into days in the viewer's time zone when needed. */
+/** Groups hourly buckets into viewer-local days when the range is long. */
 export function trendPoints(
   trend: ChannelCostBucket[],
   range: { start: number; end: number }
 ): TrendPoint[] {
   const hourly = range.end - range.start <= HOURLY_RANGE_SECONDS
-  const format = hourly ? 'MM-DD HH:00' : 'YYYY-MM-DD'
+  const format = hourly ? 'MM-DD HH:mm Z' : 'YYYY-MM-DD'
   const points = new Map<string, TrendPoint>()
   for (const bucket of trend) {
     const time = dayjs.unix(bucket.time)
     const label = time.format(format)
-    const previous = points.get(label)
+    const key = hourly ? String(bucket.time) : label
+    const previous = points.get(key)
     if (previous) {
       previous.amount = addAmounts(previous.amount, bucket)
+      previous.start = Math.min(previous.start, bucket.time)
+      previous.end = Math.max(previous.end, Math.min(range.end, bucket.time + 3599))
       continue
     }
-    const unit = hourly ? 'hour' : 'day'
-    points.set(label, {
+    points.set(key, {
       label,
-      start: Math.max(range.start, time.startOf(unit).unix()),
-      end: Math.min(range.end, time.endOf(unit).unix()),
+      key,
+      start: Math.max(range.start, bucket.time),
+      end: Math.min(range.end, bucket.time + 3599),
       amount: bucket,
     })
   }

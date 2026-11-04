@@ -37,6 +37,7 @@ import { EXCLUDED_GROUPS, VIEW_MODES } from './constants'
 import { useFilters } from './hooks/use-filters'
 import { usePricingData } from './hooks/use-pricing-data'
 import { isModelInConfigGroup } from './lib/filters'
+import { resolveDisplayGroup } from './lib/model-helpers'
 
 export function Pricing() {
   const { t } = useTranslation()
@@ -113,6 +114,11 @@ export function Pricing() {
   const selectedConfigGroup = configGroups.find(
     (cfg) => cfg.value === groupFilter
   )
+  const selectedGroupForModel = useCallback(
+    (model: (typeof filteredModels)[number]) =>
+      resolveDisplayGroup(model, groupFilter, configGroups),
+    [configGroups, groupFilter]
+  )
 
   const handleClearAll = useCallback(() => {
     clearFilters()
@@ -139,7 +145,7 @@ export function Pricing() {
           usdExchangeRate={usdExchangeRate}
           tokenUnit={tokenUnit}
           showRechargePrice={showRechargePrice}
-          selectedGroup={groupFilter}
+          selectedGroup={selectedGroupForModel}
         />
       )
     }
@@ -151,7 +157,7 @@ export function Pricing() {
         usdExchangeRate={usdExchangeRate}
         tokenUnit={tokenUnit}
         showRechargePrice={showRechargePrice}
-        selectedGroup={groupFilter}
+        selectedGroup={selectedGroupForModel}
         onModelClick={handleModelClick}
       />
     )

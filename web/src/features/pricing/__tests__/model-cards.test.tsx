@@ -38,6 +38,8 @@ import {
 import { CachedPriceCell } from '../components/cached-price-cell'
 import { ModelCard } from '../components/model-card'
 import { ModelCardGrid } from '../components/model-card-grid'
+import { ModelPriceCell } from '../components/model-price-cell'
+import { formatPrice } from '../lib/price'
 import type { PricingModel } from '../types'
 
 function pricingModel(overrides: Partial<PricingModel> = {}): PricingModel {
@@ -88,6 +90,45 @@ afterEach(() => {
 })
 
 describe('model cards', () => {
+  it('uses the reachable config group ratio in card and table price cells', () => {
+    const model = pricingModel({
+      model_name: 'routed-model',
+      enable_groups: ['cheap', 'vip'],
+      group_ratio: { cheap: 0.1, vip: 2 },
+    })
+    const options = {
+      selectedGroup: (candidate: PricingModel) =>
+        candidate.enable_groups?.includes('vip') ? 'vip' : undefined,
+    }
+    const expected = formatPrice(model, 'input', 'M', false, 1, 1, 'vip', false)
+    const chainPrice = formatPrice(
+      model,
+      'input',
+      'M',
+      false,
+      1,
+      1,
+      'cheap',
+      false
+    )
+    const { rerender } = render(
+      <ModelCard
+        model={model}
+        onClick={vi.fn()}
+        selectedGroup={options.selectedGroup}
+      />
+    )
+    expect(screen.getByRole('group', { name: 'Pricing' })).toHaveTextContent(
+      expected
+    )
+    expect(
+      screen.getByRole('group', { name: 'Pricing' })
+    ).not.toHaveTextContent(chainPrice)
+
+    rerender(<ModelPriceCell model={model} options={options} />)
+    expect(screen.getByText(expected)).toBeVisible()
+  })
+
   it('shows separate generic and image cache prices including a free image cache', () => {
     render(
       <CachedPriceCell

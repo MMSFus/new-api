@@ -81,6 +81,7 @@ export function ChannelCost() {
     void logs.query.refetch()
   }
   const onSearch = () => {
+    if (search.commitFilters()) return
     if (!search.refreshNow()) refetchAll()
   }
   const queryError = canQuery ? (reportQuery.error ?? logs.query.error) : null
@@ -109,9 +110,10 @@ export function ChannelCost() {
           </p>
           <SimulatedCacheFilterBar
             table={table}
-            filters={filters}
-            onChange={search.updateFilters}
+            filters={search.draftFilters}
+            onChange={search.editFilters}
             withGroup
+            withUserId
             isFetching={reportQuery.isFetching || logs.query.isFetching}
             onSearch={onSearch}
             onReset={search.reset}

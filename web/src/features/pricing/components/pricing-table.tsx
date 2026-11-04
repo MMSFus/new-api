@@ -29,6 +29,7 @@ import {
 
 import { DEFAULT_PRICING_PAGE_SIZE, DEFAULT_TOKEN_UNIT } from '../constants'
 import type { PricingModel, TokenUnit } from '../types'
+import type { SelectedPricingGroup } from './model-price-cell'
 import { usePricingColumns } from './pricing-columns'
 
 export interface PricingTableProps {
@@ -38,7 +39,7 @@ export interface PricingTableProps {
   usdExchangeRate?: number
   tokenUnit?: TokenUnit
   showRechargePrice?: boolean
-  selectedGroup?: string
+  selectedGroup?: SelectedPricingGroup
   onModelClick?: (modelName: string) => void
 }
 
