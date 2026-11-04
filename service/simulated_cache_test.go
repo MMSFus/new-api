@@ -320,6 +320,17 @@ func TestSimulatedCacheResponses(t *testing.T) {
 	assert.Contains(t, out2, `{"type":"response.created","response":{"usage":null}}`)
 }
 
+func TestSimulatedCacheProtocolDetectionPrefersResponsesOverZeroPromptAlias(t *testing.T) {
+	channel := useMemorySimulatedCache(t)
+	req := `{"model":"m","instructions":"` + longText(9000) + `","input":"hi"}`
+	plan := prepareSimulatedCacheForTest(t, channel, types.RelayFormatOpenAIResponses, 100, req)
+	wrapSimulatedCacheBody(t, plan, "application/json", `{"usage":{"input_tokens":5000,"output_tokens":2}}`)
+	plan = prepareSimulatedCacheForTest(t, channel, types.RelayFormatOpenAIResponses, 100, req)
+	body := `{"usage":{"prompt_tokens":0,"input_tokens":5000,"output_tokens":2,"input_tokens_details":{"cached_tokens":0}}}`
+	out := gjson.Parse(string(plan.patchJSON([]byte(body))))
+	assert.Positive(t, out.Get("usage.input_tokens_details.cached_tokens").Int())
+}
+
 func TestSimulatedCacheGemini(t *testing.T) {
 	channel := useMemorySimulatedCache(t)
 	req := `{"systemInstruction":{"parts":[{"text":"` + longText(9000) + `"}]},"contents":[{"role":"user","parts":[{"text":"q"}]}]}`

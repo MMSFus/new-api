@@ -60,6 +60,10 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo, task *model
 		other.SetPublic("model_ratio", info.PriceData.ModelRatio)
 	}
 	other.SetPublic("group_ratio", info.PriceData.GroupRatioInfo.GroupRatio)
+	if task != nil && task.PrivateData.BillingContext != nil {
+		other.SetChannelCostBasis(task.PrivateData.BillingContext.ChannelCostBasis)
+	}
+	appendPriceCurrencyInfo(info, other)
 	if info.PriceData.GroupRatioInfo.HasSpecialRatio {
 		other.SetPublic("user_group_ratio", info.PriceData.GroupRatioInfo.GroupSpecialRatio)
 	}
@@ -203,6 +207,7 @@ func taskBillingOther(task *model.Task) *model.LogOther {
 	// 前端列表按 is_task 选择任务档位渲染分支,缺失会把差额/退款日志误判成普通 relay 动态计费
 	other.SetPublic("is_task", true)
 	if bc := task.PrivateData.BillingContext; bc != nil {
+		other.SetChannelCostBasis(bc.ChannelCostBasis)
 		other.SetPublic("model_price", bc.ModelPrice)
 		if bc.ModelRatio > 0 {
 			other.SetPublic("model_ratio", bc.ModelRatio)

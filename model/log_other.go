@@ -43,6 +43,7 @@ type LogOther struct {
 	auditInfo map[string]any
 	// costBasisQuota is never stored; see SetCostBasisQuota.
 	costBasisQuota *int
+	costBasis      *ChannelCostBasis
 }
 
 func NewLogOther() *LogOther {
@@ -119,6 +120,13 @@ func (o *LogOther) SetRoot(key string, value any) bool {
 	}
 	o.rootInfo[key] = value
 	return true
+}
+
+// SetChannelCostBasis applies a previously frozen task cost configuration.
+func (o *LogOther) SetChannelCostBasis(basis *ChannelCostBasis) {
+	if o != nil {
+		o.costBasis = basis
+	}
 }
 
 func (o *LogOther) MergeRoot(values map[string]any) {

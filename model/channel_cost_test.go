@@ -61,9 +61,9 @@ func setupChannelCostDialect(t *testing.T, dialect string) *gorm.DB {
 		common.MemoryCacheEnabled = oldMemoryCache
 		initCol()
 	})
-	require.NoError(t, db.AutoMigrate(&Log{}, &Channel{}, &ChannelCostRatioHistory{}, &ChannelCostRatioSyncStatus{}))
+	require.NoError(t, db.AutoMigrate(&Log{}, &Channel{}, &ChannelCostRatioHistory{}, &ChannelCostRatioSyncStatus{}, &TopUp{}, &SubscriptionOrder{}))
 	t.Cleanup(func() {
-		require.NoError(t, db.Migrator().DropTable(&Log{}, &Channel{}, &ChannelCostRatioHistory{}, &ChannelCostRatioSyncStatus{}))
+		require.NoError(t, db.Migrator().DropTable(&Log{}, &Channel{}, &ChannelCostRatioHistory{}, &ChannelCostRatioSyncStatus{}, &TopUp{}, &SubscriptionOrder{}))
 	})
 	return db
 }
@@ -79,6 +79,18 @@ func TestChannelCostBackfillAcrossDatabases(t *testing.T) {
 			}
 			require.NoError(t, db.Raw(query).Scan(&version).Error)
 			t.Logf("database version: %s", version)
+			for _, table := range []struct {
+				model  any
+				column string
+			}{{&ChannelCostRatioHistory{}, "old_currency"}, {&TopUp{}, "currency"}, {&SubscriptionOrder{}, "currency"}} {
+				require.NoError(t, db.Migrator().DropColumn(table.model, table.column))
+			}
+			for range 2 {
+				require.NoError(t, db.AutoMigrate(&ChannelCostRatioHistory{}, &TopUp{}, &SubscriptionOrder{}))
+			}
+			require.True(t, db.Migrator().HasColumn(&ChannelCostRatioHistory{}, "old_currency"))
+			require.True(t, db.Migrator().HasColumn(&TopUp{}, "currency"))
+			require.True(t, db.Migrator().HasColumn(&SubscriptionOrder{}, "currency"))
 			createCostChannel(t, db, 1, common.GetPointer(0.5))
 			createCostChannel(t, db, 2, nil)
 			createCostChannel(t, db, 3, common.GetPointer(0.0))
@@ -190,6 +202,55 @@ func TestHistoricalChannelCostRejectsUnreliableMetadata(t *testing.T) {
 			assert.Equal(t, "Invalid historical billing data", reason)
 		})
 	}
+}
+
+func TestHistoricalChannelCostUsesFirstChangeOldRatio(t *testing.T) {
+	log := Log{CreatedAt: 100, ChannelId: 7, Quota: 1000, Other: `{"group_ratio":1}`}
+	oldRatio := 0.5
+	timeline := map[int]ChannelCostTimeline{7: {
+		Ratio: common.GetPointer(0.2), Currency: "USD",
+		History: []ChannelCostRatioHistory{{CreatedAt: 200, OldRatio: &oldRatio, OldCurrency: "USD", NewRatio: common.GetPointer(0.2), Currency: "USD"}},
+	}}
+	updated, reason := HistoricalChannelCost(log, timeline, "backfill", 300)
+	require.Empty(t, reason)
+	assert.Equal(t, 500.0, gjson.Get(updated, "root_info.channel_cost.cost_quota").Float())
+	legacy := timeline[7]
+	legacy.History[0].OldCurrency = ""
+	timeline[7] = legacy
+	_, reason = HistoricalChannelCost(log, timeline, "backfill", 300)
+	assert.Equal(t, "Historical upstream currency is unknown", reason)
+}
+
+func TestAttachChannelCostUsesFrozenTaskBasis(t *testing.T) {
+	db := setupChannelCostDB(t)
+	createCostChannel(t, db, 1, common.GetPointer(0.5))
+	basis := &ChannelCostBasis{CostCurrency: "USD", CurrencyFactor: 1, UpstreamRatio: 0.5, GroupRatio: 1}
+	charged := NewLogOther()
+	charged.SetChannelCostBasis(basis)
+	attachChannelCost(charged, 1, 1000, 1)
+	assert.Equal(t, 500.0, gjson.Get(charged.JSONString(), "root_info.channel_cost.cost_quota").Float())
+	require.NoError(t, db.Model(&Channel{}).Where("id = ?", 1).Update("setting", `{"upstream_cost_ratio":0.2}`).Error)
+	refunded := NewLogOther()
+	refunded.SetChannelCostBasis(basis)
+	attachChannelCost(refunded, 1, 1000, 1)
+	assert.Equal(t, 500.0, gjson.Get(refunded.JSONString(), "root_info.channel_cost.cost_quota").Float(), "refund snapshot must use submission-time cost basis")
+}
+
+func TestApplyChannelCostRatioSyncRejectsStaleProbeIdentity(t *testing.T) {
+	db := setupChannelCostDB(t)
+	baseURL := "https://relay.example"
+	channel := Channel{Key: "probe-key", Type: constant.ChannelTypeSub2API, BaseURL: &baseURL}
+	channel.SetSetting(dto.ChannelSettings{UpstreamCostRatio: common.GetPointer(0.5)})
+	require.NoError(t, db.Create(&channel).Error)
+	probed := channel
+	channel.Key = "replacement-key"
+	require.NoError(t, db.Model(&Channel{}).Where("id = ?", channel.Id).Update("key", channel.Key).Error)
+	result, err := ApplyChannelCostRatioSync(&probed, common.GetPointer(0.2), "success", "", "", false)
+	require.NoError(t, err)
+	assert.Equal(t, "stale", result.Status)
+	var current Channel
+	require.NoError(t, db.First(&current, channel.Id).Error)
+	assert.Equal(t, 0.5, *current.GetSetting().UpstreamCostRatio)
 }
 
 func createCostChannel(t *testing.T, db *gorm.DB, id int, ratio *float64) {
@@ -483,13 +544,13 @@ func TestChannelCostRatioHistoryAcrossDatabases(t *testing.T) {
 			raw, err := sjson.Set(*channel.Setting, "future_setting", "keep")
 			require.NoError(t, err)
 			require.NoError(t, db.Model(&Channel{}).Where("id = ?", channel.Id).UpdateColumn("setting", raw).Error)
-			result, err := ApplyChannelCostRatioSync(channel.Id, common.GetPointer(.2), "success", "", `{"observed_at":"now"}`, false)
+			result, err := ApplyChannelCostRatioSync(&channel, common.GetPointer(.2), "success", "", `{"observed_at":"now"}`, false)
 			require.NoError(t, err)
 			assert.Equal(t, "success", result.Status)
 			preserved = Channel{}
 			require.NoError(t, db.First(&preserved, channel.Id).Error)
 			assert.Equal(t, "keep", gjson.Get(*preserved.Setting, "future_setting").String())
-			result, err = ApplyChannelCostRatioSync(channel.Id, common.GetPointer(.2), "success", "", "", false)
+			result, err = ApplyChannelCostRatioSync(&channel, common.GetPointer(.2), "success", "", "", false)
 			require.NoError(t, err)
 			assert.Equal(t, "unchanged", result.Status)
 			items, total, status, err = GetChannelCostRatioHistory(channel.Id, 1, 20)
@@ -502,7 +563,7 @@ func TestChannelCostRatioHistoryAcrossDatabases(t *testing.T) {
 			assert.Positive(t, status.LastSuccessAt)
 			// Missing history storage must roll back the channel and sync state.
 			require.NoError(t, db.Migrator().DropTable(&ChannelCostRatioHistory{}))
-			_, err = ApplyChannelCostRatioSync(channel.Id, common.GetPointer(.1), "success", "", "", false)
+			_, err = ApplyChannelCostRatioSync(&channel, common.GetPointer(.1), "success", "", "", false)
 			require.Error(t, err)
 			preserved = Channel{}
 			require.NoError(t, db.First(&preserved, channel.Id).Error)

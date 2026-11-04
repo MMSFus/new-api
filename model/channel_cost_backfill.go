@@ -72,10 +72,7 @@ func PrepareChannelCostBackfill(ctx context.Context, filter LogFilter) (upperID 
 		ratios[channel.Id] = ChannelCostTimeline{Ratio: setting.UpstreamCostRatio, Currency: setting.UpstreamCostCurrency}
 	}
 	var histories []ChannelCostRatioHistory
-	historyQuery := DB.WithContext(ctx).Select("id", "channel_id", "new_ratio", "currency", "created_at")
-	if filter.EndTimestamp > 0 {
-		historyQuery = historyQuery.Where("created_at <= ?", filter.EndTimestamp)
-	}
+	historyQuery := DB.WithContext(ctx).Select("id", "channel_id", "old_ratio", "new_ratio", "old_currency", "currency", "created_at")
 	if filter.Channel > 0 {
 		historyQuery = historyQuery.Where("channel_id = ?", filter.Channel)
 	}
@@ -111,11 +108,23 @@ func HistoricalChannelCost(log Log, ratios map[int]ChannelCostTimeline, taskID s
 		return "", "Channel no longer exists"
 	}
 	ratio, currency := timeline.Ratio, timeline.Currency
+	matchedHistory := false
 	for i := len(timeline.History) - 1; i >= 0; i-- {
 		history := timeline.History[i]
 		if history.CreatedAt <= log.CreatedAt {
 			ratio, currency = history.NewRatio, history.Currency
+			matchedHistory = true
 			break
+		}
+	}
+	if !matchedHistory && len(timeline.History) > 0 {
+		first := timeline.History[0]
+		if first.OldRatio != nil {
+			ratio = first.OldRatio
+			if first.OldCurrency == "" {
+				return "", "Historical upstream currency is unknown"
+			}
+			currency = first.OldCurrency
 		}
 	}
 	if ratio == nil {

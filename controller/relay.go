@@ -528,6 +528,7 @@ func executeTaskSubmissionWith(
 	diagnostics.start(relayInfo)
 	var result *relay.TaskSubmitResult
 	var taskErr *taskdto.TaskError
+	var taskCostBasis *model.ChannelCostBasis
 	durable := false
 	stage := "start"
 	defer func() {
@@ -591,6 +592,12 @@ func executeTaskSubmissionWith(
 			break
 		}
 		c.Request.Body = io.NopCloser(bodyStorage)
+
+		priceCurrencyFactor := relayInfo.PriceData.CurrencyUSDFactor
+		if priceCurrencyFactor == 0 {
+			priceCurrencyFactor = 1
+		}
+		taskCostBasis = model.CaptureChannelCostBasis(channel.Id, relayInfo.PriceData.GroupRatioInfo.GroupRatio, priceCurrencyFactor)
 
 		stage = "submit"
 		result, taskErr = submit(c, relayInfo)
@@ -683,6 +690,7 @@ func executeTaskSubmissionWith(
 		task.PrivateData.BillingContext.PriceCurrency = relayInfo.PriceData.PriceCurrency
 		task.PrivateData.BillingContext.CurrencyUSDFactor = relayInfo.PriceData.CurrencyUSDFactor
 	}
+	task.PrivateData.BillingContext.ChannelCostBasis = taskCostBasis
 	task.Quota = result.Quota
 	task.Data = result.TaskData
 	if len(result.PluginState) > 0 {

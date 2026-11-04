@@ -175,8 +175,9 @@ type TaskBillingContext struct {
 	TieredSnapshot  *billingexpr.BillingSnapshot `json:"tiered_snapshot,omitempty"`
 	// Currency of ModelPrice/ModelRatio, frozen at submission. Missing in
 	// older tasks means USD (factor 1).
-	PriceCurrency     string  `json:"price_currency,omitempty"`
-	CurrencyUSDFactor float64 `json:"currency_usd_factor,omitempty"`
+	PriceCurrency     string            `json:"price_currency,omitempty"`
+	CurrencyUSDFactor float64           `json:"currency_usd_factor,omitempty"`
+	ChannelCostBasis  *ChannelCostBasis `json:"channel_cost_basis,omitempty"`
 }
 
 // BillingGroupRatio 返回提交时的分组倍率；旧任务没有计费上下文时为 0。
