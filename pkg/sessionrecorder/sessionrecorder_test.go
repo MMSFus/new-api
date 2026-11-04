@@ -245,6 +245,37 @@ func TestProducerQueueFullDropsWithoutBlocking(t *testing.T) {
 	require.False(t, p.Reserve(1000), "memory budget is enforced")
 }
 
+func TestProducerWritesRequestReaderToSpool(t *testing.T) {
+	s := DefaultSettings()
+	s.SpoolRoot = filepath.Join(t.TempDir(), "spool")
+	p := NewProducer(s)
+	body := `{"model":"gpt-4o"}`
+	finished := time.Date(2026, 9, 28, 5, 17, 0, 0, time.UTC)
+	capture := &Capture{
+		Record:            Record{RecordID: "reader-req", SessionID: "session", Model: "gpt-4o"},
+		RequestBodyReader: io.NopCloser(strings.NewReader(body)),
+		RequestBodyLimit:  int64(len(body)),
+		RequestFull:       int64(len(body)),
+		IncludeRequest:    true,
+		FinishedAt:        finished,
+	}
+	require.True(t, p.Reserve(int64(len(body))))
+	p.write(capture)
+	require.EqualValues(t, 1, p.Counters().Written)
+
+	shard := filepath.Join(s.SpoolRoot, "gpt-4o", "jsonl", "2026", "09", "28", "05", "10-"+p.instance+".jsonl")
+	raw, err := os.ReadFile(shard)
+	require.NoError(t, err)
+	var record Record
+	require.NoError(t, common.Unmarshal(bytes.TrimSpace(raw), &record))
+	require.Len(t, record.BodyFiles, 1)
+	require.Equal(t, "request", record.BodyFiles[0].Kind)
+	bodyPath := filepath.Join(s.SpoolRoot, "gpt-4o", filepath.FromSlash(record.BodyFiles[0].File))
+	actualBody, err := os.ReadFile(bodyPath)
+	require.NoError(t, err)
+	require.Equal(t, body, string(actualBody))
+}
+
 func TestProducerWritesSpoolProtocol(t *testing.T) {
 	withStorageUsage(t, 10, 10)
 	sink := installFakeSink(t)
@@ -255,12 +286,13 @@ func TestProducerWritesSpoolProtocol(t *testing.T) {
 	p.Start()
 	finished := time.Date(2026, 9, 28, 5, 17, 0, 0, time.UTC)
 	ok := p.Enqueue(&Capture{
-		Record:          Record{RecordID: "req-1", SessionID: "sess/1", Model: "gpt-4o", Stream: true},
-		RequestBody:     []byte(`{"model":"gpt-4o"}`),
-		ResponseBody:    []byte("data: hi\n\n"),
-		IncludeRequest:  true,
-		IncludeResponse: true,
-		FinishedAt:      finished,
+		Record:            Record{RecordID: "req-1", SessionID: "sess/1", Model: "gpt-4o", Stream: true},
+		RequestBodyReader: io.NopCloser(strings.NewReader(`{"model":"gpt-4o"}`)),
+		RequestBodyLimit:  int64(len(`{"model":"gpt-4o"}`)),
+		ResponseBody:      []byte("data: hi\n\n"),
+		IncludeRequest:    true,
+		IncludeResponse:   true,
+		FinishedAt:        finished,
 	}, 0)
 	require.True(t, ok)
 	p.Stop(5 * time.Second)
@@ -283,9 +315,15 @@ func TestProducerWritesSpoolProtocol(t *testing.T) {
 	require.True(t, strings.HasPrefix(rec.BodyFiles[0].File, "body/2026/09/28/05/"))
 	require.True(t, strings.HasSuffix(rec.BodyFiles[1].File, "_response.sse"))
 	for _, b := range rec.BodyFiles {
-		_, err := os.Stat(filepath.Join(s.SpoolRoot, "gpt-4o", filepath.FromSlash(b.File)))
+		bodyPath := filepath.Join(s.SpoolRoot, "gpt-4o", filepath.FromSlash(b.File))
+		_, err := os.Stat(bodyPath)
 		require.NoError(t, err)
 		require.False(t, strings.HasSuffix(b.File, ".json"), "body files must not look like records")
+		if b.Kind == "request" {
+			body, readErr := os.ReadFile(bodyPath)
+			require.NoError(t, readErr)
+			require.Equal(t, `{"model":"gpt-4o"}`, string(body))
+		}
 	}
 	var stats ProducerStats
 	statsRaw, err := os.ReadFile(s.StatsPath)

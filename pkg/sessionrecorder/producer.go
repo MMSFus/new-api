@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -67,22 +68,24 @@ type Record struct {
 	BodyFiles      []BodyFile        `json:"body_files"`
 }
 
-// Capture is one finished request handed to the producer. The byte slices
-// are owned by the producer after Enqueue.
+// Capture is one finished request handed to the producer. Body bytes and
+// request readers are owned by the producer after Enqueue.
 type Capture struct {
-	Record          Record
-	RequestBody     []byte
-	RequestFull     int64
-	RequestType     string
-	ResponseBody    []byte
-	ResponseFull    int64
-	ResponseType    string
-	RequestCapped   bool
-	ResponseCapped  bool
-	FinishedAt      time.Time
-	reservedBytes   int64
-	IncludeRequest  bool
-	IncludeResponse bool
+	Record            Record
+	RequestBody       []byte
+	RequestBodyReader io.ReadCloser
+	RequestBodyLimit  int64
+	RequestFull       int64
+	RequestType       string
+	ResponseBody      []byte
+	ResponseFull      int64
+	ResponseType      string
+	RequestCapped     bool
+	ResponseCapped    bool
+	FinishedAt        time.Time
+	reservedBytes     int64
+	IncludeRequest    bool
+	IncludeResponse   bool
 }
 
 // ProducerCounters are exposed through the admin status API.
@@ -201,6 +204,9 @@ func (p *Producer) Enqueue(c *Capture, reserved int64) bool {
 	c.reservedBytes = reserved
 	if p.storagePaused.Load() {
 		p.droppedStorage.Add(1)
+		if c.RequestBodyReader != nil {
+			_ = c.RequestBodyReader.Close()
+		}
 		p.Release(reserved)
 		return false
 	}
@@ -210,6 +216,9 @@ func (p *Producer) Enqueue(c *Capture, reserved int64) bool {
 		return true
 	default:
 		p.droppedFull.Add(1)
+		if c.RequestBodyReader != nil {
+			_ = c.RequestBodyReader.Close()
+		}
 		p.Release(reserved)
 		return false
 	}
@@ -475,7 +484,21 @@ func (p *Producer) write(c *Capture) {
 	}()
 	if p.storagePaused.Load() {
 		p.droppedStorage.Add(1)
+		if c.RequestBodyReader != nil {
+			_ = c.RequestBodyReader.Close()
+		}
 		return
+	}
+	if c.RequestBodyReader != nil {
+		reader := c.RequestBodyReader
+		c.RequestBodyReader = nil
+		defer reader.Close()
+		body := make([]byte, c.RequestBodyLimit)
+		n, err := io.ReadFull(reader, body)
+		c.RequestBody = body[:n]
+		if err != nil && int64(n) < c.RequestBodyLimit {
+			c.RequestCapped = true
+		}
 	}
 	t := c.FinishedAt
 	if t.IsZero() {
