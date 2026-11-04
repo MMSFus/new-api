@@ -3,9 +3,11 @@ package service
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"maps"
 	"math"
+	"slices"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -96,6 +98,21 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo, task *model
 // ---------------------------------------------------------------------------
 // 异步任务计费辅助函数
 // ---------------------------------------------------------------------------
+
+// SettleTaskBilling 在提交结算后回写实际钱包账本，供后续补扣和失败退款使用。
+func SettleTaskBilling(c *gin.Context, info *relaycommon.RelayInfo, task *model.Task) error {
+	settleErr := SettleBilling(c, info, task.Quota)
+	if info.BillingSource == BillingSourceSubscription {
+		return settleErr
+	}
+	if task.PrivateData.WalletGroup == info.WalletBillingGroup && slices.Equal(task.PrivateData.WalletBuckets, info.WalletBalanceLedger) {
+		return settleErr
+	}
+	// 资金可能已结算成功而令牌调整失败，此时也必须保存实际来源。
+	task.PrivateData.WalletGroup = info.WalletBillingGroup
+	task.PrivateData.WalletBuckets = info.WalletBalanceLedger.Clone()
+	return errors.Join(settleErr, task.UpdateQuotaWithWalletBuckets())
+}
 
 // resolveTokenKey 通过 TokenId 运行时获取令牌 Key（用于 Redis 缓存操作）。
 // 如果令牌已被删除或查询失败，返回空字符串。

@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"testing"
 	"time"
 
@@ -17,6 +20,8 @@ import (
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relaydto "github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -24,6 +29,8 @@ import (
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -70,6 +77,361 @@ func TestMain(m *testing.M) {
 	}
 
 	os.Exit(m.Run())
+}
+
+// DSNs must reference isolated test databases; no external service is required
+// for the SQLite case. All cases exercise real transactions and persisted tasks.
+func TestBalanceFundingRegressionAcrossDatabases(t *testing.T) {
+	for _, dialect := range []common.DatabaseType{common.DatabaseTypeSQLite, common.DatabaseTypeMySQL, common.DatabaseTypePostgreSQL} {
+		t.Run(string(dialect), func(t *testing.T) {
+			var driver gorm.Dialector = sqlite.Open("file:balance-regression?mode=memory&cache=shared")
+			switch dialect {
+			case common.DatabaseTypeMySQL:
+				dsn := os.Getenv("TEST_MYSQL_DSN")
+				if dsn == "" {
+					t.Skip("TEST_MYSQL_DSN is not configured")
+				}
+				driver = mysql.Open(dsn)
+			case common.DatabaseTypePostgreSQL:
+				dsn := os.Getenv("TEST_POSTGRES_DSN")
+				if dsn == "" {
+					t.Skip("TEST_POSTGRES_DSN is not configured")
+				}
+				driver = postgres.New(postgres.Config{DSN: dsn, PreferSimpleProtocol: true})
+			}
+			db, err := gorm.Open(driver, &gorm.Config{})
+			require.NoError(t, err)
+			sqlDB, err := db.DB()
+			require.NoError(t, err)
+			sqlDB.SetMaxOpenConns(2)
+			t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+			oldDB, oldLogDB := model.DB, model.LOG_DB
+			oldMain, oldLog := common.MainDatabaseType(), common.LogDatabaseType()
+			oldRedis, oldBatch, oldMemory := common.RedisEnabled, common.BatchUpdateEnabled, common.MemoryCacheEnabled
+			model.DB, model.LOG_DB = db, db
+			common.SetDatabaseTypes(dialect, dialect)
+			common.RedisEnabled, common.BatchUpdateEnabled, common.MemoryCacheEnabled = false, false, false
+			t.Cleanup(func() {
+				model.DB, model.LOG_DB = oldDB, oldLogDB
+				common.SetDatabaseTypes(oldMain, oldLog)
+				common.RedisEnabled, common.BatchUpdateEnabled, common.MemoryCacheEnabled = oldRedis, oldBatch, oldMemory
+			})
+			require.NoError(t, setting.UpdateGroupBalanceBucketsByJSONString(`{"paid":["topup"],"promo":["gift"]}`))
+			t.Cleanup(func() { require.NoError(t, setting.UpdateGroupBalanceBucketsByJSONString("{}")) })
+			for range 2 {
+				require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.Task{}, &model.Midjourney{},
+					&model.Channel{}, &model.Log{}, &model.SubscriptionPlan{}, &model.SubscriptionOrder{}, &model.UserSubscription{},
+					&model.TopUp{}, &model.SystemTask{}, &model.SystemTaskLock{}))
+			}
+			query := "SELECT version()"
+			if dialect == common.DatabaseTypeSQLite {
+				query = "SELECT sqlite_version()"
+			}
+			var version string
+			require.NoError(t, db.Raw(query).Scan(&version).Error)
+			t.Logf("database version: %s", version)
+			t.Run("strict_reservations_with_debt", testStrictBalanceReservationsWithDebt)
+			t.Run("before_submit_top_up_with_debt", testBeforeSubmitBalanceWithDebt)
+			t.Run("retry_task_refund_source", testRetryTaskRefundSource)
+			t.Run("retry_group_insufficient", testRetryGroupBalanceInsufficient)
+			t.Run("midjourney_refund_source", testMidjourneyRefundSource)
+			t.Run("midjourney_source_save_failure", testMidjourneySourceSaveFailure)
+			t.Run("subscription_purchase_with_debt", testSubscriptionPurchaseWithDebt)
+			t.Run("midjourney_existing_schema_upgrade", testMidjourneyBalanceSchemaUpgrade)
+		})
+	}
+}
+
+func testStrictBalanceReservationsWithDebt(t *testing.T) {
+	truncate(t)
+	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
+		sqlDB, err := model.DB.DB()
+		require.NoError(t, err)
+		// SQLite serializes writers; the network databases use independent connections.
+		sqlDB.SetMaxOpenConns(1)
+		t.Cleanup(func() { sqlDB.SetMaxOpenConns(2) })
+	}
+	seedBucketUser(t, 810, "default", 0, 100)
+	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", 810).
+		Updates(map[string]any{"quota": 10, "quota_debt": -90}).Error)
+	seedToken(t, 810, 810, "balance-request-a", 100)
+	seedToken(t, 811, 810, "balance-request-b", 100)
+
+	// Both requests already observed net quota 10 outside the transaction.
+	// A barrier starts their strict reservations against that same snapshot.
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for i, key := range []string{"balance-request-a", "balance-request-b"} {
+		info := &relaycommon.RelayInfo{UserId: 810, UserQuota: 10, TokenId: 810 + i, TokenKey: key, ForcePreConsume: true}
+		session := &BillingSession{relayInfo: info, funding: &WalletFunding{userId: 810, group: "promo", available: 100}}
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodPost, "/task", nil)
+		go func() {
+			<-start
+			apiErr := session.preConsume(c, 10)
+			if apiErr != nil {
+				results <- apiErr
+				return
+			}
+			results <- nil
+		}()
+	}
+	close(start)
+	succeeded := 0
+	for range 2 {
+		if err := <-results; err != nil {
+			assert.ErrorIs(t, err, model.ErrInsufficientGroupBalance)
+		} else {
+			succeeded++
+		}
+	}
+	assert.Equal(t, 1, succeeded)
+	assert.Equal(t, model.BalanceBuckets{Gift: 90, Debt: -90}, loadServiceBuckets(t, 810))
+	assert.Zero(t, getUserQuota(t, 810))
+	remaining := []int{getTokenRemainQuota(t, 810), getTokenRemainQuota(t, 811)}
+	slices.Sort(remaining)
+	assert.Equal(t, []int{90, 100}, remaining, "rejected reservation must restore its token quota")
+}
+
+func testBeforeSubmitBalanceWithDebt(t *testing.T) {
+	truncate(t)
+	seedBucketUser(t, 812, "default", 0, 100)
+	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", 812).
+		Updates(map[string]any{"quota": 10, "quota_debt": -90}).Error)
+	seedToken(t, 812, 812, "balance-top-up", 100)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/task", nil)
+	info := &relaycommon.RelayInfo{UserId: 812, TokenId: 812, TokenKey: "balance-top-up", UsingGroup: "promo",
+		ForcePreConsume: true, UserSetting: relaydto.UserSetting{BillingPreference: "wallet_only"}}
+	session, apiErr := NewBillingSession(c, info, 5)
+	require.Nil(t, apiErr)
+	require.ErrorIs(t, session.ReserveBeforeSubmit(15), model.ErrInsufficientGroupBalance)
+	assert.Equal(t, 5, session.GetPreConsumedQuota())
+	assert.Equal(t, model.BalanceBuckets{Gift: 95, Debt: -90}, loadServiceBuckets(t, 812))
+	assert.Equal(t, 95, getTokenRemainQuota(t, 812))
+	assert.Equal(t, common.BalanceLedger{{Bucket: "gift", Amount: 5}}, info.WalletBalanceLedger)
+}
+
+func testRetryTaskRefundSource(t *testing.T) {
+	for _, target := range []int{40, 20, 60} {
+		t.Run(fmt.Sprint(target), func(t *testing.T) {
+			truncate(t)
+			seedBucketUser(t, 813, "default", 100, 100)
+			seedToken(t, 813, 813, "balance-retry", 100)
+			seedChannel(t, 813)
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/task", nil)
+			info := &relaycommon.RelayInfo{UserId: 813, TokenId: 813, TokenKey: "balance-retry", UsingGroup: "paid",
+				ForcePreConsume: true, UserSetting: relaydto.UserSetting{BillingPreference: "wallet_only"},
+				ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 813}}
+			require.Nil(t, PreConsumeBilling(c, 40, info))
+			info.UsingGroup = "promo"
+			require.Nil(t, PreConsumeBilling(c, target, info))
+			require.NoError(t, info.Billing.Reserve(target))
+			assert.Equal(t, "promo", info.WalletBillingGroup)
+			assert.Equal(t, common.BalanceLedger{{Bucket: "gift", Amount: max(40, target)}}, info.WalletBalanceLedger)
+			task := model.InitTask("balance-test", info)
+			task.Quota = target
+			task.PrivateData.BillingSource, task.PrivateData.TokenId = info.BillingSource, info.TokenId
+			require.NoError(t, task.Insert())
+			require.NoError(t, SettleTaskBilling(c, info, task))
+			var persisted model.Task
+			require.NoError(t, model.DB.First(&persisted, task.ID).Error)
+			assert.Equal(t, "promo", persisted.PrivateData.WalletGroup)
+			assert.Equal(t, common.BalanceLedger{{Bucket: "gift", Amount: target}}, persisted.PrivateData.WalletBuckets)
+			assert.Equal(t, model.BalanceBuckets{Topup: 100, Gift: 100 - target}, loadServiceBuckets(t, 813))
+			seedChargedAccounting(t, 813, 813, 813, target, 1)
+			RecalculateTaskQuota(context.Background(), &persisted, target+10, common.NewMessage("actual cost"))
+			assert.Equal(t, model.BalanceBuckets{Topup: 100, Gift: 90 - target}, loadServiceBuckets(t, 813))
+			require.True(t, RefundTaskQuota(context.Background(), &persisted, "upstream failed"))
+			assert.Equal(t, model.BalanceBuckets{Topup: 100, Gift: 100}, loadServiceBuckets(t, 813))
+			assert.Equal(t, 100, getTokenRemainQuota(t, 813))
+		})
+	}
+}
+
+func testRetryGroupBalanceInsufficient(t *testing.T) {
+	truncate(t)
+	seedBucketUser(t, 814, "default", 100, 10)
+	seedToken(t, 814, 814, "balance-insufficient-retry", 100)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/task", nil)
+	info := &relaycommon.RelayInfo{UserId: 814, TokenId: 814, TokenKey: "balance-insufficient-retry", UsingGroup: "paid",
+		ForcePreConsume: true, UserSetting: relaydto.UserSetting{BillingPreference: "wallet_only"}}
+	session, apiErr := NewBillingSession(c, info, 40)
+	require.Nil(t, apiErr)
+	info.UsingGroup = "promo"
+	require.ErrorIs(t, session.ReserveBeforeSubmit(40), model.ErrInsufficientGroupBalance)
+	assert.Equal(t, model.BalanceBuckets{Topup: 60, Gift: 10}, loadServiceBuckets(t, 814))
+	assert.Equal(t, "paid", info.WalletBillingGroup)
+	assert.Equal(t, common.BalanceLedger{{Bucket: "topup", Amount: 40}}, info.WalletBalanceLedger)
+	assert.Equal(t, 60, getTokenRemainQuota(t, 814))
+	// After a rejected switch, releasing the original reservation is still safe.
+	info.UsingGroup = "paid"
+	require.NoError(t, session.Settle(0))
+	assert.Equal(t, model.BalanceBuckets{Topup: 100, Gift: 10}, loadServiceBuckets(t, 814))
+	assert.Equal(t, 100, getTokenRemainQuota(t, 814))
+}
+
+func testMidjourneyRefundSource(t *testing.T) {
+	for _, group := range []string{"paid", "promo"} {
+		t.Run(group, func(t *testing.T) {
+			truncate(t)
+			seedBucketUser(t, 815, "default", 100, 100)
+			seedToken(t, 815, 815, "balance-midjourney", 100)
+			seedChannel(t, 815)
+			info := &relaycommon.RelayInfo{UserId: 815, TokenId: 815, TokenKey: "balance-midjourney", UsingGroup: group,
+				ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 815}}
+			task := &model.Midjourney{UserId: 815, ChannelId: 815, MjId: "mj-source", Status: "SUBMITTED"}
+			prepared, err := PrepareMidjourneyTaskBilling(info, task, 40, true)
+			require.NoError(t, err)
+			require.NoError(t, task.Insert())
+			billed, err := SettleMidjourneyTaskBilling(info, task, prepared)
+			require.NoError(t, err)
+			require.True(t, billed)
+			persisted := getMidjourneyTask(t, task.Id)
+			assert.Equal(t, group, persisted.WalletGroup)
+			bucket, userGroup := "topup", "default"
+			want := model.BalanceBuckets{Topup: 60, Gift: 100}
+			if group == "promo" {
+				bucket, userGroup = "gift", "paid"
+				want = model.BalanceBuckets{Topup: 100, Gift: 60}
+			}
+			assert.Equal(t, common.BalanceLedger{{Bucket: bucket, Amount: 40}}, persisted.WalletBuckets)
+			assert.Equal(t, want, loadServiceBuckets(t, 815))
+			require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", 815).Update("group", userGroup).Error)
+			seedChargedAccounting(t, 815, 815, 815, 40, 1)
+			// Multiple pollers may see the same task; only the status CAS winner refunds.
+			otherPoller := getMidjourneyTask(t, task.Id)
+			persisted.Status = "FAILURE"
+			won, err := persisted.UpdateWithStatus("SUBMITTED")
+			require.NoError(t, err)
+			require.True(t, won)
+			require.True(t, RefundMidjourneyQuota(context.Background(), &persisted, "upstream failed"))
+			otherPoller.Status = "FAILURE"
+			won, err = otherPoller.UpdateWithStatus("SUBMITTED")
+			require.NoError(t, err)
+			assert.False(t, won)
+			assert.Equal(t, model.BalanceBuckets{Topup: 100, Gift: 100}, loadServiceBuckets(t, 815))
+			assert.Equal(t, 100, getTokenRemainQuota(t, 815))
+			refunded := getMidjourneyTask(t, task.Id)
+			assert.Empty(t, refunded.WalletBuckets)
+			assert.Zero(t, refunded.Quota)
+		})
+	}
+}
+
+func testSubscriptionPurchaseWithDebt(t *testing.T) {
+	for _, debt := range []int{-80, -50} {
+		t.Run(fmt.Sprint(debt), func(t *testing.T) {
+			truncate(t)
+			seedBucketUser(t, 816, "default", 100, 0)
+			require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", 816).
+				Updates(map[string]any{"quota": 100 + debt, "quota_debt": debt}).Error)
+			oldQuotaUnit := common.QuotaPerUnit
+			common.QuotaPerUnit = 1
+			t.Cleanup(func() { common.QuotaPerUnit = oldQuotaUnit })
+			plan := &model.SubscriptionPlan{Title: "balance plan", PriceAmount: 50, Enabled: true,
+				DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1, TotalAmount: 100}
+			require.NoError(t, model.DB.Create(plan).Error)
+			model.InvalidateSubscriptionPlanCache(plan.Id)
+			t.Cleanup(func() {
+				model.InvalidateSubscriptionPlanCache(plan.Id)
+				require.NoError(t, model.DB.Where("plan_id = ?", plan.Id).Delete(&model.SubscriptionOrder{}).Error)
+				require.NoError(t, model.DB.Where("plan_id = ?", plan.Id).Delete(&model.UserSubscription{}).Error)
+				require.NoError(t, model.DB.Delete(plan).Error)
+			})
+			err := model.PurchaseSubscriptionWithBalance(816, plan.Id)
+			wantCount := int64(0)
+			want := model.BalanceBuckets{Topup: 100, Debt: debt}
+			if debt == -80 {
+				require.EqualError(t, err, "Insufficient balance")
+			} else {
+				require.NoError(t, err)
+				wantCount, want.Topup = 1, 50
+			}
+			assert.Equal(t, want, loadServiceBuckets(t, 816))
+			var subscriptions, orders int64
+			require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ?", 816).Count(&subscriptions).Error)
+			require.NoError(t, model.DB.Model(&model.SubscriptionOrder{}).Where("user_id = ?", 816).Count(&orders).Error)
+			assert.Equal(t, wantCount, subscriptions)
+			assert.Equal(t, wantCount, orders)
+		})
+	}
+}
+
+func testMidjourneySourceSaveFailure(t *testing.T) {
+	truncate(t)
+	seedBucketUser(t, 817, "default", 100, 100)
+	task := &model.Midjourney{UserId: 817, MjId: "source-save-failure", Quota: 40}
+	require.NoError(t, task.Insert())
+	forcedErr := errors.New("cannot save wallet source")
+	require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register("fail_mj_wallet_source", func(tx *gorm.DB) {
+		if tx.Statement.Table == "midjourneys" {
+			tx.AddError(forcedErr)
+		}
+	}))
+	t.Cleanup(func() { require.NoError(t, model.DB.Callback().Update().Remove("fail_mj_wallet_source")) })
+	_, err := task.DebitWallet("paid", 40)
+	require.ErrorIs(t, err, forcedErr)
+	assert.Equal(t, model.BalanceBuckets{Topup: 100, Gift: 100}, loadServiceBuckets(t, 817))
+	persisted := getMidjourneyTask(t, task.Id)
+	assert.Empty(t, persisted.WalletBuckets)
+	assert.Empty(t, persisted.WalletGroup)
+}
+
+// The pre-fix Midjourney schema from origin/main has no wallet source fields.
+type legacyMidjourneyBalanceTask struct {
+	Id               int
+	Code             int
+	UserId           int    `gorm:"index"`
+	Action           string `gorm:"type:varchar(40);index"`
+	MjId             string `gorm:"index"`
+	Prompt           string
+	PromptEn         string
+	Description      string
+	State            string
+	SubmitTime       int64 `gorm:"index"`
+	StartTime        int64 `gorm:"index"`
+	FinishTime       int64 `gorm:"index"`
+	ImageUrl         string
+	VideoUrl         string
+	VideoUrls        string
+	Status           string `gorm:"type:varchar(20);index"`
+	Progress         string `gorm:"type:varchar(30);index"`
+	FailReason       string
+	ChannelId        int
+	Quota            int
+	Buttons          string
+	Properties       string
+	TokenId          int `gorm:"default:0"`
+	BillingChannelId int `gorm:"default:0"`
+}
+
+func (legacyMidjourneyBalanceTask) TableName() string { return "midjourneys" }
+
+func testMidjourneyBalanceSchemaUpgrade(t *testing.T) {
+	db := model.DB
+	require.NoError(t, db.Migrator().DropTable(&model.Midjourney{}))
+	require.NoError(t, db.AutoMigrate(&legacyMidjourneyBalanceTask{}))
+	legacy := legacyMidjourneyBalanceTask{UserId: 818, MjId: "historical", Status: "SUBMITTED", Quota: 40,
+		TokenId: 818, BillingChannelId: 818, Properties: `{"keep":true}`}
+	require.NoError(t, db.Create(&legacy).Error)
+	for range 2 {
+		require.NoError(t, db.AutoMigrate(&model.Midjourney{}))
+		persisted := getMidjourneyTask(t, legacy.Id)
+		assert.Equal(t, legacy.Quota, persisted.Quota)
+		assert.Equal(t, legacy.MjId, persisted.MjId)
+		assert.Equal(t, legacy.TokenId, persisted.TokenId)
+		assert.Equal(t, legacy.BillingChannelId, persisted.BillingChannelId)
+		assert.Equal(t, legacy.Properties, persisted.Properties)
+		assert.Empty(t, persisted.WalletGroup)
+		assert.Empty(t, persisted.WalletBuckets)
+		for _, field := range []string{"UserId", "Action", "MjId", "SubmitTime", "StartTime", "FinishTime", "Status", "Progress"} {
+			assert.True(t, db.Migrator().HasIndex(&model.Midjourney{}, field), "index on %s must survive migration", field)
+		}
+	}
+	require.NoError(t, db.Delete(&model.Midjourney{}, legacy.Id).Error)
 }
 
 // ---------------------------------------------------------------------------
