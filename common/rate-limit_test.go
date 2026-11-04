@@ -80,7 +80,8 @@ func TestInMemoryRateLimiterEvictsOnlyExpiredLRUTail(t *testing.T) {
 
 	idleEntry := limiter.store["idle"]
 	now := time.Now()
-	idleEntry.lastActive = now.Add(-10 * time.Second)
+	// Idle longer than both the shared expiration and the 100s request window.
+	idleEntry.lastActive = now.Add(-100 * time.Second)
 	limiter.store["active"].lastActive = now
 	limiter.deleteExpiredEntries(now)
 
@@ -146,7 +147,7 @@ func TestInMemoryRateLimiterCleanupTicksEvictExpiredKeys(t *testing.T) {
 	require.True(t, limiter.Request("idle", 1, 100))
 
 	now := time.Now()
-	limiter.store["idle"].lastActive = now.Add(-10 * time.Second)
+	limiter.store["idle"].lastActive = now.Add(-100 * time.Second)
 	ticks := make(chan time.Time, 1)
 	done := make(chan struct{})
 	go func() {

@@ -191,6 +191,7 @@ func TestSub2APIRatioProbeAndSync(t *testing.T) {
 	require.NoError(t, model.DB.Model(&model.ChannelCostRatioHistory{}).Count(&count).Error)
 	assert.Zero(t, count, "probe is read only")
 	channel.Key = `["first-key","second-key"]`
+	require.NoError(t, model.DB.Save(channel).Error)
 	_, err = probeSub2APIRatio(channel)
 	require.NoError(t, err)
 	result, err := syncSub2APIRatio(channel, false)
