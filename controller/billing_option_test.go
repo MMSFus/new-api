@@ -1,13 +1,16 @@
 package controller
 
 import (
+	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -23,6 +26,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestUpdateOptionRejectsInvalidTaskBillingExpressions(t *testing.T) {
@@ -321,5 +325,161 @@ func TestPreConsumeMultiplierRejectsInvalidRuntimeAndOverflow(t *testing.T) {
 		_, err := helper.ModelPriceHelper(ctx, info, 1000, &types.TokenCountMeta{})
 		require.Error(t, err)
 		assert.Nil(t, info.Billing)
+	}
+}
+
+// The settings endpoint must publish currencies and amounts as one unit, including
+// legacy single-option writes, failed transactions and periodic option reloads.
+func TestQuotaAmountsDatabaseMatrix(t *testing.T) {
+	previousConfig := config.GlobalConfig.ExportAllConfigs()
+	previousUnit, previousRate := common.QuotaPerUnit, operation_setting.USDExchangeRate
+	previousRewards := []int{common.QuotaForNewUser, common.QuotaForInviter, common.QuotaForInvitee}
+	fields := []string{"QuotaForNewUser", "QuotaForInviter", "QuotaForInvitee"}
+	previousRaw := make(map[string]string)
+	common.OptionMapRWMutex.RLock()
+	for i, field := range fields {
+		previousRaw[field] = common.OptionMap[field]
+		if previousRaw[field] == "" {
+			previousRaw[field] = strconv.Itoa(previousRewards[i])
+		}
+	}
+	common.OptionMapRWMutex.RUnlock()
+	common.QuotaPerUnit, operation_setting.USDExchangeRate = 500000, 8
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.LoadFromDB(previousConfig))
+		common.QuotaPerUnit, operation_setting.USDExchangeRate = previousUnit, previousRate
+		common.QuotaForNewUser, common.QuotaForInviter, common.QuotaForInvitee = previousRewards[0], previousRewards[1], previousRewards[2]
+		for field, raw := range previousRaw {
+			operation_setting.SetRewardAmountRaw(field, raw)
+		}
+	})
+	for _, dialect := range []struct{ kind, env string }{{"sqlite", ""}, {"mysql", "TEST_MYSQL_DSN"}, {"postgres", "TEST_POSTGRES_DSN"}} {
+		t.Run(dialect.kind, func(t *testing.T) {
+			if dialect.env != "" && os.Getenv(dialect.env) == "" {
+				t.Skip("set " + dialect.env + " to run this database")
+			}
+			db := modelManagementDB(t, dialect.kind, os.Getenv(dialect.env))
+			require.NoError(t, db.AutoMigrate(&model.Log{}))
+			payment := operation_setting.GetPaymentSetting()
+			payment.ComplianceConfirmed = true
+			payment.ComplianceTermsVersion = operation_setting.CurrentComplianceTermsVersion
+			usd := map[string]string{
+				operation_setting.AmountCurrencyOptionKey: "{}",
+				"QuotaForNewUser":                         "500000", "QuotaForInviter": "250000", "QuotaForInvitee": "125000",
+				"quota_setting.trust_quota_usd": "10",
+			}
+			cny := map[string]string{
+				operation_setting.AmountCurrencyOptionKey: `{"QuotaForNewUser":"CNY","QuotaForInviter":"CNY","QuotaForInvitee":"CNY","trust_quota_usd":"CNY"}`,
+				"QuotaForNewUser":                         "16", "QuotaForInviter": "4", "QuotaForInvitee": "2",
+				"quota_setting.trust_quota_usd": "80",
+			}
+			var response struct{ Success bool }
+			modelManagementRequest(t, UpdateQuotaAmounts, http.MethodPut, "/api/option/quota/amounts", map[string]any{"values": usd}, &response)
+			require.True(t, response.Success)
+
+			t.Run("legacy mark-only write is rejected", func(t *testing.T) {
+				modelManagementRequest(t, UpdateOption, http.MethodPut, "/api/option/", OptionUpdateRequest{Key: operation_setting.AmountCurrencyOptionKey, Value: cny[operation_setting.AmountCurrencyOptionKey]}, &response)
+				assert.False(t, response.Success)
+				quota, err := operation_setting.RewardQuota("QuotaForNewUser")
+				require.NoError(t, err)
+				assert.Equal(t, 500000, quota)
+			})
+			t.Run("invalid batch leaves every option unchanged", func(t *testing.T) {
+				for _, invalid := range []map[string]string{
+					{operation_setting.AmountCurrencyOptionKey: cny[operation_setting.AmountCurrencyOptionKey]},
+					{"RegisterEnabled": "false"},
+					maps.Clone(usd),
+				} {
+					if _, ok := invalid["QuotaForNewUser"]; ok {
+						invalid["QuotaForNewUser"] = "0.5"
+					}
+					modelManagementRequest(t, UpdateQuotaAmounts, http.MethodPut, "/api/option/quota/amounts", map[string]any{"values": invalid}, &response)
+					assert.False(t, response.Success)
+				}
+				for _, value := range []string{"-1", "NaN", "+Inf", "9007199254740992"} {
+					invalid := maps.Clone(usd)
+					invalid["QuotaForNewUser"] = value
+					modelManagementRequest(t, UpdateQuotaAmounts, http.MethodPut, "/api/option/quota/amounts", map[string]any{"values": invalid}, &response)
+					assert.False(t, response.Success, value)
+				}
+				payment.ComplianceConfirmed = false
+				modelManagementRequest(t, UpdateQuotaAmounts, http.MethodPut, "/api/option/quota/amounts", map[string]any{"values": cny}, &response)
+				assert.False(t, response.Success)
+				payment.ComplianceConfirmed = true
+			})
+			t.Run("database failure rolls back the whole batch", func(t *testing.T) {
+				writes := 0
+				const callback = "test:quota_amount_rollback"
+				require.NoError(t, db.Callback().Update().After("gorm:update").Register(callback, func(tx *gorm.DB) {
+					if tx.Statement.Table == "options" {
+						writes++
+						if writes == 2 {
+							tx.AddError(errors.New("injected option write failure"))
+						}
+					}
+				}))
+				modelManagementRequest(t, UpdateQuotaAmounts, http.MethodPut, "/api/option/quota/amounts", map[string]any{"values": cny}, &response)
+				require.NoError(t, db.Callback().Update().Remove(callback))
+				assert.False(t, response.Success)
+				for key, value := range usd {
+					var stored model.Option
+					require.NoError(t, db.Where(&model.Option{Key: key}).First(&stored).Error)
+					assert.Equal(t, value, stored.Value)
+				}
+				quota, err := operation_setting.RewardQuota("QuotaForNewUser")
+				require.NoError(t, err)
+				assert.Equal(t, 500000, quota)
+			})
+			t.Run("reward readers see committed configurations during a save", func(t *testing.T) {
+				entered, resume, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+				var once sync.Once
+				const callback = "test:quota_amount_publication"
+				require.NoError(t, db.Callback().Update().After("gorm:update").Register(callback, func(tx *gorm.DB) {
+					if tx.Statement.Table == "options" {
+						once.Do(func() { close(entered); <-resume })
+					}
+				}))
+				go func() { done <- model.UpdateOptionsBulk(cny) }()
+				select {
+				case <-entered:
+				case err := <-done:
+					require.NoError(t, err)
+					t.Fatal("save completed without reaching the option write")
+				}
+				quota, err := operation_setting.RewardQuota("QuotaForNewUser")
+				threshold := operation_setting.TrustQuota()
+				close(resume)
+				require.NoError(t, <-done)
+				require.NoError(t, db.Callback().Update().Remove(callback))
+				require.NoError(t, err)
+				assert.Equal(t, 500000, quota)
+				assert.Equal(t, float64(5000000), threshold)
+				for field, want := range map[string]int{"QuotaForNewUser": 1000000, "QuotaForInviter": 250000, "QuotaForInvitee": 125000} {
+					got, err := operation_setting.RewardQuota(field)
+					require.NoError(t, err)
+					assert.Equal(t, want, got)
+				}
+				assert.Equal(t, float64(5000000), operation_setting.TrustQuota())
+			})
+			t.Run("saved currency survives reload and USD restoration", func(t *testing.T) {
+				require.NoError(t, model.UpdateOptionsBulk(cny))
+				for range 2 {
+					model.InitOptionMap()
+					quota, err := operation_setting.RewardQuota("QuotaForNewUser")
+					require.NoError(t, err)
+					assert.Equal(t, 1000000, quota)
+				}
+				user := model.User{Username: "currency-reward", Group: "default"}
+				require.NoError(t, user.Insert(0))
+				var stored model.User
+				require.NoError(t, db.First(&stored, user.Id).Error)
+				assert.Equal(t, 1000000, stored.QuotaGift)
+				modelManagementRequest(t, UpdateQuotaAmounts, http.MethodPut, "/api/option/quota/amounts", map[string]any{"values": usd}, &response)
+				require.True(t, response.Success)
+				quota, err := operation_setting.RewardQuota("QuotaForNewUser")
+				require.NoError(t, err)
+				assert.Equal(t, 500000, quota)
+			})
+		})
 	}
 }

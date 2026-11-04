@@ -463,6 +463,34 @@ func UpdateOption(c *gin.Context) {
 	})
 }
 
+// UpdateQuotaAmounts saves reward/threshold values together with their unit marks.
+func UpdateQuotaAmounts(c *gin.Context) {
+	var request struct {
+		Values map[string]string `json:"values"`
+	}
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil || len(request.Values) == 0 {
+		common.ApiErrorStatus(c, http.StatusBadRequest, common.NewMessage("Invalid parameters"))
+		return
+	}
+	for key, value := range request.Values {
+		if !operation_setting.IsAmountOption(key) {
+			common.ApiErrorStatus(c, http.StatusBadRequest, common.NewMessage("Invalid parameters"))
+			return
+		}
+		if (key == operation_setting.AmountFieldQuotaForInviter || key == operation_setting.AmountFieldQuotaForInvitee) &&
+			isPositiveOptionValue(value) && !operation_setting.IsPaymentComplianceConfirmed() {
+			common.ApiErrorT(c, "Payment, redemption, subscription, and invitation reward features are disabled. The administrator must confirm compliance terms before enabling them.")
+			return
+		}
+	}
+	if err := model.UpdateOptionsBulk(request.Values); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "option.update", map[string]any{"key": operation_setting.AmountCurrencyOptionKey})
+	common.ApiSuccess(c, nil)
+}
+
 // SyncExchangeRate fetches USDExchangeRate from the default source now. A
 // failed attempt keeps the old rate and still returns the recorded status.
 func SyncExchangeRate(c *gin.Context) {

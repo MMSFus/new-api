@@ -4,6 +4,7 @@ import (
 	"maps"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -18,6 +19,9 @@ import (
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"gorm.io/gorm"
 )
+
+// Serializes amount saves with periodic reloads, including DB commit/publication.
+var amountOptionMutex sync.Mutex
 
 type Option struct {
 	Key   string `json:"key" gorm:"primaryKey"`
@@ -217,18 +221,26 @@ func loadOptionsFromDatabase() {
 	}()
 	passkeyOptionMutex.Lock()
 	defer passkeyOptionMutex.Unlock()
-	options, _ := AllOption()
+	amountOptionMutex.Lock()
+	defer amountOptionMutex.Unlock()
+	options, err := AllOption()
+	if err != nil {
+		common.SysError(common.LogText("failed to load options: %s", err.Error()))
+		return
+	}
 	passkeyOptions := make(map[string]string)
+	common.OptionMapRWMutex.Lock()
 	for _, option := range options {
 		if IsPasskeyDomainOption(option.Key) {
 			passkeyOptions[option.Key] = option.Value
 			continue
 		}
-		err := updateOptionMap(option.Key, option.Value)
+		err := updateOptionMapLocked(option.Key, option.Value)
 		if err != nil {
 			common.SysLog(common.LogText("failed to update option map: %s", err.Error()))
 		}
 	}
+	common.OptionMapRWMutex.Unlock()
 	applyPasskeyDomainOptions(passkeyOptions)
 }
 
@@ -302,6 +314,9 @@ func validateOptionValue(key string, value string) error {
 }
 
 func UpdateOption(key string, value string) error {
+	if operation_setting.IsAmountOption(key) {
+		return UpdateOptionsBulk(map[string]string{key: value})
+	}
 	if IsRequestPolicyOption(key) {
 		return UpdateRequestPolicyOptions(map[string]string{key: value})
 	}
@@ -370,6 +385,17 @@ func UpdateOptionsBulk(values map[string]string) error {
 		}
 	}
 
+	for key := range values {
+		if operation_setting.IsAmountOption(key) {
+			amountOptionMutex.Lock()
+			defer amountOptionMutex.Unlock()
+			if err := operation_setting.ValidateAmountOptions(values); err != nil {
+				return err
+			}
+			break
+		}
+	}
+
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		for k, v := range values {
 			option := Option{Key: k}
@@ -386,8 +412,10 @@ func UpdateOptionsBulk(values map[string]string) error {
 	if err != nil {
 		return err
 	}
+	common.OptionMapRWMutex.Lock()
+	defer common.OptionMapRWMutex.Unlock()
 	for k, v := range values {
-		if err := updateOptionMap(k, v); err != nil {
+		if err := updateOptionMapLocked(k, v); err != nil {
 			return err
 		}
 	}
@@ -397,15 +425,18 @@ func UpdateOptionsBulk(values map[string]string) error {
 	return nil
 }
 
-func updateOptionMap(key string, value string) (err error) {
-	if key == retiredThemeOptionKey || key == legacyAccessTokenRetireAtKey {
-		common.OptionMapRWMutex.Lock()
-		delete(common.OptionMap, key)
-		common.OptionMapRWMutex.Unlock()
-		return nil
-	}
+func updateOptionMap(key string, value string) error {
 	common.OptionMapRWMutex.Lock()
 	defer common.OptionMapRWMutex.Unlock()
+	return updateOptionMapLocked(key, value)
+}
+
+// updateOptionMapLocked requires common.OptionMapRWMutex to be write-locked.
+func updateOptionMapLocked(key string, value string) (err error) {
+	if key == retiredThemeOptionKey || key == legacyAccessTokenRetireAtKey {
+		delete(common.OptionMap, key)
+		return nil
+	}
 	common.OptionMap[key] = value
 
 	// 检查是否是模型配置 - 使用更规范的方式处理

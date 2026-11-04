@@ -27,6 +27,7 @@ import {
   syncExchangeRate,
   updatePasskeyDomains,
   updateSystemOption,
+  updateQuotaAmounts,
 } from '../api'
 import type { UpdateOptionRequest, UpdatePasskeyDomainsRequest } from '../types'
 
@@ -86,6 +87,20 @@ export function useUpdateOption() {
     onError: (error: Error) => {
       handleServerError(error, i18next.t('Failed to update setting'))
     },
+  })
+}
+
+export function useUpdateQuotaAmounts() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (values: Record<string, string>) =>
+      requireServerSuccess(await updateQuotaAmounts(values)),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['system-options'] })
+      toast.success(i18next.t('Setting updated successfully'))
+    },
+    onError: (error: Error) =>
+      handleServerError(error, i18next.t('Failed to update setting')),
   })
 }
 

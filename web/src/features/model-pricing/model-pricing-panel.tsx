@@ -135,7 +135,11 @@ export function ModelPricingPanel(props: {
     currencyPreference === 'site' && isValidPricingCurrency(siteCurrency)
       ? siteCurrency
       : USD_PRICING_CURRENCY
-  const current = pricingRow(entry.model_name, entry.effective)
+  const current = pricingRow(entry.model_name, {
+    ...entry.effective,
+    ModelRatio: effectivePricing.model_ratio,
+    ModelPrice: effectivePricing.model_price,
+  })
   const currentLanes = createInitialLaneState(current)
   const details = buildPreviewRows(
     current,
