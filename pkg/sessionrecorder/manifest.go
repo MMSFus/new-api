@@ -152,6 +152,14 @@ func manifestPath(workDir, batchID string) string {
 	return filepath.Join(manifestDir(workDir), batchID+".json")
 }
 
+func terminalManifestDir(workDir string) string {
+	return filepath.Join(manifestDir(workDir), "terminal")
+}
+
+func terminalManifestPath(workDir, batchID string) string {
+	return filepath.Join(terminalManifestDir(workDir), batchID+".json")
+}
+
 // SaveManifest atomically persists the manifest.
 func SaveManifest(workDir string, m BatchManifest) error {
 	raw, err := common.Marshal(m)

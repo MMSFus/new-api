@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/xml"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -525,6 +526,8 @@ func TestConsumerRecoversAcrossRestartWithFakeR2(t *testing.T) {
 	second := NewConsumer(cfg, newTestStore(t, cfg))
 	res = second.RunCycle(context.Background())
 	require.Equal(t, string(StateCleaned), res.State)
+	manifests, _ = filepath.Glob(filepath.Join(cfg.WorkDir, "manifests", "terminal", "*.json"))
+	require.Len(t, manifests, 1)
 	m, err = LoadManifest(manifests[0])
 	require.NoError(t, err)
 	require.Equal(t, StateCleaned, m.State)
@@ -916,10 +919,17 @@ func TestVerifiedBatchIndexAndContentReadback(t *testing.T) {
 	assert.True(t, local.Response.Truncated)
 	assert.Len(t, local.Response.Text, MaxContentBodyBytes)
 	assert.EqualValues(t, len(large), local.Response.Size)
+	var localBody bytes.Buffer
+	meta, bodySize, err := WriteRecordBody(context.Background(), settings, loc, store, "response", func(BodyFile, int64) io.Writer { return &localBody })
+	require.NoError(t, err)
+	assert.EqualValues(t, len(large), bodySize)
+	assert.False(t, meta.Truncated)
+	assert.Equal(t, large, localBody.String())
 
 	consumer := NewConsumer(cfg, store)
+	t.Cleanup(consumer.Close)
 	require.Equal(t, string(StateCleaned), consumer.RunCycle(context.Background()).State)
-	manifests, _ := filepath.Glob(filepath.Join(cfg.WorkDir, "manifests", "*.json"))
+	manifests, _ := filepath.Glob(filepath.Join(cfg.WorkDir, "manifests", "terminal", "*.json"))
 	require.Len(t, manifests, 1)
 	m, err := LoadManifest(manifests[0])
 	require.NoError(t, err)
@@ -950,6 +960,51 @@ func TestVerifiedBatchIndexAndContentReadback(t *testing.T) {
 	assert.Equal(t, local.Request, archived.Request)
 	assert.Equal(t, local.Response, archived.Response)
 	assert.JSONEq(t, string(local.Record), string(archived.Record))
+	require.NotNil(t, archived.Request, "archive content includes the request body")
+	require.NotNil(t, archived.Response, "archive content includes the response body")
+	var archivedBody bytes.Buffer
+	meta, bodySize, err = WriteRecordBody(context.Background(), settings, loc, store, "response", func(BodyFile, int64) io.Writer {
+		return &archivedBody
+	})
+	require.NoError(t, err)
+	assert.EqualValues(t, len(large), bodySize)
+	assert.Equal(t, meta.ContentType, "application/json")
+	assert.Equal(t, large, archivedBody.String())
+	var filesBeforeDownload []string
+	require.NoError(t, filepath.WalkDir(cfg.WorkDir, func(file string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.IsDir() {
+			rel, err := filepath.Rel(cfg.WorkDir, file)
+			if err != nil {
+				return err
+			}
+			filesBeforeDownload = append(filesBeforeDownload, rel)
+		}
+		return nil
+	}))
+	var requestBody bytes.Buffer
+	_, _, err = WriteRecordBody(context.Background(), settings, loc, store, "request", func(BodyFile, int64) io.Writer {
+		return &requestBody
+	})
+	require.NoError(t, err)
+	assert.Equal(t, `{"q":"hi"}`, requestBody.String())
+	var filesAfterDownload []string
+	require.NoError(t, filepath.WalkDir(cfg.WorkDir, func(file string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.IsDir() {
+			rel, err := filepath.Rel(cfg.WorkDir, file)
+			if err != nil {
+				return err
+			}
+			filesAfterDownload = append(filesAfterDownload, rel)
+		}
+		return nil
+	}))
+	assert.Equal(t, filesBeforeDownload, filesAfterDownload, "archive downloads do not create body temp files")
 	gets := fake.methods[http.MethodGet]
 	_, err = ReadRecordContent(context.Background(), settings, loc, store)
 	require.NoError(t, err)
@@ -999,6 +1054,119 @@ func TestVerifiedBatchIndexAndContentReadback(t *testing.T) {
 	_, _, err = IndexArchiveObject(context.Background(), store, "standalone-v1/missing.tar.gz")
 	require.ErrorIs(t, err, ErrObjectNotFound)
 	require.Empty(t, fake.forbidden)
+}
+
+func TestTerminalManifestMigrationIsIdempotentAndCrashRecoverable(t *testing.T) {
+	cfg := testConfig(t)
+	now := time.Now().UTC()
+	manifest := BatchManifest{FormatVersion: 1, BatchID: "legacy-retained", State: StateRetained,
+		CreatedAt: now.Format(timeLayout), UpdatedAt: now.Format(timeLayout), Sources: []SourceEntry{{
+			RootID: "primary", RelativePath: "gpt-4o/jsonl/a.jsonl", Size: 7, ModTimeNanos: 42,
+		}}}
+	require.NoError(t, SaveManifest(cfg.WorkDir, manifest))
+
+	// Simulate a crash after committing the index transaction but before moving
+	// the legacy manifest out of the active directory.
+	index, err := openSourceIndex(cfg.WorkDir)
+	require.NoError(t, err)
+	require.NoError(t, index.add(manifest))
+	index.close()
+
+	consumer := NewConsumer(cfg, nil)
+	t.Cleanup(consumer.Close)
+	loads := 0
+	consumer.loadManifestFn = func(file string) (BatchManifest, error) {
+		loads++
+		return LoadManifest(file)
+	}
+	active, index, err := consumer.loadManifests(now)
+	require.NoError(t, err)
+	require.Empty(t, active)
+	assert.Equal(t, 1, loads)
+	known, err := index.contains(sourceIdentity(manifest.Sources[0]), now)
+	require.NoError(t, err)
+	assert.True(t, known, "legacy source identity remains available for spool skip")
+	firstIndex := index
+	_, err = os.Stat(terminalManifestPath(cfg.WorkDir, manifest.BatchID))
+	require.NoError(t, err)
+
+	active, index, err = consumer.loadManifests(now)
+	require.NoError(t, err)
+	require.Empty(t, active)
+	assert.Same(t, firstIndex, index, "the consumer reuses its source-index connection")
+	assert.Equal(t, 1, loads, "a migrated retained manifest is not deserialized again")
+	consumer.Close()
+	_, reopenedIndex, err := consumer.loadManifests(now)
+	require.NoError(t, err)
+	assert.NotSame(t, firstIndex, reopenedIndex, "a closed consumer lazily reopens its index")
+	consumer.Close()
+	blockedWorkDir := filepath.Join(cfg.WorkDir, "not-a-directory")
+	require.NoError(t, os.WriteFile(blockedWorkDir, []byte("block"), 0o600))
+	consumer.cfg.WorkDir = blockedWorkDir
+	_, _, err = consumer.loadManifests(now)
+	require.Error(t, err, "index initialization reports filesystem failures")
+	require.NoError(t, os.Remove(blockedWorkDir))
+	_, retriedIndex, err := consumer.loadManifests(now)
+	require.NoError(t, err, "the next cycle retries a failed lazy open")
+	assert.NotNil(t, retriedIndex)
+}
+
+func TestRetainedManifestPopulationDoesNotLoadHistoricalFiles(t *testing.T) {
+	cfg := testConfig(t)
+	now := time.Now().UTC()
+	index, err := openSourceIndex(cfg.WorkDir)
+	require.NoError(t, err)
+	for n := 0; n < 250; n++ {
+		manifest := BatchManifest{FormatVersion: 1, BatchID: fmt.Sprintf("retained-%04d", n), State: StateRetained,
+			CreatedAt: now.Format(timeLayout), UpdatedAt: now.Format(timeLayout), Sources: []SourceEntry{{
+				RootID: "primary", RelativePath: fmt.Sprintf("gpt-4o/jsonl/%04d.jsonl", n), Size: int64(n + 1), ModTimeNanos: int64(n + 1),
+			}}}
+		require.NoError(t, SaveManifest(cfg.WorkDir, manifest))
+		require.NoError(t, index.add(manifest))
+		require.NoError(t, index.moveManifest(cfg.WorkDir, manifest))
+	}
+	index.close()
+
+	consumer := NewConsumer(cfg, nil)
+	t.Cleanup(consumer.Close)
+	loads := 0
+	consumer.loadManifestFn = func(file string) (BatchManifest, error) {
+		loads++
+		return LoadManifest(file)
+	}
+	active, index, err := consumer.loadManifests(now)
+	require.NoError(t, err)
+	require.Empty(t, active)
+	assert.Zero(t, loads, "terminal manifests stay outside the active directory read set")
+}
+
+func TestCleanedManifestIndexExpiresAfterRetention(t *testing.T) {
+	cfg := testConfig(t)
+	now := time.Now().UTC()
+	manifest := BatchManifest{FormatVersion: 1, BatchID: "cleaned-expiry", State: StateCleaned,
+		CreatedAt: now.Add(-25 * time.Hour).Format(timeLayout), UpdatedAt: now.Add(-23 * time.Hour).Format(timeLayout),
+		Sources: []SourceEntry{{RootID: "primary", RelativePath: "old.jsonl", Size: 1, ModTimeNanos: 1}}}
+	require.NoError(t, SaveManifest(cfg.WorkDir, manifest))
+	consumer := NewConsumer(cfg, nil)
+	t.Cleanup(consumer.Close)
+	active, index, err := consumer.loadManifests(now)
+	require.NoError(t, err)
+	require.Empty(t, active)
+	known, err := index.contains(sourceIdentity(manifest.Sources[0]), now)
+	require.NoError(t, err)
+	assert.True(t, known, "cleaned source is skipped during its 24-hour retention")
+	_, err = os.Stat(terminalManifestPath(cfg.WorkDir, manifest.BatchID))
+	require.NoError(t, err)
+
+	retentionElapsed := now.Add(2 * time.Hour)
+	active, index, err = consumer.loadManifests(retentionElapsed)
+	require.NoError(t, err)
+	require.Empty(t, active)
+	known, err = index.contains(sourceIdentity(manifest.Sources[0]), retentionElapsed)
+	require.NoError(t, err)
+	assert.False(t, known)
+	_, err = os.Stat(terminalManifestPath(cfg.WorkDir, manifest.BatchID))
+	assert.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func tarGz(t *testing.T, entries ...*tar.Header) []byte {

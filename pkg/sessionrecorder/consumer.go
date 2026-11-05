@@ -68,12 +68,14 @@ type Consumer struct {
 	store Store
 	now   func() time.Time
 	// queueStats is used when cfg.QueueGuard.StatsPath is empty.
-	queueStats func() (ProducerStats, bool)
-	logf       func(format string, args ...any)
+	queueStats     func() (ProducerStats, bool)
+	logf           func(format string, args ...any)
+	loadManifestFn func(string) (BatchManifest, error)
+	indexMu        sync.Mutex
+	index          *sourceIndex
 
 	mu          sync.Mutex
 	nextAttempt map[string]time.Time
-	index       map[string]manifestIndexEntry
 	lastScan    ScanResult
 	lastResult  CycleResult
 	lastErr     string
@@ -81,19 +83,14 @@ type Consumer struct {
 	lastCycleAt time.Time
 }
 
-type manifestIndexEntry struct {
-	modTime time.Time
-	keys    [][16]byte
-}
-
 func NewConsumer(cfg Config, store Store) *Consumer {
 	return &Consumer{
-		cfg:         cfg,
-		store:       store,
-		now:         time.Now,
-		logf:        func(string, ...any) {},
-		nextAttempt: make(map[string]time.Time),
-		index:       make(map[string]manifestIndexEntry),
+		cfg:            cfg,
+		store:          store,
+		now:            time.Now,
+		logf:           func(string, ...any) {},
+		loadManifestFn: LoadManifest,
+		nextAttempt:    make(map[string]time.Time),
 	}
 }
 
@@ -142,57 +139,75 @@ func (c *Consumer) evaluateQueue(now time.Time) (QueueState, error) {
 	return EvaluateQueueGuard(c.cfg.QueueGuard, now)
 }
 
-// loadManifests returns all readable manifests sorted by creation time and
-// refreshes the uploaded-source index.
-func (c *Consumer) loadManifests(now time.Time) ([]BatchManifest, map[[16]byte]struct{}) {
+// loadManifests indexes terminal manifests as it encounters them and reads active manifests.
+func (c *Consumer) loadManifests(now time.Time) ([]BatchManifest, *sourceIndex, error) {
+	index, err := c.sourceIndex()
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := index.expireCleaned(c.cfg.WorkDir, now); err != nil {
+		return nil, nil, err
+	}
+	load := c.loadManifestFn
+	if load == nil {
+		load = LoadManifest
+	}
 	dir := manifestDir(c.cfg.WorkDir)
-	entries, _ := os.ReadDir(dir)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, nil, err
+	}
 	var manifests []BatchManifest
-	seenFiles := make(map[string]struct{})
-	known := make(map[[16]byte]struct{})
 	for _, entry := range entries {
 		name := entry.Name()
 		if entry.IsDir() || !strings.HasSuffix(name, ".json") || strings.HasPrefix(name, ".") {
 			continue
 		}
 		file := filepath.Join(dir, name)
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-		m, err := LoadManifest(file)
+		m, err := load(file)
 		if err != nil {
 			c.logf("session recorder: quarantine manifest %s: %v", name, err)
 			_ = QuarantineManifest(file)
 			continue
 		}
-		if m.State == StateCleaned {
-			if updated, err := time.Parse(time.RFC3339Nano, m.UpdatedAt); err == nil && now.Sub(updated) > cleanedManifestRetention {
-				_ = os.Remove(file)
-				continue
+		if m.State.Terminal() {
+			if err := index.add(m); err != nil {
+				return nil, nil, err
 			}
-		}
-		seenFiles[file] = struct{}{}
-		cached, ok := c.index[file]
-		if !ok || !cached.modTime.Equal(info.ModTime()) {
-			cached = manifestIndexEntry{modTime: info.ModTime()}
-			for _, s := range m.Sources {
-				cached.keys = append(cached.keys, sourceIdentity(s))
+			if err := index.moveManifest(c.cfg.WorkDir, m); err != nil {
+				return nil, nil, err
 			}
-			c.index[file] = cached
-		}
-		for _, k := range cached.keys {
-			known[k] = struct{}{}
+			continue
 		}
 		manifests = append(manifests, m)
 	}
-	for file := range c.index {
-		if _, ok := seenFiles[file]; !ok {
-			delete(c.index, file)
-		}
-	}
 	sort.Slice(manifests, func(i, j int) bool { return manifests[i].CreatedAt < manifests[j].CreatedAt })
-	return manifests, known
+	return manifests, index, nil
+}
+
+func (c *Consumer) sourceIndex() (*sourceIndex, error) {
+	c.indexMu.Lock()
+	defer c.indexMu.Unlock()
+	if c.index != nil {
+		return c.index, nil
+	}
+	index, err := openSourceIndex(c.cfg.WorkDir)
+	if err != nil {
+		return nil, err
+	}
+	c.index = index
+	return index, nil
+}
+
+// Close releases the lazily opened source index when this consumer is retired.
+func (c *Consumer) Close() {
+	c.indexMu.Lock()
+	defer c.indexMu.Unlock()
+	if c.index == nil {
+		return
+	}
+	c.index.close()
+	c.index = nil
 }
 
 // RunCycle performs one bounded unit of work.
@@ -224,7 +239,12 @@ func (c *Consumer) RunCycle(ctx context.Context) CycleResult {
 		}
 		return result
 	}
-	manifests, known := c.loadManifests(now)
+	manifests, sourceIndex, err := c.loadManifests(now)
+	if err != nil {
+		result.State = "filesystem_error"
+		c.setErr(err)
+		return result
+	}
 	for i := range manifests {
 		m := &manifests[i]
 		if m.State.Terminal() {
@@ -236,6 +256,18 @@ func (c *Consumer) RunCycle(ctx context.Context) CycleResult {
 			return result
 		}
 		c.advanceBatch(ctx, m, &result)
+		if m.State.Terminal() {
+			if err := sourceIndex.add(*m); err != nil {
+				result.State = "filesystem_error"
+				c.setErr(err)
+				return result
+			}
+			if err := sourceIndex.moveManifest(c.cfg.WorkDir, *m); err != nil {
+				result.State = "filesystem_error"
+				c.setErr(err)
+				return result
+			}
+		}
 		return result
 	}
 	if !c.cfg.UploadEnabled {
@@ -247,8 +279,12 @@ func (c *Consumer) RunCycle(ctx context.Context) CycleResult {
 		return result
 	}
 	skip := func(e SourceEntry) bool {
-		_, ok := known[sourceIdentity(e)]
-		return ok
+		known, err := sourceIndex.contains(sourceIdentity(e), now)
+		if err != nil {
+			c.logf("session recorder: source index lookup failed: %v", err)
+			return true
+		}
+		return known
 	}
 	scan := ScanSpools(c.cfg, now, skip, c.cfg.QueueGuard.StatsPath)
 	c.mu.Lock()
@@ -281,6 +317,18 @@ func (c *Consumer) RunCycle(ctx context.Context) CycleResult {
 	}
 	result.BatchID = m.BatchID
 	c.advanceBatch(ctx, &m, &result)
+	if m.State.Terminal() {
+		if err := sourceIndex.add(m); err != nil {
+			result.State = "filesystem_error"
+			c.setErr(err)
+			return result
+		}
+		if err := sourceIndex.moveManifest(c.cfg.WorkDir, m); err != nil {
+			result.State = "filesystem_error"
+			c.setErr(err)
+			return result
+		}
+	}
 	return result
 }
 

@@ -76,7 +76,8 @@ var auditContentTemplates = map[string]string{
 	"subscription.user_plan_reset":  "Reset active plan ${plan_id} subscriptions for user ${target_user_id}",
 	"subscription.user_quota_reset": "Administrator reset the quota of subscription plan ${plan_title} (ID: ${plan_id})",
 
-	"session_recorder.view_content": "Viewed recorded content of record ${record_id} (session ${session_id})",
+	"session_recorder.view_content":  "Viewed recorded content of record ${record_id} (session ${session_id})",
+	"session_recorder.download_body": "Downloaded ${kind} body of record ${record_id} (session ${session_id})",
 }
 
 func recordPasskeyDomainAudit(c *gin.Context, change *model.PasskeyDomainChange, confirmed bool, err error) {
