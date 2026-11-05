@@ -71,8 +71,6 @@ type Consumer struct {
 	queueStats     func() (ProducerStats, bool)
 	logf           func(format string, args ...any)
 	loadManifestFn func(string) (BatchManifest, error)
-	indexMu        sync.Mutex
-	index          *sourceIndex
 
 	mu          sync.Mutex
 	nextAttempt map[string]time.Time
@@ -140,9 +138,13 @@ func (c *Consumer) evaluateQueue(now time.Time) (QueueState, error) {
 }
 
 // loadManifests indexes terminal manifests as it encounters them and reads active manifests.
-func (c *Consumer) loadManifests(now time.Time) ([]BatchManifest, *sourceIndex, error) {
-	index, err := c.sourceIndex()
-	if err != nil {
+func (c *Consumer) loadManifests(ctx context.Context, now time.Time) ([]BatchManifest, *sourceIndex, error) {
+	ledger := currentSourceLedger()
+	if ledger == nil {
+		return nil, nil, errSourceLedgerUnavailable
+	}
+	index := &sourceIndex{ctx: ctx, ledger: ledger, scope: sourceLedgerScope(c.cfg)}
+	if err := os.MkdirAll(terminalManifestDir(c.cfg.WorkDir), 0o700); err != nil {
 		return nil, nil, err
 	}
 	if err := index.expireCleaned(c.cfg.WorkDir, now); err != nil {
@@ -185,31 +187,6 @@ func (c *Consumer) loadManifests(now time.Time) ([]BatchManifest, *sourceIndex, 
 	return manifests, index, nil
 }
 
-func (c *Consumer) sourceIndex() (*sourceIndex, error) {
-	c.indexMu.Lock()
-	defer c.indexMu.Unlock()
-	if c.index != nil {
-		return c.index, nil
-	}
-	index, err := openSourceIndex(c.cfg.WorkDir)
-	if err != nil {
-		return nil, err
-	}
-	c.index = index
-	return index, nil
-}
-
-// Close releases the lazily opened source index when this consumer is retired.
-func (c *Consumer) Close() {
-	c.indexMu.Lock()
-	defer c.indexMu.Unlock()
-	if c.index == nil {
-		return
-	}
-	c.index.close()
-	c.index = nil
-}
-
 // RunCycle performs one bounded unit of work.
 func (c *Consumer) RunCycle(ctx context.Context) CycleResult {
 	now := c.now()
@@ -239,9 +216,9 @@ func (c *Consumer) RunCycle(ctx context.Context) CycleResult {
 		}
 		return result
 	}
-	manifests, sourceIndex, err := c.loadManifests(now)
+	manifests, sourceIndex, err := c.loadManifests(ctx, now)
 	if err != nil {
-		result.State = "filesystem_error"
+		result.State = cycleErrorState(err)
 		c.setErr(err)
 		return result
 	}
@@ -258,7 +235,7 @@ func (c *Consumer) RunCycle(ctx context.Context) CycleResult {
 		c.advanceBatch(ctx, m, &result)
 		if m.State.Terminal() {
 			if err := sourceIndex.add(*m); err != nil {
-				result.State = "filesystem_error"
+				result.State = cycleErrorState(err)
 				c.setErr(err)
 				return result
 			}
@@ -319,7 +296,7 @@ func (c *Consumer) RunCycle(ctx context.Context) CycleResult {
 	c.advanceBatch(ctx, &m, &result)
 	if m.State.Terminal() {
 		if err := sourceIndex.add(m); err != nil {
-			result.State = "filesystem_error"
+			result.State = cycleErrorState(err)
 			c.setErr(err)
 			return result
 		}

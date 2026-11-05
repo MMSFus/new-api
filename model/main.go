@@ -379,6 +379,7 @@ func migrateDB() error {
 		&AuthzRole{},
 		&UserAccessToken{},
 		&SessionRecorderRecord{},
+		&SessionRecorderTerminalSource{},
 	)
 	if err != nil {
 		return err

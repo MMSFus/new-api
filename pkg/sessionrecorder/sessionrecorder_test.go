@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -100,6 +101,7 @@ func withStorageUsage(t *testing.T, disk, inode int) {
 func testConfig(t *testing.T) Config {
 	t.Helper()
 	withStorageUsage(t, 10, 10)
+	installMemorySourceLedger(t)
 	base := t.TempDir()
 	cfg := DefaultConfig()
 	cfg.InstallationID = "0123456789abcdef0123456789abcdef"
@@ -631,6 +633,7 @@ func TestSafeSegmentPreservesUTF8(t *testing.T) {
 }
 
 func TestConsumerRunnerRetriesHeldWorkLock(t *testing.T) {
+	installMemorySourceLedger(t)
 	s := DefaultSettings()
 	s.SpoolRoot = filepath.Join(t.TempDir(), "spool")
 	s.WorkDir = filepath.Join(t.TempDir(), "work")
@@ -927,7 +930,6 @@ func TestVerifiedBatchIndexAndContentReadback(t *testing.T) {
 	assert.Equal(t, large, localBody.String())
 
 	consumer := NewConsumer(cfg, store)
-	t.Cleanup(consumer.Close)
 	require.Equal(t, string(StateCleaned), consumer.RunCycle(context.Background()).State)
 	manifests, _ := filepath.Glob(filepath.Join(cfg.WorkDir, "manifests", "terminal", "*.json"))
 	require.Len(t, manifests, 1)
@@ -1056,8 +1058,85 @@ func TestVerifiedBatchIndexAndContentReadback(t *testing.T) {
 	require.Empty(t, fake.forbidden)
 }
 
+// memorySourceLedger is the SourceLedger contract of the host table, kept in
+// memory for the consumer tests.
+type memorySourceLedger struct {
+	mu   sync.Mutex
+	rows map[[3]string]int64 // scope, source key, batch id -> expires_at
+	fail error
+}
+
+func installMemorySourceLedger(t *testing.T) *memorySourceLedger {
+	t.Helper()
+	ledger := &memorySourceLedger{rows: make(map[[3]string]int64)}
+	previous := currentSourceLedger()
+	SetSourceLedger(ledger)
+	t.Cleanup(func() { SetSourceLedger(previous) })
+	return ledger
+}
+
+func (l *memorySourceLedger) AddTerminalBatch(_ context.Context, batch TerminalBatch) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.fail != nil {
+		return l.fail
+	}
+	for _, key := range batch.SourceKeys {
+		if _, ok := l.rows[[3]string{batch.Scope, key, batch.BatchID}]; !ok {
+			l.rows[[3]string{batch.Scope, key, batch.BatchID}] = batch.ExpiresAt
+		}
+	}
+	return nil
+}
+
+func (l *memorySourceLedger) ContainsSource(_ context.Context, scope, sourceKey string, now int64) (bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for row, expiresAt := range l.rows {
+		if row[0] == scope && row[1] == sourceKey && (expiresAt == 0 || expiresAt > now) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (l *memorySourceLedger) ExpiredBatches(_ context.Context, scope string, now int64, limit int) ([]string, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	seen := make(map[string]struct{})
+	var ids []string
+	for row, expiresAt := range l.rows {
+		if _, dup := seen[row[2]]; row[0] == scope && expiresAt > 0 && expiresAt <= now && !dup {
+			seen[row[2]] = struct{}{}
+			ids = append(ids, row[2])
+		}
+	}
+	sort.Strings(ids)
+	return ids[:min(limit, len(ids))], nil
+}
+
+func (l *memorySourceLedger) DeleteBatch(_ context.Context, scope, batchID string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for row := range l.rows {
+		if row[0] == scope && row[2] == batchID {
+			delete(l.rows, row)
+		}
+	}
+	return nil
+}
+
+func (l *memorySourceLedger) contains(t *testing.T, cfg Config, source SourceEntry, now time.Time) bool {
+	t.Helper()
+	identity := sourceIdentity(source)
+	known, err := l.ContainsSource(context.Background(), sourceLedgerScope(cfg), hex.EncodeToString(identity[:]), now.Unix())
+	require.NoError(t, err)
+	return known
+}
+
 func TestTerminalManifestMigrationIsIdempotentAndCrashRecoverable(t *testing.T) {
 	cfg := testConfig(t)
+	ledger := installMemorySourceLedger(t)
 	now := time.Now().UTC()
 	manifest := BatchManifest{FormatVersion: 1, BatchID: "legacy-retained", State: StateRetained,
 		CreatedAt: now.Format(timeLayout), UpdatedAt: now.Format(timeLayout), Sources: []SourceEntry{{
@@ -1065,58 +1144,68 @@ func TestTerminalManifestMigrationIsIdempotentAndCrashRecoverable(t *testing.T) 
 		}}}
 	require.NoError(t, SaveManifest(cfg.WorkDir, manifest))
 
-	// Simulate a crash after committing the index transaction but before moving
-	// the legacy manifest out of the active directory.
-	index, err := openSourceIndex(cfg.WorkDir)
-	require.NoError(t, err)
+	// Simulate a crash after the ledger write but before moving the legacy
+	// manifest out of the active directory.
+	index := &sourceIndex{ctx: context.Background(), ledger: ledger, scope: sourceLedgerScope(cfg)}
 	require.NoError(t, index.add(manifest))
-	index.close()
 
 	consumer := NewConsumer(cfg, nil)
-	t.Cleanup(consumer.Close)
 	loads := 0
 	consumer.loadManifestFn = func(file string) (BatchManifest, error) {
 		loads++
 		return LoadManifest(file)
 	}
-	active, index, err := consumer.loadManifests(now)
+	active, _, err := consumer.loadManifests(context.Background(), now)
 	require.NoError(t, err)
 	require.Empty(t, active)
 	assert.Equal(t, 1, loads)
-	known, err := index.contains(sourceIdentity(manifest.Sources[0]), now)
-	require.NoError(t, err)
-	assert.True(t, known, "legacy source identity remains available for spool skip")
-	firstIndex := index
+	assert.True(t, ledger.contains(t, cfg, manifest.Sources[0], now), "legacy source identity remains available for spool skip")
+	assert.Len(t, ledger.rows, 1, "re-adding a batch is idempotent")
 	_, err = os.Stat(terminalManifestPath(cfg.WorkDir, manifest.BatchID))
 	require.NoError(t, err)
 
-	active, index, err = consumer.loadManifests(now)
+	active, _, err = consumer.loadManifests(context.Background(), now)
 	require.NoError(t, err)
 	require.Empty(t, active)
-	assert.Same(t, firstIndex, index, "the consumer reuses its source-index connection")
 	assert.Equal(t, 1, loads, "a migrated retained manifest is not deserialized again")
-	consumer.Close()
-	_, reopenedIndex, err := consumer.loadManifests(now)
+
+	other := cfg
+	other.HostID = "host-2"
+	assert.False(t, ledger.contains(t, other, manifest.Sources[0], now), "another host's consumer does not skip this source")
+}
+
+func TestSourceLedgerFailureStopsTheCycleBeforePlanning(t *testing.T) {
+	cfg := testConfig(t)
+	SetSourceLedger(nil)
+	consumer := NewConsumer(cfg, nil)
+	require.NoError(t, EnsureDirectories(cfg))
+	assert.Equal(t, "source_ledger_error", consumer.RunCycle(context.Background()).State)
+
+	ledger := installMemorySourceLedger(t)
+	now := time.Now().UTC()
+	manifest := BatchManifest{FormatVersion: 1, BatchID: "retained-pending-ledger", State: StateRetained,
+		CreatedAt: now.Format(timeLayout), UpdatedAt: now.Format(timeLayout), Sources: []SourceEntry{{
+			RootID: "primary", RelativePath: "gpt-4o/jsonl/b.jsonl", Size: 3, ModTimeNanos: 9,
+		}}}
+	require.NoError(t, SaveManifest(cfg.WorkDir, manifest))
+	ledger.fail = errors.New("database is down")
+	assert.Equal(t, "source_ledger_error", consumer.RunCycle(context.Background()).State)
+	_, err := os.Stat(manifestPath(cfg.WorkDir, manifest.BatchID))
+	require.NoError(t, err, "the manifest stays active until its sources are stored")
+
+	ledger.fail = nil
+	_, _, err = consumer.loadManifests(context.Background(), now)
 	require.NoError(t, err)
-	assert.NotSame(t, firstIndex, reopenedIndex, "a closed consumer lazily reopens its index")
-	consumer.Close()
-	blockedWorkDir := filepath.Join(cfg.WorkDir, "not-a-directory")
-	require.NoError(t, os.WriteFile(blockedWorkDir, []byte("block"), 0o600))
-	consumer.cfg.WorkDir = blockedWorkDir
-	_, _, err = consumer.loadManifests(now)
-	require.Error(t, err, "index initialization reports filesystem failures")
-	require.NoError(t, os.Remove(blockedWorkDir))
-	_, retriedIndex, err := consumer.loadManifests(now)
-	require.NoError(t, err, "the next cycle retries a failed lazy open")
-	assert.NotNil(t, retriedIndex)
+	assert.True(t, ledger.contains(t, cfg, manifest.Sources[0], now))
 }
 
 func TestRetainedManifestPopulationDoesNotLoadHistoricalFiles(t *testing.T) {
 	cfg := testConfig(t)
+	ledger := installMemorySourceLedger(t)
 	now := time.Now().UTC()
-	index, err := openSourceIndex(cfg.WorkDir)
-	require.NoError(t, err)
-	for n := 0; n < 250; n++ {
+	index := &sourceIndex{ctx: context.Background(), ledger: ledger, scope: sourceLedgerScope(cfg)}
+	require.NoError(t, os.MkdirAll(terminalManifestDir(cfg.WorkDir), 0o700))
+	for n := range 250 {
 		manifest := BatchManifest{FormatVersion: 1, BatchID: fmt.Sprintf("retained-%04d", n), State: StateRetained,
 			CreatedAt: now.Format(timeLayout), UpdatedAt: now.Format(timeLayout), Sources: []SourceEntry{{
 				RootID: "primary", RelativePath: fmt.Sprintf("gpt-4o/jsonl/%04d.jsonl", n), Size: int64(n + 1), ModTimeNanos: int64(n + 1),
@@ -1125,16 +1214,14 @@ func TestRetainedManifestPopulationDoesNotLoadHistoricalFiles(t *testing.T) {
 		require.NoError(t, index.add(manifest))
 		require.NoError(t, index.moveManifest(cfg.WorkDir, manifest))
 	}
-	index.close()
 
 	consumer := NewConsumer(cfg, nil)
-	t.Cleanup(consumer.Close)
 	loads := 0
 	consumer.loadManifestFn = func(file string) (BatchManifest, error) {
 		loads++
 		return LoadManifest(file)
 	}
-	active, index, err := consumer.loadManifests(now)
+	active, _, err := consumer.loadManifests(context.Background(), now)
 	require.NoError(t, err)
 	require.Empty(t, active)
 	assert.Zero(t, loads, "terminal manifests stay outside the active directory read set")
@@ -1142,29 +1229,26 @@ func TestRetainedManifestPopulationDoesNotLoadHistoricalFiles(t *testing.T) {
 
 func TestCleanedManifestIndexExpiresAfterRetention(t *testing.T) {
 	cfg := testConfig(t)
+	ledger := installMemorySourceLedger(t)
 	now := time.Now().UTC()
 	manifest := BatchManifest{FormatVersion: 1, BatchID: "cleaned-expiry", State: StateCleaned,
 		CreatedAt: now.Add(-25 * time.Hour).Format(timeLayout), UpdatedAt: now.Add(-23 * time.Hour).Format(timeLayout),
 		Sources: []SourceEntry{{RootID: "primary", RelativePath: "old.jsonl", Size: 1, ModTimeNanos: 1}}}
 	require.NoError(t, SaveManifest(cfg.WorkDir, manifest))
 	consumer := NewConsumer(cfg, nil)
-	t.Cleanup(consumer.Close)
-	active, index, err := consumer.loadManifests(now)
+	active, _, err := consumer.loadManifests(context.Background(), now)
 	require.NoError(t, err)
 	require.Empty(t, active)
-	known, err := index.contains(sourceIdentity(manifest.Sources[0]), now)
-	require.NoError(t, err)
-	assert.True(t, known, "cleaned source is skipped during its 24-hour retention")
+	assert.True(t, ledger.contains(t, cfg, manifest.Sources[0], now), "cleaned source is skipped during its 24-hour retention")
 	_, err = os.Stat(terminalManifestPath(cfg.WorkDir, manifest.BatchID))
 	require.NoError(t, err)
 
 	retentionElapsed := now.Add(2 * time.Hour)
-	active, index, err = consumer.loadManifests(retentionElapsed)
+	active, _, err = consumer.loadManifests(context.Background(), retentionElapsed)
 	require.NoError(t, err)
 	require.Empty(t, active)
-	known, err = index.contains(sourceIdentity(manifest.Sources[0]), retentionElapsed)
-	require.NoError(t, err)
-	assert.False(t, known)
+	assert.False(t, ledger.contains(t, cfg, manifest.Sources[0], retentionElapsed))
+	assert.Empty(t, ledger.rows, "expired rows are deleted")
 	_, err = os.Stat(terminalManifestPath(cfg.WorkDir, manifest.BatchID))
 	assert.ErrorIs(t, err, os.ErrNotExist)
 }

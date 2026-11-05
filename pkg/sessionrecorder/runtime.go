@@ -212,11 +212,6 @@ func startConsumer(s Settings) *consumerRunner {
 	r.setState("starting")
 	go func() {
 		defer close(r.done)
-		defer func() {
-			if consumer := r.consumer.Load(); consumer != nil {
-				consumer.Close()
-			}
-		}()
 		cfg := s.ToConfig()
 		if err := EnsureDirectories(cfg); err != nil {
 			r.setState("filesystem_error")

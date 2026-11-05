@@ -163,3 +163,57 @@ func TestFitColumnKeepsRuneBoundaryAndIdentity(t *testing.T) {
 		assert.True(t, []rune(s)[0] == '会')
 	}
 }
+
+func TestSessionRecorderSourceLedgerAcrossDatabases(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+		t.Run(dialect, func(t *testing.T) {
+			db := setupChannelCostDialect(t, dialect)
+			// Migrating twice must be a no-op the second time.
+			require.NoError(t, db.AutoMigrate(&SessionRecorderTerminalSource{}))
+			require.NoError(t, db.AutoMigrate(&SessionRecorderTerminalSource{}))
+			t.Cleanup(func() { require.NoError(t, db.Migrator().DropTable(&SessionRecorderTerminalSource{})) })
+			ctx := context.Background()
+			ledger := SessionRecorderSourceLedger{}
+			const now = int64(1793577600)
+			retained := sessionrecorder.TerminalBatch{Scope: "host-a", BatchID: "retained", SourceKeys: []string{"k1", "k2"}}
+			cleaned := sessionrecorder.TerminalBatch{Scope: "host-a", BatchID: "cleaned", SourceKeys: []string{"k3"}, ExpiresAt: now + 60}
+			for _, batch := range []sessionrecorder.TerminalBatch{retained, retained, cleaned} {
+				require.NoError(t, ledger.AddTerminalBatch(ctx, batch), "adding a batch again is a no-op")
+			}
+			var count int64
+			require.NoError(t, db.Model(&SessionRecorderTerminalSource{}).Count(&count).Error)
+			assert.EqualValues(t, 3, count)
+
+			for _, tc := range []struct {
+				scope, key string
+				at         int64
+				want       bool
+			}{
+				{"host-a", "k1", now, true},
+				{"host-a", "k3", now + 59, true},
+				{"host-a", "k3", now + 60, false},
+				{"host-b", "k1", now, false},
+				{"host-a", "missing", now, false},
+			} {
+				known, err := ledger.ContainsSource(ctx, tc.scope, tc.key, tc.at)
+				require.NoError(t, err)
+				assert.Equal(t, tc.want, known, "%s/%s at %d", tc.scope, tc.key, tc.at)
+			}
+
+			expired, err := ledger.ExpiredBatches(ctx, "host-a", now+59, 10)
+			require.NoError(t, err)
+			assert.Empty(t, expired)
+			expired, err = ledger.ExpiredBatches(ctx, "host-a", now+60, 10)
+			require.NoError(t, err)
+			assert.Equal(t, []string{"cleaned"}, expired)
+			expired, err = ledger.ExpiredBatches(ctx, "host-b", now+60, 10)
+			require.NoError(t, err)
+			assert.Empty(t, expired)
+
+			require.NoError(t, ledger.DeleteBatch(ctx, "host-b", "cleaned"))
+			require.NoError(t, ledger.DeleteBatch(ctx, "host-a", "cleaned"))
+			require.NoError(t, db.Model(&SessionRecorderTerminalSource{}).Count(&count).Error)
+			assert.EqualValues(t, 2, count, "only the scoped batch is deleted")
+		})
+	}
+}

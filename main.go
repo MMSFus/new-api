@@ -164,6 +164,7 @@ func main() {
 	controller.RegisterScheduledSystemTasks()
 	service.StartSystemTaskRunner()
 	sessionrecorder.SetIndexSink(model.SessionRecorderIndexSink{})
+	sessionrecorder.SetSourceLedger(model.SessionRecorderSourceLedger{})
 	sessionrecorder.Start()
 
 	if os.Getenv("BATCH_UPDATE_ENABLED") == "true" {

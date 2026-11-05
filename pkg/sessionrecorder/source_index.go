@@ -1,84 +1,111 @@
 package sessionrecorder
 
 import (
-	"database/sql"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
 	"os"
-	"path/filepath"
+	"sync/atomic"
 	"time"
-
-	_ "github.com/glebarez/go-sqlite"
 )
 
+// TerminalBatch lists the spool sources of one cleaned or retained batch.
+type TerminalBatch struct {
+	// Scope separates consumers that share one database.
+	Scope   string
+	BatchID string
+	// SourceKeys are hex encoded source identities.
+	SourceKeys []string
+	// ExpiresAt is Unix seconds; 0 keeps the sources until the batch is deleted.
+	ExpiresAt int64
+}
+
+// SourceLedger persists the sources of terminal batches, so a scan skips
+// them without reading every historical manifest. Like IndexSink, the
+// package never touches the database; the host installs a ledger with
+// SetSourceLedger.
+//
+// AddTerminalBatch must be idempotent. ContainsSource ignores sources whose
+// batch expired at or before now.
+type SourceLedger interface {
+	AddTerminalBatch(ctx context.Context, batch TerminalBatch) error
+	ContainsSource(ctx context.Context, scope, sourceKey string, now int64) (bool, error)
+	ExpiredBatches(ctx context.Context, scope string, now int64, limit int) ([]string, error)
+	DeleteBatch(ctx context.Context, scope, batchID string) error
+}
+
+type sourceLedgerHolder struct{ ledger SourceLedger }
+
+var sourceLedger atomic.Pointer[sourceLedgerHolder]
+
+// SetSourceLedger installs the terminal source store; nil removes it, and the
+// consumer then stops before planning new batches.
+func SetSourceLedger(ledger SourceLedger) {
+	if ledger == nil {
+		sourceLedger.Store(nil)
+		return
+	}
+	sourceLedger.Store(&sourceLedgerHolder{ledger: ledger})
+}
+
+func currentSourceLedger() SourceLedger {
+	if h := sourceLedger.Load(); h != nil {
+		return h.ledger
+	}
+	return nil
+}
+
+var (
+	errSourceLedger            = errors.New("session recorder: source ledger")
+	errSourceLedgerUnavailable = fmt.Errorf("%w is not installed", errSourceLedger)
+)
+
+// cycleErrorState names a failed cycle step for the status report.
+func cycleErrorState(err error) string {
+	if errors.Is(err, errSourceLedger) {
+		return "source_ledger_error"
+	}
+	return "filesystem_error"
+}
+
+func ledgerError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%w: %w", errSourceLedger, err)
+}
+
+// sourceIndex binds the ledger to one consumer's scope for a cycle.
 type sourceIndex struct {
-	db *sql.DB
+	ctx    context.Context
+	ledger SourceLedger
+	scope  string
 }
 
-func openSourceIndex(workDir string) (*sourceIndex, error) {
-	if err := os.MkdirAll(terminalManifestDir(workDir), 0o700); err != nil {
-		return nil, err
-	}
-	db, err := sql.Open("sqlite", filepath.Join(manifestDir(workDir), "source-index.sqlite"))
-	if err != nil {
-		return nil, err
-	}
-	db.SetMaxOpenConns(1)
-	if _, err = db.Exec(`PRAGMA journal_mode=WAL;
-		PRAGMA foreign_keys=ON;
-		CREATE TABLE IF NOT EXISTS terminal_batches (
-			batch_id TEXT PRIMARY KEY,
-			state TEXT NOT NULL,
-			updated_at INTEGER NOT NULL,
-			expires_at INTEGER
-		);
-		CREATE TABLE IF NOT EXISTS batch_sources (
-			batch_id TEXT NOT NULL REFERENCES terminal_batches(batch_id) ON DELETE CASCADE,
-			identity BLOB NOT NULL,
-			PRIMARY KEY(batch_id, identity)
-		);
-		CREATE INDEX IF NOT EXISTS batch_sources_identity ON batch_sources(identity);
-		CREATE INDEX IF NOT EXISTS terminal_batches_expires_at ON terminal_batches(expires_at);`); err != nil {
-		db.Close()
-		return nil, err
-	}
-	return &sourceIndex{db: db}, nil
+// sourceLedgerScope is the site and host pair that also names the batch
+// fingerprint and R2 keys, hashed to a fixed width.
+func sourceLedgerScope(cfg Config) string {
+	sum := sha256.Sum256([]byte(cfg.SiteID + "\x00" + cfg.HostID))
+	return hex.EncodeToString(sum[:16])
 }
-
-func (i *sourceIndex) close() { _ = i.db.Close() }
 
 func (i *sourceIndex) contains(identity [16]byte, now time.Time) (bool, error) {
-	var found int
-	err := i.db.QueryRow(`SELECT 1 FROM batch_sources s JOIN terminal_batches b USING(batch_id)
-		WHERE s.identity = ? AND (b.expires_at IS NULL OR b.expires_at > ?) LIMIT 1`, identity[:], now.UnixNano()).Scan(&found)
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
-	return err == nil, err
+	known, err := i.ledger.ContainsSource(i.ctx, i.scope, hex.EncodeToString(identity[:]), now.Unix())
+	return known, ledgerError(err)
 }
 
 func (i *sourceIndex) add(m BatchManifest) error {
-	updated, err := time.Parse(time.RFC3339Nano, m.UpdatedAt)
-	if err != nil {
-		updated = time.Time{}
-	}
-	var expires any
-	if m.State == StateCleaned && !updated.IsZero() {
-		expires = updated.Add(cleanedManifestRetention).UnixNano()
-	}
-	tx, err := i.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.Exec(`INSERT OR IGNORE INTO terminal_batches(batch_id, state, updated_at, expires_at) VALUES(?, ?, ?, ?)`, m.BatchID, m.State, updated.UnixNano(), expires); err != nil {
-		return err
+	batch := TerminalBatch{Scope: i.scope, BatchID: m.BatchID, SourceKeys: make([]string, 0, len(m.Sources))}
+	if updated, err := time.Parse(time.RFC3339Nano, m.UpdatedAt); err == nil && m.State == StateCleaned {
+		batch.ExpiresAt = updated.Add(cleanedManifestRetention).Unix()
 	}
 	for _, source := range m.Sources {
 		identity := sourceIdentity(source)
-		if _, err := tx.Exec(`INSERT OR IGNORE INTO batch_sources(batch_id, identity) VALUES(?, ?)`, m.BatchID, identity[:]); err != nil {
-			return err
-		}
+		batch.SourceKeys = append(batch.SourceKeys, hex.EncodeToString(identity[:]))
 	}
-	return tx.Commit()
+	return ledgerError(i.ledger.AddTerminalBatch(i.ctx, batch))
 }
 
 func (i *sourceIndex) moveManifest(workDir string, m BatchManifest) error {
@@ -95,23 +122,13 @@ func (i *sourceIndex) moveManifest(workDir string, m BatchManifest) error {
 	return nil
 }
 
+// expireCleaned removes each expired manifest before its ledger rows, so a
+// crash between the two retries the delete on the next cycle.
 func (i *sourceIndex) expireCleaned(workDir string, now time.Time) error {
 	for {
-		rows, err := i.db.Query(`SELECT batch_id FROM terminal_batches WHERE expires_at IS NOT NULL AND expires_at <= ? ORDER BY batch_id LIMIT 256`, now.UnixNano())
+		expired, err := i.ledger.ExpiredBatches(i.ctx, i.scope, now.Unix(), 256)
 		if err != nil {
-			return err
-		}
-		var expired []string
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				rows.Close()
-				return err
-			}
-			expired = append(expired, id)
-		}
-		if err := rows.Close(); err != nil {
-			return err
+			return ledgerError(err)
 		}
 		if len(expired) == 0 {
 			return nil
@@ -120,21 +137,12 @@ func (i *sourceIndex) expireCleaned(workDir string, now time.Time) error {
 			if err := os.Remove(terminalManifestPath(workDir, id)); err != nil && !os.IsNotExist(err) {
 				return err
 			}
-			tx, err := i.db.Begin()
-			if err != nil {
-				return err
+			if err := i.ledger.DeleteBatch(i.ctx, i.scope, id); err != nil {
+				return ledgerError(err)
 			}
-			if _, err := tx.Exec(`DELETE FROM batch_sources WHERE batch_id = ?`, id); err != nil {
-				tx.Rollback()
-				return err
-			}
-			if _, err := tx.Exec(`DELETE FROM terminal_batches WHERE batch_id = ?`, id); err != nil {
-				tx.Rollback()
-				return err
-			}
-			if err := tx.Commit(); err != nil {
-				return err
-			}
+		}
+		if len(expired) < 256 {
+			return nil
 		}
 	}
 }
