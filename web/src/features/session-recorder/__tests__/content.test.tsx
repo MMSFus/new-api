@@ -101,6 +101,15 @@ async function openRecord(overrides: Handlers = {}) {
   return { user, sheet: await screen.findByRole('dialog') }
 }
 
+/** Opens a record on its Raw tab, where the stored bodies are shown. */
+async function openRawRecord(overrides: Handlers = {}) {
+  const opened = await openRecord(overrides)
+  await opened.user.click(
+    await within(opened.sheet).findByRole('tab', { name: 'Raw' })
+  )
+  return opened
+}
+
 describe('session → records → content drill-down', () => {
   test('a session opens its record timeline in request order', async () => {
     mockApi({
@@ -127,7 +136,7 @@ describe('session → records → content drill-down', () => {
   })
 
   test('a record shows request and response with copy and download', async () => {
-    const { sheet } = await openRecord()
+    const { sheet } = await openRawRecord()
 
     const request = await within(sheet).findByRole('region', {
       name: 'Request',
@@ -155,7 +164,7 @@ describe('session → records → content drill-down', () => {
   })
 
   test('a truncated body warns that only the first 2 MiB is shown', async () => {
-    const { sheet } = await openRecord({
+    const { sheet } = await openRawRecord({
       [CONTENT]: ok(
         recordContent({
           response: recordedBody({
@@ -213,7 +222,7 @@ describe('session → records → content drill-down', () => {
   })
 
   test('a missing body is reported instead of an empty viewer', async () => {
-    const { sheet } = await openRecord({
+    const { sheet } = await openRawRecord({
       [CONTENT]: ok(recordContent({ response: null })),
     })
 

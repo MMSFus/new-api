@@ -253,6 +253,7 @@ func SetApiRouter(router *gin.Engine) {
 		handlePermissionRoute(sessionRecorderPanel, http.MethodGet, "/sessions", authz.SessionRecorderContentRead, controller.ListSessionRecorderSessions)
 		handlePermissionRoute(sessionRecorderPanel, http.MethodGet, "/sessions/records", authz.SessionRecorderContentRead, controller.ListSessionRecorderSessionRecords)
 		handlePermissionRoute(sessionRecorderPanel, http.MethodGet, "/records/:record_id/content", authz.SessionRecorderContentRead, controller.GetSessionRecorderRecordContent)
+		handlePermissionRoute(sessionRecorderPanel, http.MethodGet, "/records/:record_id/body", authz.SessionRecorderContentRead, controller.GetSessionRecorderRecordBody)
 
 		// Custom OAuth provider management (root only)
 		customOAuthRoute := apiRouter.Group("/custom-oauth-provider")

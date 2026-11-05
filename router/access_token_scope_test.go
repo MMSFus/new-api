@@ -89,6 +89,7 @@ var accessTokenHelperRoutes = map[string]authz.Permission{
 	"GET /api/session_recorder/sessions":                   authz.SessionRecorderContentRead,
 	"GET /api/session_recorder/sessions/records":           authz.SessionRecorderContentRead,
 	"GET /api/session_recorder/records/:record_id/content": authz.SessionRecorderContentRead,
+	"GET /api/session_recorder/records/:record_id/body":    authz.SessionRecorderContentRead,
 }
 
 func newAccessTokenScopeTestEngine(t *testing.T) *gin.Engine {

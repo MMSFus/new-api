@@ -255,36 +255,117 @@ func openSpoolFile(root, rel string) (*os.File, int64, error) {
 	return file, info.Size(), nil
 }
 
-// readLocalContent reads a record and its bodies from the spool. A missing
-// record or body is reported as fs.ErrNotExist so the caller can fall back
-// to the archive (cleanup removes bodies before their record file).
-func readLocalContent(root, recordPath, recordID string) (*RecordContent, error) {
-	file, _, err := openSpoolFile(root, recordPath)
-	if err != nil {
-		// Missing, replaced by a symlink or an unexpected path: the archive
-		// copy is the trustworthy one.
-		return nil, fs.ErrNotExist
+type recordSource struct {
+	line    json.RawMessage
+	record  Record
+	source  string
+	root    string
+	loc     ContentLocation
+	archive *os.File
+	bodies  map[string]localBody
+}
+
+type localBody struct {
+	file *os.File
+	size int64
+}
+
+func (s *recordSource) close() {
+	if s.archive != nil {
+		_ = s.archive.Close()
 	}
-	line, rec, err := findRecordLine(file, recordPath, recordID)
-	file.Close()
-	if errors.Is(err, errRecordNotFound) {
-		return nil, fs.ErrNotExist
+	for _, body := range s.bodies {
+		_ = body.file.Close()
+	}
+}
+
+// resolveRecordSource shares the local-first and archive-fallback decision
+// between the bounded content view and the full-body download endpoint.
+func resolveRecordSource(ctx context.Context, settings Settings, loc ContentLocation, store ArchiveGetter) (*recordSource, error) {
+	root := filepath.Clean(settings.SpoolRoot)
+	if loc.RootID != "" && loc.RootID == strings.TrimSpace(settings.RootID) && filepath.IsAbs(root) {
+		file, _, err := openSpoolFile(root, loc.RecordPath)
+		if err == nil {
+			line, rec, findErr := findRecordLine(file, loc.RecordPath, loc.RecordID)
+			_ = file.Close()
+			if findErr == nil {
+				local := &recordSource{line: line, record: rec, source: "local", root: root, loc: loc, bodies: make(map[string]localBody, len(rec.BodyFiles))}
+				for _, meta := range rec.BodyFiles {
+					rel, ok := resolveRecordRef(loc.RecordPath, meta.File)
+					if !ok {
+						local.close()
+						break
+					}
+					body, size, bodyErr := openSpoolFile(root, rel)
+					if bodyErr != nil {
+						local.close()
+						break
+					}
+					local.bodies[meta.File] = localBody{file: body, size: size}
+				}
+				if len(local.bodies) == len(rec.BodyFiles) {
+					return local, nil
+				}
+			} else if !errors.Is(findErr, errRecordNotFound) {
+				return nil, findErr
+			}
+		}
+	}
+	if loc.ObjectKey == "" {
+		return nil, ErrRecordContentUnavailable
+	}
+	if !filepath.IsAbs(settings.WorkDir) {
+		return nil, ErrArchiveStoreUnavailable
+	}
+	if store == nil {
+		r2, err := OpenArchiveStore(settings)
+		if err != nil {
+			return nil, err
+		}
+		store = r2
+	}
+	file, err := contentCache.open(ctx, store, filepath.Join(filepath.Clean(settings.WorkDir), contentCacheDirName), loc.ObjectKey)
+	if errors.Is(err, ErrObjectNotFound) {
+		return nil, ErrRecordContentUnavailable
 	}
 	if err != nil {
 		return nil, err
 	}
-	content := &RecordContent{Record: line, Source: "local"}
-	for _, meta := range rec.BodyFiles {
-		rel, ok := resolveRecordRef(recordPath, meta.File)
-		if !ok {
-			continue
+	var line json.RawMessage
+	var rec Record
+	err = walkArchive(file, func(entryRoot, rel string, _ int64, body io.Reader) error {
+		if entryRoot != loc.RootID || rel != loc.RecordPath {
+			return nil
 		}
-		body, size, err := openSpoolFile(root, rel)
-		if err != nil {
+		var findErr error
+		line, rec, findErr = findRecordLine(body, rel, loc.RecordID)
+		if findErr != nil {
+			return findErr
+		}
+		return errStopArchive
+	})
+	if errors.Is(err, errRecordNotFound) || (err == nil && line == nil) {
+		file.Close()
+		return nil, ErrRecordContentUnavailable
+	}
+	if err != nil {
+		file.Close()
+		return nil, err
+	}
+	return &recordSource{line: line, record: rec, source: "archive", loc: loc, archive: file}, nil
+}
+
+func contentFromSource(source *recordSource) (*RecordContent, error) {
+	content := &RecordContent{Record: source.line, Source: source.source}
+	if source.source == "archive" {
+		return readArchiveBodies(source, content)
+	}
+	for _, meta := range source.record.BodyFiles {
+		body, ok := source.bodies[meta.File]
+		if !ok {
 			return nil, fs.ErrNotExist
 		}
-		parsed, err := readBodyEntry(meta, size, body)
-		body.Close()
+		parsed, err := readBodyEntry(meta, body.size, body.file)
 		if err != nil {
 			return nil, err
 		}
@@ -293,44 +374,22 @@ func readLocalContent(root, recordPath, recordID string) (*RecordContent, error)
 	return content, nil
 }
 
-// readArchiveContent reads a record and its bodies from a cached archive
-// file in two passes: bodies precede their record file in the archive.
-func readArchiveContent(file *os.File, rootID, recordPath, recordID string) (*RecordContent, error) {
-	var line json.RawMessage
-	var rec Record
-	err := walkArchive(file, func(entryRoot, rel string, _ int64, body io.Reader) error {
-		if entryRoot != rootID || rel != recordPath {
-			return nil
-		}
-		var findErr error
-		line, rec, findErr = findRecordLine(body, rel, recordID)
-		if findErr != nil {
-			return findErr
-		}
-		return errStopArchive
-	})
-	if errors.Is(err, errRecordNotFound) || (err == nil && line == nil) {
-		return nil, ErrRecordContentUnavailable
-	}
-	if err != nil {
-		return nil, err
-	}
-	content := &RecordContent{Record: line, Source: "archive"}
-	wanted := make(map[string]BodyFile)
-	for _, meta := range rec.BodyFiles {
-		if rel, ok := resolveRecordRef(recordPath, meta.File); ok {
+func readArchiveBodies(source *recordSource, content *RecordContent) (*RecordContent, error) {
+	wanted := make(map[string]BodyFile, len(source.record.BodyFiles))
+	for _, meta := range source.record.BodyFiles {
+		if rel, ok := resolveRecordRef(source.loc.RecordPath, meta.File); ok {
 			wanted[rel] = meta
 		}
 	}
 	if len(wanted) == 0 {
 		return content, nil
 	}
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
+	if _, err := source.archive.Seek(0, io.SeekStart); err != nil {
 		return nil, err
 	}
-	err = walkArchive(file, func(entryRoot, rel string, size int64, body io.Reader) error {
+	err := walkArchive(source.archive, func(rootID, rel string, size int64, body io.Reader) error {
 		meta, ok := wanted[rel]
-		if entryRoot != rootID || !ok {
+		if rootID != source.loc.RootID || !ok {
 			return nil
 		}
 		parsed, err := readBodyEntry(meta, size, body)
@@ -358,43 +417,70 @@ type ContentLocation struct {
 	ObjectKey  string
 }
 
-// ReadRecordContent returns a record and its bodies, from the local spool
-// while it still has them, otherwise from the R2 archive through the local
-// archive cache. store may be nil; it is then opened from settings only when
-// the archive is needed.
+// ReadRecordContent returns a record and its bounded request/response bodies.
 func ReadRecordContent(ctx context.Context, settings Settings, loc ContentLocation, store ArchiveGetter) (*RecordContent, error) {
-	root := filepath.Clean(settings.SpoolRoot)
-	if loc.RootID != "" && loc.RootID == strings.TrimSpace(settings.RootID) && filepath.IsAbs(root) {
-		content, err := readLocalContent(root, loc.RecordPath, loc.RecordID)
-		if err == nil {
-			return content, nil
-		}
-		if !errors.Is(err, fs.ErrNotExist) {
-			return nil, err
-		}
-	}
-	if loc.ObjectKey == "" {
-		return nil, ErrRecordContentUnavailable
-	}
-	if !filepath.IsAbs(settings.WorkDir) {
-		return nil, ErrArchiveStoreUnavailable
-	}
-	if store == nil {
-		r2, err := OpenArchiveStore(settings)
-		if err != nil {
-			return nil, err
-		}
-		store = r2
-	}
-	file, err := contentCache.open(ctx, store, filepath.Join(filepath.Clean(settings.WorkDir), contentCacheDirName), loc.ObjectKey)
-	if errors.Is(err, ErrObjectNotFound) {
-		return nil, ErrRecordContentUnavailable
-	}
+	source, err := resolveRecordSource(ctx, settings, loc, store)
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
-	return readArchiveContent(file, loc.RootID, loc.RecordPath, loc.RecordID)
+	defer source.close()
+	return contentFromSource(source)
+}
+
+// WriteRecordBody streams one stored body to the writer selected after its
+// metadata and size are known. The callback runs before any body bytes are written.
+func WriteRecordBody(ctx context.Context, settings Settings, loc ContentLocation, store ArchiveGetter, kind string, writer func(BodyFile, int64) io.Writer) (BodyFile, int64, error) {
+	if kind != "request" && kind != "response" {
+		return BodyFile{}, 0, common.NewMessage("Invalid body kind")
+	}
+	source, err := resolveRecordSource(ctx, settings, loc, store)
+	if err != nil {
+		return BodyFile{}, 0, err
+	}
+	defer source.close()
+	for _, meta := range source.record.BodyFiles {
+		if meta.Kind != kind {
+			continue
+		}
+		rel, ok := resolveRecordRef(loc.RecordPath, meta.File)
+		if !ok {
+			return BodyFile{}, 0, ErrRecordContentUnavailable
+		}
+		if source.source == "local" {
+			body := source.bodies[meta.File]
+			if _, err := io.Copy(writer(meta, body.size), body.file); err != nil {
+				return BodyFile{}, 0, err
+			}
+			return meta, body.size, nil
+		}
+		if _, err := source.archive.Seek(0, io.SeekStart); err != nil {
+			return BodyFile{}, 0, err
+		}
+		var size int64
+		found := false
+		err := walkArchive(source.archive, func(rootID, entry string, entrySize int64, body io.Reader) error {
+			if rootID != loc.RootID || entry != rel {
+				return nil
+			}
+			if entrySize > maxArchiveEntryBytes {
+				return errUnsafeArchive
+			}
+			found, size = true, entrySize
+			_, err := io.Copy(writer(meta, size), body)
+			if err != nil {
+				return err
+			}
+			return errStopArchive
+		})
+		if err != nil {
+			return BodyFile{}, 0, err
+		}
+		if found {
+			return meta, size, nil
+		}
+		return BodyFile{}, 0, ErrRecordContentUnavailable
+	}
+	return BodyFile{}, 0, ErrRecordContentUnavailable
 }
 
 // OpenArchiveStore builds a read client for the configured R2 bucket.

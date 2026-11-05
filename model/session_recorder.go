@@ -156,6 +156,60 @@ func (SessionRecorderIndexSink) ApplyBatch(ctx context.Context, rows []sessionre
 	return ApplySessionRecorderBatch(ctx, rows)
 }
 
+// SessionRecorderTerminalSource marks one spool file that a cleaned or
+// retained batch already archived, so the consumer scan skips it.
+type SessionRecorderTerminalSource struct {
+	Id        int    `json:"id"`
+	Scope     string `json:"scope" gorm:"type:varchar(32);not null;uniqueIndex:idx_srts_source,priority:1;index:idx_srts_expiry,priority:1;index:idx_srts_batch,priority:1"`
+	SourceKey string `json:"source_key" gorm:"type:varchar(32);not null;uniqueIndex:idx_srts_source,priority:2"`
+	BatchId   string `json:"batch_id" gorm:"type:varchar(64);not null;uniqueIndex:idx_srts_source,priority:3;index:idx_srts_batch,priority:2"`
+	// ExpiresAt is Unix seconds; 0 never expires.
+	ExpiresAt int64 `json:"expires_at" gorm:"bigint;not null;index:idx_srts_expiry,priority:2"`
+}
+
+const sessionRecorderTerminalSourceBatch = 500
+
+// SessionRecorderSourceLedger stores terminal sources in the main database.
+type SessionRecorderSourceLedger struct{}
+
+func (SessionRecorderSourceLedger) AddTerminalBatch(ctx context.Context, batch sessionrecorder.TerminalBatch) error {
+	rows := make([]SessionRecorderTerminalSource, 0, len(batch.SourceKeys))
+	for _, key := range batch.SourceKeys {
+		rows = append(rows, SessionRecorderTerminalSource{Scope: batch.Scope, SourceKey: key, BatchId: batch.BatchID, ExpiresAt: batch.ExpiresAt})
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	return DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for chunk := range slices.Chunk(rows, sessionRecorderTerminalSourceBatch) {
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&chunk).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func (SessionRecorderSourceLedger) ContainsSource(ctx context.Context, scope, sourceKey string, now int64) (bool, error) {
+	var ids []int
+	err := DB.WithContext(ctx).Model(&SessionRecorderTerminalSource{}).
+		Where("scope = ? AND source_key = ? AND (expires_at = 0 OR expires_at > ?)", scope, sourceKey, now).
+		Limit(1).Pluck("id", &ids).Error
+	return len(ids) > 0, err
+}
+
+func (SessionRecorderSourceLedger) ExpiredBatches(ctx context.Context, scope string, now int64, limit int) ([]string, error) {
+	var ids []string
+	err := DB.WithContext(ctx).Model(&SessionRecorderTerminalSource{}).
+		Where("scope = ? AND expires_at > 0 AND expires_at <= ?", scope, now).
+		Distinct("batch_id").Order("batch_id").Limit(limit).Pluck("batch_id", &ids).Error
+	return ids, err
+}
+
+func (SessionRecorderSourceLedger) DeleteBatch(ctx context.Context, scope, batchID string) error {
+	return DB.WithContext(ctx).Where("scope = ? AND batch_id = ?", scope, batchID).Delete(&SessionRecorderTerminalSource{}).Error
+}
+
 // applySessionRecorderTextFilter matches exactly, or with LIKE when the
 // value contains %, like the log search.
 func applySessionRecorderTextFilter(tx *gorm.DB, column, value string) (*gorm.DB, error) {

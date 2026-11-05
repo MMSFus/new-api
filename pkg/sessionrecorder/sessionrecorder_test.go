@@ -8,6 +8,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/xml"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -99,6 +101,7 @@ func withStorageUsage(t *testing.T, disk, inode int) {
 func testConfig(t *testing.T) Config {
 	t.Helper()
 	withStorageUsage(t, 10, 10)
+	installMemorySourceLedger(t)
 	base := t.TempDir()
 	cfg := DefaultConfig()
 	cfg.InstallationID = "0123456789abcdef0123456789abcdef"
@@ -525,6 +528,8 @@ func TestConsumerRecoversAcrossRestartWithFakeR2(t *testing.T) {
 	second := NewConsumer(cfg, newTestStore(t, cfg))
 	res = second.RunCycle(context.Background())
 	require.Equal(t, string(StateCleaned), res.State)
+	manifests, _ = filepath.Glob(filepath.Join(cfg.WorkDir, "manifests", "terminal", "*.json"))
+	require.Len(t, manifests, 1)
 	m, err = LoadManifest(manifests[0])
 	require.NoError(t, err)
 	require.Equal(t, StateCleaned, m.State)
@@ -628,6 +633,7 @@ func TestSafeSegmentPreservesUTF8(t *testing.T) {
 }
 
 func TestConsumerRunnerRetriesHeldWorkLock(t *testing.T) {
+	installMemorySourceLedger(t)
 	s := DefaultSettings()
 	s.SpoolRoot = filepath.Join(t.TempDir(), "spool")
 	s.WorkDir = filepath.Join(t.TempDir(), "work")
@@ -916,10 +922,16 @@ func TestVerifiedBatchIndexAndContentReadback(t *testing.T) {
 	assert.True(t, local.Response.Truncated)
 	assert.Len(t, local.Response.Text, MaxContentBodyBytes)
 	assert.EqualValues(t, len(large), local.Response.Size)
+	var localBody bytes.Buffer
+	meta, bodySize, err := WriteRecordBody(context.Background(), settings, loc, store, "response", func(BodyFile, int64) io.Writer { return &localBody })
+	require.NoError(t, err)
+	assert.EqualValues(t, len(large), bodySize)
+	assert.False(t, meta.Truncated)
+	assert.Equal(t, large, localBody.String())
 
 	consumer := NewConsumer(cfg, store)
 	require.Equal(t, string(StateCleaned), consumer.RunCycle(context.Background()).State)
-	manifests, _ := filepath.Glob(filepath.Join(cfg.WorkDir, "manifests", "*.json"))
+	manifests, _ := filepath.Glob(filepath.Join(cfg.WorkDir, "manifests", "terminal", "*.json"))
 	require.Len(t, manifests, 1)
 	m, err := LoadManifest(manifests[0])
 	require.NoError(t, err)
@@ -950,6 +962,51 @@ func TestVerifiedBatchIndexAndContentReadback(t *testing.T) {
 	assert.Equal(t, local.Request, archived.Request)
 	assert.Equal(t, local.Response, archived.Response)
 	assert.JSONEq(t, string(local.Record), string(archived.Record))
+	require.NotNil(t, archived.Request, "archive content includes the request body")
+	require.NotNil(t, archived.Response, "archive content includes the response body")
+	var archivedBody bytes.Buffer
+	meta, bodySize, err = WriteRecordBody(context.Background(), settings, loc, store, "response", func(BodyFile, int64) io.Writer {
+		return &archivedBody
+	})
+	require.NoError(t, err)
+	assert.EqualValues(t, len(large), bodySize)
+	assert.Equal(t, meta.ContentType, "application/json")
+	assert.Equal(t, large, archivedBody.String())
+	var filesBeforeDownload []string
+	require.NoError(t, filepath.WalkDir(cfg.WorkDir, func(file string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.IsDir() {
+			rel, err := filepath.Rel(cfg.WorkDir, file)
+			if err != nil {
+				return err
+			}
+			filesBeforeDownload = append(filesBeforeDownload, rel)
+		}
+		return nil
+	}))
+	var requestBody bytes.Buffer
+	_, _, err = WriteRecordBody(context.Background(), settings, loc, store, "request", func(BodyFile, int64) io.Writer {
+		return &requestBody
+	})
+	require.NoError(t, err)
+	assert.Equal(t, `{"q":"hi"}`, requestBody.String())
+	var filesAfterDownload []string
+	require.NoError(t, filepath.WalkDir(cfg.WorkDir, func(file string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.IsDir() {
+			rel, err := filepath.Rel(cfg.WorkDir, file)
+			if err != nil {
+				return err
+			}
+			filesAfterDownload = append(filesAfterDownload, rel)
+		}
+		return nil
+	}))
+	assert.Equal(t, filesBeforeDownload, filesAfterDownload, "archive downloads do not create body temp files")
 	gets := fake.methods[http.MethodGet]
 	_, err = ReadRecordContent(context.Background(), settings, loc, store)
 	require.NoError(t, err)
@@ -999,6 +1056,201 @@ func TestVerifiedBatchIndexAndContentReadback(t *testing.T) {
 	_, _, err = IndexArchiveObject(context.Background(), store, "standalone-v1/missing.tar.gz")
 	require.ErrorIs(t, err, ErrObjectNotFound)
 	require.Empty(t, fake.forbidden)
+}
+
+// memorySourceLedger is the SourceLedger contract of the host table, kept in
+// memory for the consumer tests.
+type memorySourceLedger struct {
+	mu   sync.Mutex
+	rows map[[3]string]int64 // scope, source key, batch id -> expires_at
+	fail error
+}
+
+func installMemorySourceLedger(t *testing.T) *memorySourceLedger {
+	t.Helper()
+	ledger := &memorySourceLedger{rows: make(map[[3]string]int64)}
+	previous := currentSourceLedger()
+	SetSourceLedger(ledger)
+	t.Cleanup(func() { SetSourceLedger(previous) })
+	return ledger
+}
+
+func (l *memorySourceLedger) AddTerminalBatch(_ context.Context, batch TerminalBatch) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.fail != nil {
+		return l.fail
+	}
+	for _, key := range batch.SourceKeys {
+		if _, ok := l.rows[[3]string{batch.Scope, key, batch.BatchID}]; !ok {
+			l.rows[[3]string{batch.Scope, key, batch.BatchID}] = batch.ExpiresAt
+		}
+	}
+	return nil
+}
+
+func (l *memorySourceLedger) ContainsSource(_ context.Context, scope, sourceKey string, now int64) (bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for row, expiresAt := range l.rows {
+		if row[0] == scope && row[1] == sourceKey && (expiresAt == 0 || expiresAt > now) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (l *memorySourceLedger) ExpiredBatches(_ context.Context, scope string, now int64, limit int) ([]string, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	seen := make(map[string]struct{})
+	var ids []string
+	for row, expiresAt := range l.rows {
+		if _, dup := seen[row[2]]; row[0] == scope && expiresAt > 0 && expiresAt <= now && !dup {
+			seen[row[2]] = struct{}{}
+			ids = append(ids, row[2])
+		}
+	}
+	sort.Strings(ids)
+	return ids[:min(limit, len(ids))], nil
+}
+
+func (l *memorySourceLedger) DeleteBatch(_ context.Context, scope, batchID string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for row := range l.rows {
+		if row[0] == scope && row[2] == batchID {
+			delete(l.rows, row)
+		}
+	}
+	return nil
+}
+
+func (l *memorySourceLedger) contains(t *testing.T, cfg Config, source SourceEntry, now time.Time) bool {
+	t.Helper()
+	identity := sourceIdentity(source)
+	known, err := l.ContainsSource(context.Background(), sourceLedgerScope(cfg), hex.EncodeToString(identity[:]), now.Unix())
+	require.NoError(t, err)
+	return known
+}
+
+func TestTerminalManifestMigrationIsIdempotentAndCrashRecoverable(t *testing.T) {
+	cfg := testConfig(t)
+	ledger := installMemorySourceLedger(t)
+	now := time.Now().UTC()
+	manifest := BatchManifest{FormatVersion: 1, BatchID: "legacy-retained", State: StateRetained,
+		CreatedAt: now.Format(timeLayout), UpdatedAt: now.Format(timeLayout), Sources: []SourceEntry{{
+			RootID: "primary", RelativePath: "gpt-4o/jsonl/a.jsonl", Size: 7, ModTimeNanos: 42,
+		}}}
+	require.NoError(t, SaveManifest(cfg.WorkDir, manifest))
+
+	// Simulate a crash after the ledger write but before moving the legacy
+	// manifest out of the active directory.
+	index := &sourceIndex{ctx: context.Background(), ledger: ledger, scope: sourceLedgerScope(cfg)}
+	require.NoError(t, index.add(manifest))
+
+	consumer := NewConsumer(cfg, nil)
+	loads := 0
+	consumer.loadManifestFn = func(file string) (BatchManifest, error) {
+		loads++
+		return LoadManifest(file)
+	}
+	active, _, err := consumer.loadManifests(context.Background(), now)
+	require.NoError(t, err)
+	require.Empty(t, active)
+	assert.Equal(t, 1, loads)
+	assert.True(t, ledger.contains(t, cfg, manifest.Sources[0], now), "legacy source identity remains available for spool skip")
+	assert.Len(t, ledger.rows, 1, "re-adding a batch is idempotent")
+	_, err = os.Stat(terminalManifestPath(cfg.WorkDir, manifest.BatchID))
+	require.NoError(t, err)
+
+	active, _, err = consumer.loadManifests(context.Background(), now)
+	require.NoError(t, err)
+	require.Empty(t, active)
+	assert.Equal(t, 1, loads, "a migrated retained manifest is not deserialized again")
+
+	other := cfg
+	other.HostID = "host-2"
+	assert.False(t, ledger.contains(t, other, manifest.Sources[0], now), "another host's consumer does not skip this source")
+}
+
+func TestSourceLedgerFailureStopsTheCycleBeforePlanning(t *testing.T) {
+	cfg := testConfig(t)
+	SetSourceLedger(nil)
+	consumer := NewConsumer(cfg, nil)
+	require.NoError(t, EnsureDirectories(cfg))
+	assert.Equal(t, "source_ledger_error", consumer.RunCycle(context.Background()).State)
+
+	ledger := installMemorySourceLedger(t)
+	now := time.Now().UTC()
+	manifest := BatchManifest{FormatVersion: 1, BatchID: "retained-pending-ledger", State: StateRetained,
+		CreatedAt: now.Format(timeLayout), UpdatedAt: now.Format(timeLayout), Sources: []SourceEntry{{
+			RootID: "primary", RelativePath: "gpt-4o/jsonl/b.jsonl", Size: 3, ModTimeNanos: 9,
+		}}}
+	require.NoError(t, SaveManifest(cfg.WorkDir, manifest))
+	ledger.fail = errors.New("database is down")
+	assert.Equal(t, "source_ledger_error", consumer.RunCycle(context.Background()).State)
+	_, err := os.Stat(manifestPath(cfg.WorkDir, manifest.BatchID))
+	require.NoError(t, err, "the manifest stays active until its sources are stored")
+
+	ledger.fail = nil
+	_, _, err = consumer.loadManifests(context.Background(), now)
+	require.NoError(t, err)
+	assert.True(t, ledger.contains(t, cfg, manifest.Sources[0], now))
+}
+
+func TestRetainedManifestPopulationDoesNotLoadHistoricalFiles(t *testing.T) {
+	cfg := testConfig(t)
+	ledger := installMemorySourceLedger(t)
+	now := time.Now().UTC()
+	index := &sourceIndex{ctx: context.Background(), ledger: ledger, scope: sourceLedgerScope(cfg)}
+	require.NoError(t, os.MkdirAll(terminalManifestDir(cfg.WorkDir), 0o700))
+	for n := range 250 {
+		manifest := BatchManifest{FormatVersion: 1, BatchID: fmt.Sprintf("retained-%04d", n), State: StateRetained,
+			CreatedAt: now.Format(timeLayout), UpdatedAt: now.Format(timeLayout), Sources: []SourceEntry{{
+				RootID: "primary", RelativePath: fmt.Sprintf("gpt-4o/jsonl/%04d.jsonl", n), Size: int64(n + 1), ModTimeNanos: int64(n + 1),
+			}}}
+		require.NoError(t, SaveManifest(cfg.WorkDir, manifest))
+		require.NoError(t, index.add(manifest))
+		require.NoError(t, index.moveManifest(cfg.WorkDir, manifest))
+	}
+
+	consumer := NewConsumer(cfg, nil)
+	loads := 0
+	consumer.loadManifestFn = func(file string) (BatchManifest, error) {
+		loads++
+		return LoadManifest(file)
+	}
+	active, _, err := consumer.loadManifests(context.Background(), now)
+	require.NoError(t, err)
+	require.Empty(t, active)
+	assert.Zero(t, loads, "terminal manifests stay outside the active directory read set")
+}
+
+func TestCleanedManifestIndexExpiresAfterRetention(t *testing.T) {
+	cfg := testConfig(t)
+	ledger := installMemorySourceLedger(t)
+	now := time.Now().UTC()
+	manifest := BatchManifest{FormatVersion: 1, BatchID: "cleaned-expiry", State: StateCleaned,
+		CreatedAt: now.Add(-25 * time.Hour).Format(timeLayout), UpdatedAt: now.Add(-23 * time.Hour).Format(timeLayout),
+		Sources: []SourceEntry{{RootID: "primary", RelativePath: "old.jsonl", Size: 1, ModTimeNanos: 1}}}
+	require.NoError(t, SaveManifest(cfg.WorkDir, manifest))
+	consumer := NewConsumer(cfg, nil)
+	active, _, err := consumer.loadManifests(context.Background(), now)
+	require.NoError(t, err)
+	require.Empty(t, active)
+	assert.True(t, ledger.contains(t, cfg, manifest.Sources[0], now), "cleaned source is skipped during its 24-hour retention")
+	_, err = os.Stat(terminalManifestPath(cfg.WorkDir, manifest.BatchID))
+	require.NoError(t, err)
+
+	retentionElapsed := now.Add(2 * time.Hour)
+	active, _, err = consumer.loadManifests(context.Background(), retentionElapsed)
+	require.NoError(t, err)
+	require.Empty(t, active)
+	assert.False(t, ledger.contains(t, cfg, manifest.Sources[0], retentionElapsed))
+	assert.Empty(t, ledger.rows, "expired rows are deleted")
+	_, err = os.Stat(terminalManifestPath(cfg.WorkDir, manifest.BatchID))
+	assert.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func tarGz(t *testing.T, entries ...*tar.Header) []byte {

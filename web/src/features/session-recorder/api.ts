@@ -279,6 +279,48 @@ export function getRecordContent(recordId: string): Promise<RecordContent> {
   )
 }
 
+export type RecordBodyKind = 'request' | 'response'
+
+/** The complete stored body, past the 2 MiB of the content API. */
+export interface FullRecordBody {
+  contentType: string
+  bytes: Uint8Array<ArrayBuffer>
+  /** The recorder itself cut the body at its size limit. */
+  truncated: boolean
+}
+
+/**
+ * Downloads one stored body. A success carries `X-Recorder-Truncated`; an
+ * error is the usual JSON envelope, which arrives as a blob here. The caller
+ * falls back to the shown part and says so, so no error toast is raised.
+ */
+export async function getRecordBody(
+  recordId: string,
+  kind: RecordBodyKind
+): Promise<FullRecordBody> {
+  const fallback = t('Failed to load the full body')
+  const response = await api.get<Blob>(
+    `${BASE}/records/${encodeURIComponent(recordId)}/body`,
+    { params: { kind }, responseType: 'blob', skipErrorHandler: true }
+  )
+  const header = response.headers['x-recorder-truncated']
+  const bytes = new Uint8Array(await response.data.arrayBuffer())
+  if (header === undefined) {
+    let envelope: unknown
+    try {
+      envelope = JSON.parse(new TextDecoder().decode(bytes))
+    } catch {
+      envelope = undefined
+    }
+    throw createServerError(envelope, fallback)
+  }
+  return {
+    contentType: String(response.headers['content-type'] ?? ''),
+    bytes,
+    truncated: header === 'true',
+  }
+}
+
 export function getBackfillStatus(): Promise<BackfillStatus> {
   return unwrap(
     api.get<ApiResponse<BackfillStatus>>(`${BASE}/backfill`),

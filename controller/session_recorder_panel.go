@@ -3,6 +3,8 @@ package controller
 import (
 	"context"
 	"errors"
+	"io"
+	"mime"
 	"strconv"
 	"strings"
 	"time"
@@ -214,15 +216,85 @@ func GetSessionRecorderRecordContent(c *gin.Context) {
 	model.RecordOperationAuditLog(c.GetInt("id"), c.GetInt("role"), auditContentEN(action, params), c.ClientIP(), action, params,
 		auditOperatorInfo(c), &model.AuditRequestInfo{Method: c.Request.Method, Route: c.FullPath(), Path: c.FullPath(), Status: 200, Success: err == nil}, c)
 	if err != nil {
-		var message *common.Message
-		if !errors.As(err, &message) {
-			common.SysError("session recorder content read failed: " + err.Error())
-			err = common.NewMessage("Recorded content could not be read")
-		}
-		common.ApiError(c, err)
+		common.ApiError(c, sessionRecorderContentError(err))
 		return
 	}
 	common.ApiSuccess(c, content)
+}
+
+// GetSessionRecorderRecordBody streams the complete stored request or response body.
+func GetSessionRecorderRecordBody(c *gin.Context) {
+	recordID, kind := c.Param("record_id"), c.Query("kind")
+	var sessionID string
+	invalidKind := kind != "request" && kind != "response"
+	status, success := 200, false
+	const action = "session_recorder.download_body"
+	params := map[string]any{"record_id": recordID, "session_id": sessionID, "kind": kind}
+	defer func() {
+		params["session_id"] = sessionID
+		model.RecordOperationAuditLog(c.GetInt("id"), c.GetInt("role"), auditContentEN(action, params), c.ClientIP(), action, params,
+			auditOperatorInfo(c), &model.AuditRequestInfo{Method: c.Request.Method, Route: c.FullPath(), Path: c.FullPath(), Status: status, Success: success}, c)
+	}()
+	if invalidKind {
+		status = 400
+		common.ApiErrorStatus(c, status, common.NewMessage("Invalid body kind"))
+		return
+	}
+	record, err := model.GetSessionRecorderRecord(recordID)
+	if err != nil {
+		common.ApiError(c, sessionRecorderContentError(err))
+		return
+	}
+	if record == nil {
+		common.ApiError(c, sessionrecorder.ErrRecordContentUnavailable)
+		return
+	}
+	sessionID = record.SessionId
+	settings, err := currentSessionRecorderSettings()
+	if err != nil {
+		common.ApiError(c, sessionRecorderContentError(err))
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Minute)
+	defer cancel()
+	bodyStarted := false
+	_, _, err = sessionrecorder.WriteRecordBody(ctx, settings, sessionrecorder.ContentLocation{
+		RecordID: record.RecordId, RootID: record.RootId, RecordPath: record.RecordPath, ObjectKey: record.ObjectKey,
+	}, nil, kind, func(body sessionrecorder.BodyFile, size int64) io.Writer {
+		bodyStarted = true
+		contentType := body.ContentType
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+		if _, _, parseErr := mime.ParseMediaType(contentType); parseErr != nil {
+			contentType = "application/octet-stream"
+		}
+		c.Header("Content-Type", contentType)
+		c.Header("Content-Length", strconv.FormatInt(size, 10))
+		c.Header("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": recordID + "-" + kind}))
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.Header("X-Recorder-Truncated", strconv.FormatBool(body.Truncated))
+		c.Status(200)
+		return c.Writer
+	})
+	if err != nil {
+		if bodyStarted {
+			common.SysError("session recorder body stream failed: " + err.Error())
+			return
+		}
+		common.ApiError(c, sessionRecorderContentError(err))
+		return
+	}
+	success = true
+}
+
+func sessionRecorderContentError(err error) error {
+	var message *common.Message
+	if errors.As(err, &message) {
+		return err
+	}
+	common.SysError("session recorder content read failed: " + err.Error())
+	return common.NewMessage("Recorded content could not be read")
 }
 
 // sessionRecorderBackfillResponse flattens the latest backfill task.
