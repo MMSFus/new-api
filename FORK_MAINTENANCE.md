@@ -31,12 +31,14 @@ CI (`.github/workflows/fork-ci.yml`) replaces the upstream `ci.yml`, which is ke
 - Pull request into `main`: full check (backend and 3 frontend test shards in parallel) when it is opened and on every later push to its branch.
 - Merge to `main`: no re-check, because branch protection requires the branch to be up to date and `main` therefore equals the checked pull request head. After 30 seconds the image is built; a newer merge cancels the older run, so only the latest merge is published. Images are built only from `main`.
 
-Merges to `main` publish two GHCR tags:
+Merges to `main` publish two Docker Hub tags (credentials come from the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository secrets):
 
 ```text
-ghcr.io/mmsfus/new-api:main
-ghcr.io/mmsfus/new-api:sha-<short-commit>
+docker.io/mmsfus/new-api:main
+docker.io/mmsfus/new-api:sha-<short-commit>
 ```
+
+Images published before the switch remain on `ghcr.io/mmsfus/new-api`.
 
 Use the immutable `sha-*` tag, or preferably the digest shown in the workflow summary, for production deployments. The `main` tag is intended for inspection and testing.
 
