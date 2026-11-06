@@ -61,6 +61,7 @@
 本仓库是 [QuantumNous/new-api](https://github.com/QuantumNous/new-api) 的定制分支，同时也是一个正在线上运行的服务的源码。许可证与上游相同，为 AGPL-3.0。
 
 - 欢迎在本仓库提交 issue 和 PR。
+- Docker 镜像：Docker Hub 上的 [`mmsfus/new-api`](https://hub.docker.com/r/mmsfus/new-api)，由 `main` 构建，标签为 `main` 和 `sha-<短提交号>`。下文的 Docker 示例使用上游镜像，运行本分支时把 `calciumion/new-api:latest` 换成 `mmsfus/new-api:main`。
 - 安全漏洞请勿公开提 issue，请发邮件至 **admin@momentsofus.cn**，主题注明 `[SECURITY]`，或按 [SECURITY.md](./.github/SECURITY.md) 的流程报告。
 - 如果你将修改版提供给用户使用，请发邮件至 **admin@momentsofus.cn** 告知部署名称，以及源码地址（如果公开）。这是请求，不是许可条件。AGPL-3.0 第 13 条仍要求你向这些用户提供对应源码。
 
