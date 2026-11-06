@@ -249,6 +249,8 @@ export interface LogOtherData {
   cache_creation_ratio_1h?: number
   cache_creation_ratio_12h?: number
   is_model_mapped?: boolean
+  /** Response was replayed from the K01 fixture instead of the upstream. */
+  replay_hit?: boolean
   upstream_model_name?: string
   // Diagnostic only. Whether the names disagree is derived in the UI via
   // isResponseModelMismatch so old rows follow the current comparison rule.

@@ -76,6 +76,7 @@ const CONFIGURATION_BLOCKS = {
       'ollama_openai_chat',
       'system_prompt',
       'system_prompt_override',
+      'tmp_20261106_k01_enabled',
     ],
   },
   fieldPassthrough: {
@@ -187,7 +188,8 @@ export function getChannelConfigurationState(
           values.allow_include_obfuscation)) ||
       (claudePassthrough &&
         (values.allow_speed ||
-          (values.type === 14 && values.claude_beta_query)))
+          (values.type === 14 &&
+            (values.claude_beta_query || values.tmp_20261106_k01_enabled))))
     ),
     extraSettings: Boolean(
       values.proxy?.trim() ||
