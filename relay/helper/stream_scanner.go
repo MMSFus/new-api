@@ -296,7 +296,11 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 
 			ticker.Reset(streamingTimeout)
 			data := scanner.Text()
-			logger.LogDebug(c, "stream scanner data: %s", data)
+			if info.Tmp20261106K01Hit {
+				logger.LogDebug(c, "K01 fixture stream event received")
+			} else {
+				logger.LogDebug(c, "stream scanner data: %s", data)
+			}
 
 			data, hasDataPrefix := strings.CutPrefix(data, "data:")
 			data = strings.TrimSpace(data)

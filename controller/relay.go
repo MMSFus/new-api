@@ -94,6 +94,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		if newAPIError != nil {
 			service.RecordRequestPolicyTermination(c, newAPIError)
 			logger.LogError(c, common.LogText("relay error: %s", common.LocalLogPreview(newAPIError.Error())))
+			if c.GetBool("k01_replay_error_written") {
+				return
+			}
 			// Billing, refunds and logs above use the original error; only the
 			// client-facing output is rewritten.
 			if rule := operation_setting.MatchErrorRewriteRule(newAPIError, common.GetContextKeyInt(c, constant.ContextKeyChannelId)); rule != nil {

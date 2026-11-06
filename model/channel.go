@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"os"
 	"strings"
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/pkg/k01fixture"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 
@@ -1009,6 +1011,11 @@ func (channel *Channel) ValidateSettings() error {
 		err := common.Unmarshal([]byte(*channel.Setting), channelParams)
 		if err != nil {
 			return err
+		}
+	}
+	if channel.Type == constant.ChannelTypeAnthropic && channelParams.Tmp20261106K01Enabled {
+		if err := k01fixture.ValidateFile(os.Getenv(k01fixture.FixtureFileEnv)); err != nil {
+			return fmt.Errorf("invalid K01 replay fixture: %w", err)
 		}
 	}
 	if _, err := common.ParseProxyURLStrict(channelParams.Proxy); err != nil {

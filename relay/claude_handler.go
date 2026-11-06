@@ -1,14 +1,17 @@
 package relay
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/pkg/k01fixture"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -47,6 +50,53 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
 	}
 	adaptor.Init(info)
+	if info.ChannelType == constant.ChannelTypeAnthropic && info.ChannelSetting.Tmp20261106K01Enabled {
+		storage, storageErr := common.GetBodyStorage(c)
+		if storageErr != nil {
+			logger.LogError(c, common.LogText("K01 replay could not read request body: %s", storageErr.Error()))
+		} else if requestBody, bodyErr := storage.Bytes(); bodyErr != nil {
+			logger.LogError(c, common.LogText("K01 replay could not read request body: %s", bodyErr.Error()))
+		} else {
+			replay, matched, shouldLog, replayErr := k01fixture.Lookup(os.Getenv(k01fixture.FixtureFileEnv), requestBody)
+			if replayErr != nil {
+				if shouldLog {
+					logger.LogError(c, common.LogText("K01 replay fixture load failed: %s", replayErr.Error()))
+				}
+			} else if matched {
+				info.Tmp20261106K01Hit = true
+				info.IsStream = replay.IsStream
+				c.Header("X-New-Api-Replay", "k01")
+				if replay.Status != http.StatusOK {
+					c.Header("Content-Type", "application/json")
+					c.Status(replay.Status)
+					_, _ = c.Writer.Write(replay.Body)
+					c.Set("k01_replay_error_written", true)
+					return types.NewErrorWithStatusCode(fmt.Errorf("K01 replay returned recorded status %d", replay.Status), types.ErrorCodeBadResponseStatusCode, replay.Status, types.ErrOptionWithSkipRetry())
+				}
+				contentType := "application/json"
+				if replay.IsStream {
+					contentType = "text/event-stream"
+				}
+				httpResp := &http.Response{
+					StatusCode:    http.StatusOK,
+					Header:        http.Header{"Content-Type": []string{contentType}},
+					Body:          io.NopCloser(bytes.NewReader(replay.Body)),
+					ContentLength: int64(len(replay.Body)),
+				}
+				usage, responseErr := adaptor.DoResponse(c, httpResp, info)
+				if responseErr != nil {
+					service.ResetStatusCode(responseErr, c.GetString("status_code_mapping"))
+					return responseErr
+				}
+				claudeUsage, ok := usage.(*dto.Usage)
+				if !ok {
+					return types.NewError(fmt.Errorf("K01 replay response usage has unexpected type %T", usage), types.ErrorCodeBadResponseBody, types.ErrOptionWithSkipRetry())
+				}
+				service.PostTextConsumeQuota(c, info, claudeUsage, nil)
+				return nil
+			}
+		}
+	}
 
 	if info.ChannelSetting.SystemPrompt != "" {
 		if request.System == nil {
@@ -155,6 +205,10 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		return newAPIError
 	}
 
-	service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil)
+	claudeUsage, ok := usage.(*dto.Usage)
+	if !ok {
+		return types.NewError(fmt.Errorf("Claude response usage has unexpected type %T", usage), types.ErrorCodeBadResponseBody, types.ErrOptionWithSkipRetry())
+	}
+	service.PostTextConsumeQuota(c, info, claudeUsage, nil)
 	return nil
 }
