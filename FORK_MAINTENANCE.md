@@ -40,8 +40,6 @@ docker.io/mmsfus/new-api:sha-<short-commit>
 
 Images published before the switch remain on `ghcr.io/mmsfus/new-api`.
 
-Use the immutable `sha-*` tag, or preferably the digest shown in the workflow summary, for production deployments. The `main` tag is intended for inspection and testing.
-
 ## Security checks
 
 All of these are report-only and are not required status checks:
@@ -52,7 +50,11 @@ All of these are report-only and are not required status checks:
 
 ## Server deployment
 
-Before deployment, back up the PostgreSQL database and review migration notes. Then update `/opt/services/new-api/compose.yml` to the selected image and run:
+Production (`/opt/services/new-api/compose.yml`) runs `docker.io/mmsfus/new-api:main` with the label `com.centurylinklabs.watchtower.enable: "true"`. The Watchtower instance on the server checks labelled containers every day at 03:20 (server time) and recreates `new-api` when `main` has a new digest, so a merge to `main` reaches production that night.
+
+Watchtower does not back up the database. Before merging a change with a migration, back up PostgreSQL yourself, or pin the image to the immutable `sha-*` tag (or the digest shown in the workflow summary) and deploy it manually as below. To pin or roll back, set `image:` to `docker.io/mmsfus/new-api:sha-<short-commit>` and remove the Watchtower label.
+
+To deploy immediately instead of waiting for Watchtower, back up the database, then run:
 
 ```bash
 cd /opt/services/new-api

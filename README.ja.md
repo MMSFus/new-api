@@ -60,6 +60,7 @@
 このリポジトリは [QuantumNous/new-api](https://github.com/QuantumNous/new-api) のカスタマイズ版であり、現在本番運用中のサービスのソースコードでもあります。ライセンスは上流と同じ AGPL-3.0 です。
 
 - Issue と Pull Request を歓迎します。
+- Docker イメージ：Docker Hub の [`mmsfus/new-api`](https://hub.docker.com/r/mmsfus/new-api)。`main` からビルドされ、タグは `main` と `sha-<短縮コミット>` です。以下の Docker の例は上流イメージを使っています。このフォークを動かす場合は `calciumion/new-api:latest` を `mmsfus/new-api:main` に置き換えてください。
 - セキュリティの脆弱性は公開 Issue ではなく、**admin@momentsofus.cn** にメールで報告してください。件名に `[SECURITY]` を付け、または [SECURITY.md](./.github/SECURITY.md) の手順に従ってください。
 - 修正版をユーザーに提供している場合は、**admin@momentsofus.cn** に配備名と（公開している場合は）ソースの場所をお知らせください。これは依頼であり、ライセンス上の条件ではありません。AGPL-3.0 第 13 条により、ユーザーに対応するソースを提供する義務は残ります。
 

@@ -63,6 +63,7 @@
 This repository is a customized fork of [QuantumNous/new-api](https://github.com/QuantumNous/new-api). It is the source code of a running production service, published under the same license as upstream (AGPL-3.0).
 
 - Issues and pull requests are welcome in this repository.
+- Docker image: [`mmsfus/new-api`](https://hub.docker.com/r/mmsfus/new-api) on Docker Hub, built from `main` (tags `main` and `sha-<short-commit>`). The Docker examples below use the upstream image; replace `calciumion/new-api:latest` with `mmsfus/new-api:main` to run this fork.
 - Security vulnerabilities: do not open a public issue. Email **admin@momentsofus.cn** with the subject `[SECURITY]`, or follow the process in [SECURITY.md](./.github/SECURITY.md).
 - If you run a modified version of this software for users, please let us know at **admin@momentsofus.cn** (deployment name and source location, if public). This is a request, not a license condition. AGPL-3.0 section 13 still requires you to offer the corresponding source to those users.
 
