@@ -395,11 +395,10 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-      packages: write
       id-token: write
       attestations: write
     env:
-      IMAGE_NAME: ghcr.io/mmsfus/new-api
+      IMAGE_NAME: docker.io/mmsfus/new-api
 
     steps:
       - name: Debounce merges to main
@@ -411,12 +410,11 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
-      - name: Log in to GitHub Container Registry
+      - name: Log in to Docker Hub
         uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4.3.0
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Generate image metadata
         id: meta
@@ -444,7 +442,8 @@ jobs:
       - name: Attest image provenance
         uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
         with:
-          subject-name: ${{ env.IMAGE_NAME }}
+          # Docker Hub attestations must name the index.docker.io registry.
+          subject-name: index.docker.io/mmsfus/new-api
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
 
