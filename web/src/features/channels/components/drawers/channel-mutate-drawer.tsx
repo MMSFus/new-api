@@ -239,6 +239,7 @@ import {
 } from '../model-mapping-editor'
 import { ModelRedirectPanel } from '../model-redirect-panel'
 import { ResponsesWebSocketSetting } from '../responses-websocket-setting'
+import { TmpK01ReplaySetting } from '../tmp-k01-replay-setting'
 import { UpstreamCostRatioPanel } from '../upstream-cost-ratio-panel'
 import { UpstreamModelSelection } from '../upstream-model-selection'
 import {
@@ -330,6 +331,7 @@ const SENSITIVE_FORM_FIELDS = [
   'allow_inference_geo',
   'allow_speed',
   'claude_beta_query',
+  'tmp_20261106_k01_enabled',
   'ollama_openai_chat',
   'disable_task_polling_sleep',
   'upstream_model_update_check_enabled',
@@ -3380,6 +3382,10 @@ export function ChannelMutateDrawer({
                   )}
                 />
               )}
+              <TmpK01ReplaySetting
+                channelType={currentType}
+                disabled={sensitiveLocked}
+              />
             </>
           )}
         </div>

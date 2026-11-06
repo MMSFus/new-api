@@ -83,6 +83,38 @@ func TestChannelValidateSettingsRejectsInvalidHTTPTransport(t *testing.T) {
 	}
 }
 
+func TestChannelValidateSettingsValidatesK01Fixture(t *testing.T) {
+	validPath := filepath.Join(t.TempDir(), "fixture.jsonl")
+	require.NoError(t, os.WriteFile(validPath, []byte(`{"request":{"model":"m"},"response":{},"status":200}`), 0o600))
+	tests := []struct {
+		name      string
+		channel   int
+		fixture   string
+		wantError string
+	}{
+		{name: "environment missing", channel: constant.ChannelTypeAnthropic, wantError: "TMP_20261106_K01_FIXTURE_FILE is not set"},
+		{name: "file unreadable", channel: constant.ChannelTypeAnthropic, fixture: filepath.Join(t.TempDir(), "missing.jsonl"), wantError: "stat fixture file"},
+		{name: "invalid JSONL", channel: constant.ChannelTypeAnthropic, fixture: filepath.Join(t.TempDir(), "invalid.jsonl"), wantError: "invalid K01 fixture JSONL"},
+		{name: "valid fixture", channel: constant.ChannelTypeAnthropic, fixture: validPath},
+		{name: "other channel does not require fixture", channel: constant.ChannelTypeOpenAI},
+	}
+	invalidPath := tests[2].fixture
+	require.NoError(t, os.WriteFile(invalidPath, []byte("{broken"), 0o600))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("TMP_20261106_K01_FIXTURE_FILE", tt.fixture)
+			channel := &Channel{Type: tt.channel}
+			channel.SetSetting(dto.ChannelSettings{Tmp20261106K01Enabled: true})
+			err := channel.ValidateSettings()
+			if tt.wantError == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tt.wantError)
+		})
+	}
+}
+
 func TestAdvancedCustomChannelRequiresModelListRouteOnlyWhenUpdateChecksEnabled(t *testing.T) {
 	inferenceRoute := dto.AdvancedCustomRoute{
 		IncomingPath: "/v1/chat/completions",

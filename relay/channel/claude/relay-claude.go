@@ -76,7 +76,7 @@ func shouldSkipClaudeMessageDeltaUsagePatch(info *relaycommon.RelayInfo) bool {
 	if info == nil {
 		return false
 	}
-	return info.ChannelSetting.PassThroughBodyEnabled
+	return info.ChannelSetting.PassThroughBodyEnabled || info.Tmp20261106K01Hit
 }
 
 func patchClaudeMessageDeltaUsageData(data string, usage *dto.ClaudeUsage) string {
@@ -458,7 +458,11 @@ func ClaudeHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayI
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 	}
-	logger.LogDebug(c, "responseBody: %s", responseBody)
+	if info.Tmp20261106K01Hit {
+		logger.LogDebug(c, "K01 fixture response received")
+	} else {
+		logger.LogDebug(c, "responseBody: %s", responseBody)
+	}
 	handleErr := HandleClaudeResponseData(c, info, claudeInfo, resp, responseBody)
 	if handleErr != nil {
 		return nil, handleErr

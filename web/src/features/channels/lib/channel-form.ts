@@ -309,6 +309,7 @@ export const channelFormSchema = z
     responses_websocket_enabled: z.boolean().optional(),
     system_prompt: z.string().optional(),
     system_prompt_override: z.boolean().optional(),
+    tmp_20261106_k01_enabled: z.boolean().optional(),
     // Type-specific settings (stored in settings JSON)
     is_enterprise_account: z.boolean().optional(), // OpenRouter specific
     vertex_key_type: z.enum(['json', 'api_key']).optional(), // Vertex AI specific
@@ -589,6 +590,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   responses_websocket_enabled: false,
   system_prompt: '',
   system_prompt_override: false,
+  tmp_20261106_k01_enabled: false,
   // Type-specific settings
   is_enterprise_account: false,
   vertex_key_type: 'json',
@@ -644,6 +646,7 @@ export function transformChannelToFormDefaults(
     responses_websocket_enabled: false,
     system_prompt: '',
     system_prompt_override: false,
+    tmp_20261106_k01_enabled: false,
   }
 
   if (channel.setting) {
@@ -718,6 +721,8 @@ export function transformChannelToFormDefaults(
           parsed.responses_websocket_enabled === true,
         system_prompt: parsed.system_prompt || '',
         system_prompt_override: parsed.system_prompt_override || false,
+        tmp_20261106_k01_enabled:
+          channel.type === 14 && parsed.tmp_20261106_k01_enabled === true,
       }
     } catch (error) {
       // eslint-disable-next-line no-console
@@ -879,6 +884,9 @@ export function buildSettingJSON(formData: ChannelFormValues): string {
       formData.simulated_cache_hit_rate_min ?? 0
     settingObj.simulated_cache_hit_rate_max =
       formData.simulated_cache_hit_rate_max ?? 0
+  }
+  if (formData.type === 14 && formData.tmp_20261106_k01_enabled === true) {
+    settingObj.tmp_20261106_k01_enabled = true
   }
   const upstreamCostRatio = formData.upstream_cost_ratio?.trim() ?? ''
   if (upstreamCostRatio !== '') {

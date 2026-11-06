@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	kitdto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/system_setting"
@@ -277,4 +278,18 @@ func TestRequestPolicyEventsReachLogAdminInfo(t *testing.T) {
 	other := model.NewLogOther()
 	AppendRelayLogAdminInfo(untouched, nil, other)
 	assert.NotContains(t, other.Snapshot()["admin_info"], "request_policy", "requests without decisions do not carry an empty record")
+}
+
+func TestAppendRelayLogAdminInfoMarksReplayHitPublicly(t *testing.T) {
+	previousMode := gin.Mode()
+	gin.SetMode(gin.TestMode)
+	t.Cleanup(func() { gin.SetMode(previousMode) })
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	other := model.NewLogOther()
+	AppendRelayLogAdminInfo(ctx, &relaycommon.RelayInfo{Tmp20261106K01Hit: true}, other)
+
+	snapshot := other.Snapshot()
+	require.Equal(t, true, snapshot["replay_hit"])
+	assert.NotContains(t, snapshot, "k01_hit")
+	assert.NotContains(t, snapshot["admin_info"], "k01_hit")
 }

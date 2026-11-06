@@ -35,6 +35,7 @@ type ChannelSettings struct {
 	// TLSInsecureSkipVerify accepts upstream certificates that fail
 	// verification, such as self-signed ones, for this channel only.
 	TLSInsecureSkipVerify bool `json:"tls_insecure_skip_verify,omitempty"`
+	Tmp20261106K01Enabled bool `json:"tmp_20261106_k01_enabled,omitempty"`
 	// SimulatedCacheEnabled replaces upstream prompt-cache usage with a
 	// simulated, prefix-aware cache hit for this channel.
 	SimulatedCacheEnabled bool `json:"simulated_cache_enabled,omitempty"`

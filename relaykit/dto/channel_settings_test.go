@@ -1,10 +1,10 @@
 package dto
 
 import (
-	"encoding/json"
 	"regexp"
 	"testing"
 
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -615,7 +615,7 @@ func TestAdvancedCustomValidateRoutePassThroughBody(t *testing.T) {
 	require.True(t, ok)
 	assert.False(t, route.PassThroughBodyEnabled)
 
-	encoded, err := json.Marshal(valid.Routes[2])
+	encoded, err := kitutil.Marshal(valid.Routes[2])
 	require.NoError(t, err)
 	assert.NotContains(t, string(encoded), "pass_through_body_enabled")
 
@@ -666,13 +666,13 @@ func TestAdvancedCustomValidateRoutePassThroughBody(t *testing.T) {
 func TestChannelSettingsHTTPTransportJSONRoundTrip(t *testing.T) {
 	legacy := `{"proxy":"http://127.0.0.1:8080","force_format":true}`
 	var settings ChannelSettings
-	require.NoError(t, json.Unmarshal([]byte(legacy), &settings))
+	require.NoError(t, kitutil.Unmarshal([]byte(legacy), &settings))
 	assert.Equal(t, "http://127.0.0.1:8080", settings.Proxy)
 	assert.True(t, settings.ForceFormat)
 	assert.Empty(t, settings.HTTPProtocol)
 	assert.Zero(t, settings.HTTP2ConnectionShards)
 
-	encoded, err := json.Marshal(settings)
+	encoded, err := kitutil.Marshal(settings)
 	require.NoError(t, err)
 	assert.NotContains(t, string(encoded), "http_protocol")
 	assert.NotContains(t, string(encoded), "http2_connection_shards")
@@ -684,22 +684,32 @@ func TestChannelSettingsHTTPTransportJSONRoundTrip(t *testing.T) {
 		HTTP2ConnectionShards: 1,
 		TLSInsecureSkipVerify: true,
 	}
-	encoded, err = json.Marshal(explicit)
+	encoded, err = kitutil.Marshal(explicit)
 	require.NoError(t, err)
 	assert.Contains(t, string(encoded), `"http_protocol":"http1"`)
 	assert.Contains(t, string(encoded), `"tls_insecure_skip_verify":true`)
 
 	var decoded ChannelSettings
-	require.NoError(t, json.Unmarshal(encoded, &decoded))
+	require.NoError(t, kitutil.Unmarshal(encoded, &decoded))
 	assert.Equal(t, explicit.HTTPProtocol, decoded.HTTPProtocol)
 	assert.Equal(t, 1, decoded.HTTP2ConnectionShards)
 	assert.True(t, decoded.TLSInsecureSkipVerify)
 
 	sharded := ChannelSettings{HTTP2ConnectionShards: 4}
-	encoded, err = json.Marshal(sharded)
+	encoded, err = kitutil.Marshal(sharded)
 	require.NoError(t, err)
 	assert.Contains(t, string(encoded), `"http2_connection_shards":4`)
 	assert.NotContains(t, string(encoded), "http_protocol")
+}
+
+func TestChannelSettingsTmpK01JSONRoundTrip(t *testing.T) {
+	settings := ChannelSettings{Tmp20261106K01Enabled: true}
+	data, err := kitutil.Marshal(settings)
+	require.NoError(t, err)
+
+	var decoded ChannelSettings
+	require.NoError(t, kitutil.Unmarshal(data, &decoded))
+	require.True(t, decoded.Tmp20261106K01Enabled)
 }
 
 func TestChannelSettingsValidateHTTPTransport(t *testing.T) {

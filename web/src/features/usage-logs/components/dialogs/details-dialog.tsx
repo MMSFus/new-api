@@ -1286,7 +1286,12 @@ export function DetailsDialog(props: DetailsDialogProps) {
           </DetailSection>
         )}
 
+        {other?.replay_hit === true && (
+          <DetailRow label={t('Replayed response')} value={t('Yes')} />
+        )}
+
         {/* Admin billing mode indicator for non-consume */}
+
         {props.isAdmin &&
           !isConsume &&
           props.log.type !== 6 &&

@@ -40,6 +40,24 @@ func TestFormatUserLogsStripsQuotaSaturation(t *testing.T) {
 	require.Contains(t, parsed, "model_price")
 }
 
+func TestFormatUserLogsShowsReplayHitToAllRoles(t *testing.T) {
+	log := &Log{Other: `{"replay_hit":true,"admin_info":{"k01_hit":true}}`}
+	logs := []*Log{log}
+
+	formatUserLogs(logs, 0)
+
+	userOther, err := common.StrToMap(logs[0].Other)
+	require.NoError(t, err)
+	assert.Equal(t, true, userOther["replay_hit"])
+	assert.NotContains(t, userOther, "admin_info")
+
+	adminLogs := []*Log{{Other: log.Other}}
+	FormatAdminLogs(adminLogs)
+	adminOther, err := common.StrToMap(adminLogs[0].Other)
+	require.NoError(t, err)
+	assert.Equal(t, true, adminOther["replay_hit"])
+}
+
 func TestTaskPluginLogVisibilityIsRoleSeparated(t *testing.T) {
 	other := common.MapToJsonStr(map[string]any{
 		"model_price": 1.25,
