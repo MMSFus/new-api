@@ -278,7 +278,7 @@ function videoRequest(action, source, identity) {
 function sizeOptions(size) {
   const text = trimmed(size).toLowerCase();
   if (["480p", "720p", "1080p"].includes(text)) return { resolution: text };
-  const parts = text.replace("*", "x").split("x");
+  const parts = text.replaceAll("*", "x").split("x");
   const width = Number(parts[0]);
   const height = Number(parts[1]);
   if (parts.length !== 2 || !(width > 0) || !(height > 0)) throw new Error("size must be WIDTHxHEIGHT or one of 480p, 720p, 1080p");

@@ -76,6 +76,9 @@ func newSMTPClient(addr string) (*smtp.Client, error) {
 }
 
 func SendEmail(subject string, receiver string, content string) error {
+	if strings.ContainsAny(receiver, "\r\n") {
+		return NewMessage("Invalid email receiver")
+	}
 	OptionMapRWMutex.RLock()
 	provider := OptionMap["EmailProvider"]
 	resendKey := OptionMap["ResendApiKey"]

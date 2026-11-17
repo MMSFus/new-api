@@ -295,6 +295,12 @@ func TestSendEmailUsesExplicitStartTLSWithInsecureCertificate(t *testing.T) {
 	}
 }
 
+func TestSendEmailRejectsHeaderInjectionInReceiver(t *testing.T) {
+	err := SendEmail("Verification", "receiver@example.com\r\nBcc: victim@example.com", "body")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Invalid email receiver")
+}
+
 func TestSendEmailExplicitStartTLSRequiresServerSupport(t *testing.T) {
 	server := newFakeSMTPServerWithSTARTTLSAdvertisement(t, false)
 	defer server.close()

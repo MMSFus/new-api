@@ -112,7 +112,7 @@ function normalizeResolution(value, model) {
   if (model === "viduq1") return "1080p";
   const raw = trimmed(value).toLowerCase();
   if (RESOLUTIONS.indexOf(raw) >= 0) return raw;
-  const parts = raw.replace("*", "x").split("x");
+  const parts = raw.replaceAll("*", "x").split("x");
   if (parts.length === 2) {
     const width = Number(parts[0]);
     const height = Number(parts[1]);

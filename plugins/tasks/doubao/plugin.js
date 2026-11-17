@@ -383,7 +383,7 @@ function rewriteDraftTaskContent(content, originTasks) {
 function normalizeResolution(value) {
   const raw = trimmed(value).toLowerCase();
   if (["480p", "720p", "1080p", "4k"].includes(raw)) return raw;
-  const parts = raw.replace("*", "x").split("x");
+  const parts = raw.replaceAll("*", "x").split("x");
   if (parts.length !== 2) return "720p";
   const max = Math.max(Number(parts[0]), Number(parts[1]));
   if (max >= 3840) return "4k";
@@ -414,7 +414,7 @@ function videoResolution(ctx) {
   const metadata = req.metadata || {};
   const profile = videoProfile(ctx);
   const raw = trimmed(metadata.resolution || req.size).toLowerCase();
-  const recognized = SEEDANCE_RESOLUTIONS.includes(raw) || raw.replace("*", "x").split("x").length === 2;
+  const recognized = SEEDANCE_RESOLUTIONS.includes(raw) || raw.replaceAll("*", "x").split("x").length === 2;
   if (!recognized) return profile.resolutions.includes("1080p") ? "1080p" : profile.resolutions[profile.resolutions.length - 1];
   const resolution = normalizeResolution(raw);
   if (!profile.resolutions.includes(resolution))
