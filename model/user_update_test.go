@@ -44,6 +44,39 @@ func createUserBindTestUser(t *testing.T) User {
 	return user
 }
 
+func TestUserInsertPersistsInviterID(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	inviter := createUserBindTestUser(t)
+	passwordInvitee := User{
+		Username:  "password-invitee",
+		InviterId: inviter.Id + 1,
+		Role:      common.RoleCommonUser,
+		Status:    common.UserStatusEnabled,
+		Group:     "default",
+	}
+	require.NoError(t, passwordInvitee.Insert(inviter.Id))
+
+	var gotPasswordInvitee User
+	require.NoError(t, DB.First(&gotPasswordInvitee, passwordInvitee.Id).Error)
+	assert.Equal(t, inviter.Id, gotPasswordInvitee.InviterId)
+
+	oauthInvitee := User{
+		Username:  "oauth-invitee",
+		InviterId: inviter.Id + 1,
+		Role:      common.RoleCommonUser,
+		Status:    common.UserStatusEnabled,
+		Group:     "default",
+	}
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		return oauthInvitee.InsertWithTx(tx, inviter.Id)
+	}))
+
+	var gotOAuthInvitee User
+	require.NoError(t, DB.First(&gotOAuthInvitee, oauthInvitee.Id).Error)
+	assert.Equal(t, inviter.Id, gotOAuthInvitee.InviterId)
+}
+
 func TestUserUpdateDoesNotOverwriteConcurrentAccountingOrTokenChanges(t *testing.T) {
 	setupUserUpdateTestState(t)
 
