@@ -25,8 +25,20 @@
   },
   "devDependencies": {
     "cross-env": "^7.0.3",
-    "electron": "41.10.6",
+    "electron": "42.11.18",
     "electron-builder": "^26.15.3"
+  },
+  "overrides": {
+    "@electron/asar": "4.3.2",
+    "@electron/get": {
+      "undici": "7.30.2"
+    },
+    "@electron/universal": "3.0.6",
+    "fast-uri": "3.1.9",
+    "minimatch": "11.0.9",
+    "node-gyp": {
+      "undici": "6.29.1"
+    }
   },
   "build": {
     "appId": "com.newapi.desktop",
