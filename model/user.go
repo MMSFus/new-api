@@ -685,6 +685,7 @@ func (user *User) Insert(inviterId int) error {
 			if err := user.prepareForInsert(tx); err != nil {
 				return err
 			}
+			user.InviterId = inviterId
 			user.signupGiftQuota = rewardQuota(operation_setting.AmountFieldQuotaForNewUser)
 			user.setInitialGiftQuota(user.signupGiftQuota)
 			user.AffCode = common.GetRandomString(4)
@@ -749,6 +750,7 @@ func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
 		if err := user.prepareForInsert(tx); err != nil {
 			return err
 		}
+		user.InviterId = inviterId
 		user.signupGiftQuota = rewardQuota(operation_setting.AmountFieldQuotaForNewUser)
 		user.setInitialGiftQuota(user.signupGiftQuota)
 		user.AffCode = common.GetRandomString(4)

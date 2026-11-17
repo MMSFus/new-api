@@ -40,6 +40,14 @@ docker.io/mmsfus/new-api:sha-<short-commit>
 
 Images published before the switch remain on `ghcr.io/mmsfus/new-api`.
 
+## Security checks
+
+All of these are report-only and are not required status checks:
+
+- `.github/workflows/fork-security.yml` (fork-only, so upstream syncs do not touch it): dependency review on pull requests, and a Trivy scan of the published `docker.io/mmsfus/new-api` image after every Fork CI run on `main` and every Monday. Results appear under Security > Code scanning (category `trivy-image`).
+- Repository settings: Dependabot alerts and security updates, CodeQL default setup, secret scanning with push protection, and private vulnerability reporting.
+- Dependabot version updates stay off in the fork. The upstream `.github/dependabot.yml` is kept unmodified, and routine dependency upgrades arrive through upstream syncs. Dependabot security-update PRs still appear when a dependency has a known vulnerability. Merging one publishes a new `main` image, which watchtower deploys overnight.
+
 ## Server deployment
 
 Production (`/opt/services/new-api/compose.yml`) runs `docker.io/mmsfus/new-api:main` with the label `com.centurylinklabs.watchtower.enable: "true"`. The Watchtower instance on the server checks labelled containers every day at 03:20 (server time) and recreates `new-api` when `main` has a new digest, so a merge to `main` reaches production that night.
