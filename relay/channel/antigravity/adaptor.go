@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -37,12 +38,23 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 }
 func (a *Adaptor) GetChannelName() string { return "antigravity" }
 func (a *Adaptor) GetModelList() []string { return nil } // Discover the account's actual catalog.
+// Some model families require stream aggregation even for unary callers.
+func usesUnaryGeneration(info *relaycommon.RelayInfo) bool {
+	model := strings.TrimPrefix(strings.ToLower(info.UpstreamModelName), "models/")
+	return !info.IsStream && strings.HasPrefix(model, "gemini-") && !strings.HasPrefix(model, "gemini-3-pro") && !strings.HasPrefix(model, "gemini-3.1-flash-image")
+}
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
+	if usesUnaryGeneration(info) {
+		return strings.TrimRight(info.ChannelBaseUrl, "/") + "/v1internal:generateContent", nil
+	}
 	return strings.TrimRight(info.ChannelBaseUrl, "/") + "/v1internal:streamGenerateContent?alt=sse", nil
 }
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, h *http.Header, info *relaycommon.RelayInfo) error {
 	h.Set("Content-Type", "application/json")
 	h.Set("Accept", "text/event-stream")
+	if usesUnaryGeneration(info) {
+		h.Set("Accept", "application/json")
+	}
 	h.Set("Authorization", "Bearer "+a.credential.AccessToken)
 	h.Set("User-Agent", provider.UserAgent)
 	return nil
@@ -78,7 +90,7 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, body io
 		return nil, errors.New("Antigravity request exceeds size limit")
 	}
 	var payload map[string]any
-	if common.Unmarshal(data, &payload) != nil {
+	if common.Unmarshal(data, &payload) != nil || payload == nil {
 		return nil, errors.New("Invalid Antigravity request")
 	}
 	if payload["sessionId"] == nil {
@@ -115,6 +127,38 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, body io
 		}
 	}
 	if resp.StatusCode != http.StatusOK {
+		return resp, nil
+	}
+	if usesUnaryGeneration(info) && strings.Contains(resp.Header.Get("Content-Type"), "application/json") {
+		defer resp.Body.Close()
+		const limit = 32 << 20
+		body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+		if err != nil {
+			return nil, err
+		}
+		if len(body) > limit {
+			return nil, errors.New("Antigravity response exceeds size limit")
+		}
+		var envelope struct {
+			Response json.RawMessage `json:"response"`
+			Error    json.RawMessage `json:"error"`
+		}
+		if common.Unmarshal(body, &envelope) != nil || len(envelope.Error) != 0 {
+			return nil, errors.New("Invalid Antigravity generation response")
+		}
+		var result struct {
+			Candidates     []json.RawMessage `json:"candidates"`
+			PromptFeedback struct {
+				BlockReason string `json:"blockReason"`
+			} `json:"promptFeedback"`
+			Error json.RawMessage `json:"error"`
+		}
+		if common.Unmarshal(envelope.Response, &result) != nil || len(result.Error) != 0 || (len(result.Candidates) == 0 && result.PromptFeedback.BlockReason == "") {
+			return nil, errors.New("Invalid Antigravity generation response")
+		}
+		resp.Body = io.NopCloser(bytes.NewReader(envelope.Response))
+		resp.ContentLength = int64(len(envelope.Response))
+		resp.Header.Del("Content-Length")
 		return resp, nil
 	}
 	if !strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {

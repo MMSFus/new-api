@@ -19,16 +19,27 @@ import (
 // Reading is demand-driven and Close closes the original response, so client
 // cancellation and backpressure do not leave a producer goroutine behind.
 type responseStream struct {
-	source  io.ReadCloser
-	scanner *bufio.Scanner
-	pending *bytes.Reader
-	done    bool
+	source      io.ReadCloser
+	scanner     *bufio.Scanner
+	pending     *bytes.Reader
+	done        bool
+	ended       bool
+	candidates  map[int]candidateEnd
+	finalUsage  bool
+	outputUsage bool
+	blocked     bool
+}
+
+type candidateEnd struct {
+	finished bool
+	toolCall bool
+	text     bool
 }
 
 func newResponseStream(source io.ReadCloser) *responseStream {
 	scanner := bufio.NewScanner(source)
 	scanner.Buffer(make([]byte, 4096), 8<<20)
-	return &responseStream{source: source, scanner: scanner}
+	return &responseStream{source: source, scanner: scanner, candidates: make(map[int]candidateEnd)}
 }
 func (s *responseStream) Close() error { return s.source.Close() }
 func (s *responseStream) Read(p []byte) (int, error) {
@@ -62,11 +73,18 @@ func (s *responseStream) Read(p []byte) (int, error) {
 	}
 }
 func (s *responseStream) event() ([]byte, error) {
+	if s.ended {
+		return nil, nil
+	}
 	for {
 		var data []string
 		size := 0
 		for s.scanner.Scan() {
 			line := s.scanner.Text()
+			// Cloud Code can append a bare JSON error after valid SSE frames.
+			if strings.HasPrefix(strings.TrimSpace(line), "{") {
+				return nil, errors.New("Antigravity stream returned an error")
+			}
 			if line == "" {
 				if len(data) > 0 {
 					break
@@ -85,11 +103,11 @@ func (s *responseStream) event() ([]byte, error) {
 			return nil, err
 		}
 		if len(data) == 0 {
-			return nil, nil
+			return s.terminalEvent(false)
 		}
 		raw := strings.Join(data, "\n")
 		if raw == "[DONE]" {
-			return nil, nil
+			return s.terminalEvent(true)
 		}
 		var envelope map[string]json.RawMessage
 		if common.UnmarshalJsonStr(raw, &envelope) != nil {
@@ -102,15 +120,98 @@ func (s *responseStream) event() ([]byte, error) {
 		if !ok {
 			return nil, errors.New("Antigravity stream event is missing response")
 		}
-		var response map[string]json.RawMessage
+		var response map[string]any
 		if common.Unmarshal(payload, &response) != nil || response == nil {
 			return nil, errors.New("Invalid Antigravity response")
 		}
 		if _, ok := response["error"]; ok {
 			return nil, errors.New("Antigravity stream returned an error")
 		}
+		if err := s.observe(response); err != nil {
+			return nil, err
+		}
 		return payload, nil
 	}
+}
+
+// observe remembers only the last substantive part per candidate. A signature
+// can arrive separately from the complete function call it belongs to.
+func (s *responseStream) observe(chunk map[string]any) error {
+	if feedback, ok := chunk["promptFeedback"].(map[string]any); ok {
+		reason, _ := feedback["blockReason"].(string)
+		s.blocked = s.blocked || (reason != "" && reason != "BLOCK_REASON_UNSPECIFIED")
+	}
+	items, _ := chunk["candidates"].([]any)
+	for _, item := range items {
+		candidate, ok := item.(map[string]any)
+		if !ok {
+			return errors.New("Invalid Antigravity candidate")
+		}
+		index, numeric := candidate["index"].(float64)
+		if (!numeric && candidate["index"] != nil) || index < 0 || index > 128 || index != float64(int(index)) {
+			return errors.New("Invalid Antigravity candidate index")
+		}
+		state := s.candidates[int(index)]
+		content, _ := candidate["content"].(map[string]any)
+		parts, _ := content["parts"].([]any)
+		for _, value := range parts {
+			part, _ := value.(map[string]any)
+			if len(part) == 1 && part["thoughtSignature"] != nil {
+				continue
+			}
+			call, _ := part["functionCall"].(map[string]any)
+			name, _ := call["name"].(string)
+			_, args := call["args"].(map[string]any)
+			state.toolCall = name != "" && args && call["partialArgs"] == nil && (call["willContinue"] == nil || call["willContinue"] == false)
+			text, _ := part["text"].(string)
+			state.text = text != "" && part["thought"] != true && call == nil
+			s.finalUsage = false
+			s.outputUsage = false
+		}
+		if reason, _ := candidate["finishReason"].(string); reason != "" && reason != "FINISH_REASON_UNSPECIFIED" {
+			state.finished = true
+		}
+		s.candidates[int(index)] = state
+	}
+	usage, _ := chunk["usageMetadata"].(map[string]any)
+	if total, _ := usage["totalTokenCount"].(float64); total > 0 {
+		s.finalUsage = true
+		// A separate output-usage trailer follows the final content delta.
+		if output, _ := usage["candidatesTokenCount"].(float64); len(items) == 0 && output > 0 {
+			s.outputUsage = true
+		}
+	}
+	return nil
+}
+
+// Some Cloud Code tool turns end with cumulative usage but omit finishReason.
+// Wait for clean termination before emitting a synthetic candidate marker.
+func (s *responseStream) terminalEvent(doneMarker bool) ([]byte, error) {
+	s.ended = true
+	if len(s.candidates) == 0 && !s.blocked {
+		return nil, errors.New("Antigravity response ended without candidates")
+	}
+	var indexes []int
+	for index, state := range s.candidates {
+		if state.finished {
+			continue
+		}
+		completeTool := state.toolCall && (doneMarker || s.finalUsage)
+		completeText := state.text && (doneMarker || (s.outputUsage && len(s.candidates) == 1))
+		if !completeTool && !completeText {
+			return nil, errors.New("Antigravity response ended before candidate completion")
+		}
+		indexes = append(indexes, index)
+	}
+	if len(indexes) == 0 {
+		return nil, nil
+	}
+	sort.Ints(indexes)
+	var candidates []map[string]any
+	for _, index := range indexes {
+		candidates = append(candidates, map[string]any{"index": index, "finishReason": "STOP"})
+	}
+	return common.Marshal(map[string]any{"candidates": candidates})
 }
 
 func aggregateResponse(s *responseStream) ([]byte, error) {
@@ -119,7 +220,6 @@ func aggregateResponse(s *responseStream) ([]byte, error) {
 	total := 0
 	events := 0
 	var usage *dto.GeminiUsageMetadata
-	finished := map[int]bool{}
 	for {
 		raw, err := s.event()
 		if err != nil {
@@ -161,16 +261,7 @@ func aggregateResponse(s *responseStream) ([]byte, error) {
 				return nil, errors.New("Invalid Antigravity candidate")
 			}
 			index, _ := candidate["index"].(float64)
-			if index < 0 || index > 128 || index != float64(int(index)) {
-				return nil, errors.New("Invalid Antigravity candidate index")
-			}
 			id := int(index)
-			if reason, ok := candidate["finishReason"].(string); ok {
-				switch reason {
-				case "STOP", "MAX_TOKENS", "SAFETY", "RECITATION", "LANGUAGE", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "MALFORMED_FUNCTION_CALL", "IMAGE_SAFETY", "UNEXPECTED_TOOL_CALL", "MODEL_ARMOR", "OTHER":
-					finished[id] = true
-				}
-			}
 			previous := candidates[id]
 			if previous == nil {
 				candidates[id] = candidate
@@ -226,9 +317,6 @@ func aggregateResponse(s *responseStream) ([]byte, error) {
 	}
 	if events == 0 {
 		return nil, errors.New("Antigravity returned an empty stream")
-	}
-	if len(candidates) == 0 || len(finished) != len(candidates) {
-		return nil, errors.New("Antigravity response ended before candidate completion")
 	}
 	indices := make([]int, 0, len(candidates))
 	for i := range candidates {

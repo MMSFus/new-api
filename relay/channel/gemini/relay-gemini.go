@@ -289,6 +289,10 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	}
 	if info.StreamStatus != nil && !info.StreamStatus.IsNormalEnd() {
 		logger.LogWarn(c, common.LogText("Gemini stream ended unexpectedly: %s", info.StreamStatus.Summary()))
+		if info.ChannelMeta != nil && info.ChannelType == constant.ChannelTypeAntigravity && !isGeminiDownstreamStop(c, info) {
+			info.StreamStatus.MarkFailed("", "", http.StatusBadGateway)
+			return usage, types.NewOpenAIError(fmt.Errorf("Antigravity stream ended unexpectedly: %s", info.StreamStatus.EndReason), types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+		}
 	}
 
 	return usage, nil
