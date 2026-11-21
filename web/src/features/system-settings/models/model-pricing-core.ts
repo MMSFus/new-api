@@ -36,6 +36,7 @@ import {
 } from '@/features/pricing/lib/billing-expr'
 import { formatBillingCondition } from '@/features/pricing/lib/billing-expression/condition-display'
 import { compileBillingExpression } from '@/features/pricing/lib/billing-expression/parser'
+import { usesChatQuantities } from '@/features/pricing/lib/plugin-pricing'
 import type { BillingUsageSchema } from '@/features/pricing/types'
 import type { AmountCurrency } from '@/lib/currency'
 
@@ -101,7 +102,12 @@ export function usesTaskModelPricing(
   if (compiled.status === 'ready' && compiled.functions.has('u')) return true
   if (!schema) return false
   if (!data?.billingExpr?.trim()) return true
-  if (compiled.status === 'ready' && compiled.functions.has('fixed')) {
+  // fixed() and chat request quantities are ordinary prices: they never price
+  // a task.
+  if (
+    compiled.status === 'ready' &&
+    (compiled.functions.has('fixed') || usesChatQuantities(compiled.variables))
+  ) {
     return false
   }
   const active = variants.filter((variant) => !variant.stale)
@@ -318,11 +324,11 @@ export function buildPreviewRows(
       currency
     )
   }
-  let createCacheLabel = t('Cache write price')
+  let createCacheLabel = t('Standard cache write price')
   if (cacheWriteMode === 'claude_ttl') {
-    createCacheLabel = t('Cache Creation (5m)')
+    createCacheLabel = t('Cache create (5m) price')
   } else if (cacheWriteMode === 'openai_ttl') {
-    createCacheLabel = t('Cache Creation (30m)')
+    createCacheLabel = t('Cache create (30m) price')
   }
   const rows: PreviewRow[] = [
     {

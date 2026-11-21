@@ -17,7 +17,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { ChannelAffinitySettings } from '../general/channel-affinity/types'
-import type { SecuritySettings } from '../types'
 
 export type RetrySettings = {
   RetryTimes: number
@@ -37,17 +36,12 @@ export type HealthSettings = {
     | 'auto_ban_only'
     | 'passive_recovery'
 }
-export type FilteringSettings = Pick<
-  SecuritySettings,
-  'CheckSensitiveEnabled' | 'CheckSensitiveOnPromptEnabled' | 'SensitiveWords'
->
 export type ErrorRewriteSettings = {
   // JSON array of rules, see setting/operation_setting/error_rewrite.go.
   ErrorRewriteRules: string
 }
 export type RequestPolicySettings = RetrySettings &
   HealthSettings &
-  FilteringSettings &
   ErrorRewriteSettings &
   Pick<ChannelAffinitySettings, keyof ChannelAffinitySettings>
 
@@ -71,8 +65,5 @@ export const defaultRequestPolicySettings: RequestPolicySettings = {
   'channel_affinity_setting.max_entries': 100000,
   'channel_affinity_setting.default_ttl_seconds': 3600,
   'channel_affinity_setting.rules': '[]',
-  CheckSensitiveEnabled: false,
-  CheckSensitiveOnPromptEnabled: false,
-  SensitiveWords: '',
   ErrorRewriteRules: '[]',
 }

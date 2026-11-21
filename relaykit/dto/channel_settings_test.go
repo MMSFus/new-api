@@ -1,7 +1,7 @@
 package dto
 
 import (
-	"regexp"
+	"github.com/MoeForge/moego/regexp"
 	"testing"
 
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"

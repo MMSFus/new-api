@@ -24,6 +24,10 @@ import {
   splitBillingExprAndRequestRules,
   type ParsedTier,
 } from '@/features/pricing/lib/billing-expr'
+import {
+  getCachePriceLabels,
+  getTierCachePricingMode,
+} from '@/features/pricing/lib/cache-pricing'
 import { translateServerText } from '@/lib/server-error-message'
 
 import type { UsageLog } from '../data/schema'
@@ -354,7 +358,8 @@ export function logCurrencyUSDFactor(
 
 /** Tier prices in USD; tier matching itself uses the raw expression. */
 export function getTieredBillingSummary(
-  other: LogOtherData | null
+  other: LogOtherData | null,
+  modelName?: string
 ): TieredBillingSummary | null {
   const summary = getRawTieredBillingSummary(other)
   const factor = logCurrencyUSDFactor(other)
@@ -428,6 +433,7 @@ function getRawTieredBillingSummary(
   }
 
   const cacheTokensPresent = hasAnyCacheTokens(other)
+  const cacheMode = getTierCachePricingMode(tiers, modelName)
 
   const priceEntries: TieredBillingSummary['priceEntries'] = []
   for (const v of BILLING_PRICING_VARS) {
@@ -438,7 +444,7 @@ function getRawTieredBillingSummary(
     if (Number.isFinite(price) && price >= 0) {
       priceEntries.push({
         field: v.field,
-        shortLabel: v.shortLabel,
+        shortLabel: getCachePriceLabels(v, cacheMode).shortLabel,
         price,
       })
     }

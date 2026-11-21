@@ -1,9 +1,8 @@
 package controller
 
 import (
-	"maps"
-
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
@@ -22,15 +21,16 @@ func filterPricingByUsableGroups(pricing []model.Pricing, usableGroup map[string
 
 	filtered := make([]model.Pricing, 0, len(pricing))
 	for _, item := range pricing {
-		if common.StringsContains(item.EnableGroup, "all") {
-			filtered = append(filtered, item)
-			continue
-		}
+		// The pricing cache is shared by all viewers.
+		groups := make([]string, 0, len(item.EnableGroup))
 		for _, group := range item.EnableGroup {
-			if _, ok := usableGroup[group]; ok {
-				filtered = append(filtered, item)
-				break
+			if _, ok := usableGroup[group]; ok || group == "all" {
+				groups = append(groups, group)
 			}
+		}
+		if len(groups) > 0 {
+			item.EnableGroup = groups
+			filtered = append(filtered, item)
 		}
 	}
 	return filtered
@@ -45,31 +45,19 @@ type pricingGroupRateLimit struct {
 }
 
 func GetPricing(c *gin.Context) {
-	pricing := model.GetPricing()
-	userId, exists := c.Get("id")
-	usableGroup := map[string]string{}
-	groupRatio := map[string]float64{}
-	maps.Copy(groupRatio, ratio_setting.GetGroupRatioCopy())
-	var group string
-	if exists {
-		user, err := model.GetUserCache(userId.(int))
-		if err == nil {
-			group = user.Group
-			for g := range groupRatio {
-				ratio, ok := ratio_setting.GetGroupGroupRatio(group, g)
-				if ok {
-					groupRatio[g] = ratio
-				}
-			}
-		}
-	}
-
-	usableGroup = service.GetUserUsableGroups(group)
-	pricing = filterPricingByUsableGroups(pricing, usableGroup)
-	// check groupRatio contains usableGroup
-	for group := range ratio_setting.GetGroupRatioCopy() {
+	userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
+	usableGroup := service.GetUserUsableGroups(userGroup)
+	pricing := filterPricingByUsableGroups(model.GetPricing(), usableGroup)
+	groupRatio := ratio_setting.GetGroupRatioCopy()
+	for group := range groupRatio {
 		if _, ok := usableGroup[group]; !ok {
 			delete(groupRatio, group)
+			continue
+		}
+		if userGroup != "" {
+			if ratio, ok := ratio_setting.GetGroupGroupRatio(userGroup, group); ok {
+				groupRatio[group] = ratio
+			}
 		}
 	}
 
@@ -87,7 +75,7 @@ func GetPricing(c *gin.Context) {
 			continue
 		}
 		// 固定为 g 的令牌：旧版限流表按令牌分组查找。
-		rule := setting.ResolveModelRequestRateLimit(group, g, g)
+		rule := setting.ResolveModelRequestRateLimit(userGroup, g, g)
 		groupRateLimits[g] = pricingGroupRateLimit{
 			Total:           rule.Total,
 			Success:         rule.Success,
@@ -102,8 +90,8 @@ func GetPricing(c *gin.Context) {
 		"group_ratio":           groupRatio,
 		"usable_group":          usableGroup,
 		"supported_endpoint":    model.GetSupportedEndpointMap(),
-		"auto_groups":           service.GetUserAutoGroup(group),
-		"config_groups":         service.GetUserConfigGroups(group),
+		"auto_groups":           service.GetUserAutoGroup(userGroup),
+		"config_groups":         service.GetUserConfigGroups(userGroup),
 		"group_rate_limits":     groupRateLimits,
 		"group_balance_buckets": groupBalanceBuckets,
 		"pricing_version":       "a42d372ccf0b5dd13ecf71203521f9d2",

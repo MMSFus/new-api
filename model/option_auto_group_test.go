@@ -72,3 +72,13 @@ func TestCurrencyOptionAndModelPricingValidation(t *testing.T) {
 	replaceModelPricing(values, "currency-test-model", PricingValues{"ModelPrice": 1.0})
 	assert.NotContains(t, values["ModelPriceCurrency"], "currency-test-model")
 }
+
+func TestValidateOptionValueRejectsSystemTaskRetentionBelowOneDay(t *testing.T) {
+	for _, value := range []string{"", "0", "-1", "1.5", "invalid"} {
+		t.Run(value, func(t *testing.T) {
+			assert.Error(t, validateOptionValue("system_task_setting.retention_days", value))
+		})
+	}
+	require.NoError(t, validateOptionValue("system_task_setting.retention_days", "1"))
+	require.NoError(t, validateOptionValue("system_task_setting.retention_days", "30"))
+}
