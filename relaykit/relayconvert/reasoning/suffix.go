@@ -179,6 +179,10 @@ func isKnownClaudeModel(modelName string) bool {
 // and honours allowSuffixAlias the same way.
 func ParseGeminiModelSuffix(modelName string, allowSuffixAlias bool) (string, Intent, bool, error) {
 	prefix, bare := splitModelNamespace(modelName)
+	// These Cloud Code catalog entries are distinct upstream model IDs.
+	if base, tier, ok := TrimEffortSuffixWithSuffixes(bare, []string{"-low", "-medium", "-high"}); ok && tier != "" && (base == "gemini-4-carbon" || base == "gemini-4-argon") {
+		return modelName, Intent{}, false, nil
+	}
 	if !strings.HasPrefix(bare, "gemini-") {
 		return modelName, Intent{}, false, nil
 	}

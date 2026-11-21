@@ -26,6 +26,18 @@ func TestRenderGeminiMapsAndClampsInsteadOfRejecting(t *testing.T) {
 		wantCodes  []string
 	}{
 		{
+			name: "bare carbon keeps upstream default", model: "gemini-4-carbon", wantNil: true,
+		},
+		{
+			name: "carbon maps disabled to lowest level", model: "gemini-4-carbon",
+			intent: Intent{Mode: ModeDisabled}, wantLevel: "low", wantEffort: EffortLow,
+			wantCodes: []string{"gemini_thinking_disable_unsupported"},
+		},
+		{
+			name: "carbon accepts explicit medium", model: "gemini-4-carbon",
+			intent: Intent{Effort: EffortMedium}, wantLevel: "medium", wantEffort: EffortMedium,
+		},
+		{
 			name:       "budget on gemini 3.1 pro becomes level",
 			model:      "gemini-3.1-pro-preview",
 			intent:     Intent{BudgetTokens: &budget8192},

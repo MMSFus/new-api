@@ -75,7 +75,7 @@
 - **限速：** 按调用分组区分全局限速与私域限速。
 - **会话录制：** 内嵌于服务中，可按渠道、分组、模型过滤。
 - **Kimi 原生接入：** 双区域 OAuth、凭据导入，以及 Kimi web chat 反向代理渠道。
-- **Antigravity 原生接入：** Google OAuth 与凭据导入。
+- **Antigravity 原生接入：** 支持 Google OAuth 与凭据导入，模型列表来自当前账号。Gemini 4 非流式对话使用 Cloud Code 的 `generateContent`，流式对话使用 `streamGenerateContent`。模型映射可填写账号返回的完整 ID，例如 `gemini-4-hydrogen-sonar`。
 - **报错改写：** 按规则改写返回给客户端的报错信息。
 - **OIDC 注册：** OIDC 注册时的用户名与邮箱策略。
 
