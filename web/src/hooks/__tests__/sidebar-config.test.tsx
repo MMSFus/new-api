@@ -21,6 +21,7 @@ import {
   createMemoryHistory,
   createRootRoute,
   createRouter,
+  RouterContextProvider,
   RouterProvider,
 } from '@tanstack/react-router'
 import {
@@ -51,11 +52,6 @@ import { useAuthStore } from '@/stores/auth-store'
 import { useSidebarConfig } from '../use-sidebar-config'
 import { useSidebarData } from '../use-sidebar-data'
 import { useSidebarView } from '../use-sidebar-view'
-
-vi.mock('@tanstack/react-router', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@tanstack/react-router')>()),
-  useLocation: () => '/dashboard/overview',
-}))
 
 beforeEach(() => {
   vi.stubGlobal('localStorage', {
@@ -256,7 +252,7 @@ describe('usage log sidebar entry', () => {
 })
 
 describe('permission-gated admin entries', () => {
-  function adminSidebarTitles(
+  async function adminSidebarTitles(
     role: number,
     adminPermissions?: Record<string, Record<string, boolean>>
   ) {
@@ -271,10 +267,15 @@ describe('permission-gated admin entries', () => {
       permissions: { admin_permissions: adminPermissions },
       sidebar_modules: '',
     })
+    const router = createRouter({
+      routeTree: createRootRoute(),
+      history: createMemoryHistory({ initialEntries: ['/dashboard/overview'] }),
+    })
+    await router.load()
     function Wrapper(props: { children: ReactNode }) {
       return (
         <QueryClientProvider client={client}>
-          {props.children}
+          <RouterContextProvider router={router}>{props.children}</RouterContextProvider>
         </QueryClientProvider>
       )
     }
@@ -284,21 +285,21 @@ describe('permission-gated admin entries', () => {
       .map((item) => item.title)
   }
 
-  it('admins without the grants do not see Cost & Billing or Simulated cache', () => {
-    const titles = adminSidebarTitles(10)
+  it('admins without the grants do not see Cost & Billing or Simulated cache', async () => {
+    const titles = await adminSidebarTitles(10)
     expect(titles).toContain('Channels')
     expect(titles).not.toContain('Cost & Billing')
     expect(titles).not.toContain('Simulated cache')
   })
 
-  it('each grant reveals only its own entry', () => {
-    const titles = adminSidebarTitles(10, { channel_cost: { read: true } })
+  it('each grant reveals only its own entry', async () => {
+    const titles = await adminSidebarTitles(10, { channel_cost: { read: true } })
     expect(titles).toContain('Cost & Billing')
     expect(titles).not.toContain('Simulated cache')
   })
 
-  it('root sees both entries without explicit grants', () => {
-    const titles = adminSidebarTitles(100)
+  it('root sees both entries without explicit grants', async () => {
+    const titles = await adminSidebarTitles(100)
     expect(titles).toContain('Cost & Billing')
     expect(titles).toContain('Simulated cache')
   })

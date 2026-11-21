@@ -46,6 +46,11 @@ type pricingGroupRateLimit struct {
 
 func GetPricing(c *gin.Context) {
 	userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
+	if userGroup == "" && c.GetInt("id") > 0 {
+		if user, err := model.GetUserCache(c.GetInt("id")); err == nil {
+			userGroup = user.Group
+		}
+	}
 	usableGroup := service.GetUserUsableGroups(userGroup)
 	pricing := filterPricingByUsableGroups(model.GetPricing(), usableGroup)
 	groupRatio := ratio_setting.GetGroupRatioCopy()
