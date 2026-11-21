@@ -1422,7 +1422,7 @@ func UpdateChannel(c *gin.Context) {
 				}
 			}
 
-			seen := make(map[string]struct{}, len(existingKeys)+len(newKeys))
+			seen := make(map[string]struct{}, len(existingKeys))
 			for _, key := range existingKeys {
 				normalized := strings.TrimSpace(key)
 				if normalized == "" {

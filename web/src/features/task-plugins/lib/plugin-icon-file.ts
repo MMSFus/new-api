@@ -87,10 +87,15 @@ function sniffPluginIconMediaType(
   if (PNG_SIGNATURE.every((byte, index) => bytes[index] === byte)) {
     return 'image/png'
   }
-  const head = new TextDecoder().decode(bytes.subarray(0, 1024))
-  return /^\s*(<\?xml[^>]*>\s*)?(<!--[\s\S]*?-->\s*)*(<!doctype[^>]*>\s*)?<svg[\s/>]/i.test(
-    head.replace(/^\uFEFF/, '')
-  )
+  let head = new TextDecoder().decode(bytes.subarray(0, 1024)).trimStart()
+  head = head.replace(/^<\?xml[^>]*>/i, '').trimStart()
+  while (head.startsWith('<!--')) {
+    const end = head.indexOf('-->', 4)
+    if (end < 0) return null
+    head = head.slice(end + 3).trimStart()
+  }
+  head = head.replace(/^<!doctype[^>]*>/i, '').trimStart()
+  return /^<svg[\s/>]/i.test(head)
     ? 'image/svg+xml'
     : null
 }

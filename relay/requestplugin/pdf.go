@@ -5,6 +5,7 @@ import (
 	"compress/zlib"
 	"errors"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -1003,6 +1004,9 @@ func lastLine(data []byte, word string) int {
 // section reads the cross-reference table or stream at offset into the
 // table and returns its trailer dictionary.
 func (c *pdfCheck) section(offset int64) (map[string]any, error) {
+	if offset < 0 || offset > math.MaxInt || offset >= int64(len(c.data)) {
+		return nil, errPDFSyntax
+	}
 	lexer := pdfLexer{data: c.data, pos: int(offset)}
 	token := lexer.next()
 	if token.kind == 'k' && string(token.text) == "xref" {
@@ -1180,7 +1184,7 @@ func (c *pdfCheck) resolve(value any) (any, error) {
 	if entry.inStream {
 		return nil, errPDFSyntax
 	}
-	if entry.offset <= 0 || entry.offset >= int64(len(c.data)) {
+	if entry.offset <= 0 || entry.offset > math.MaxInt || entry.offset >= int64(len(c.data)) {
 		return nil, nil
 	}
 	lexer := pdfLexer{data: c.data, pos: int(entry.offset)}
@@ -1203,7 +1207,7 @@ func (c *pdfCheck) resolve(value any) (any, error) {
 // object reads one object the table places in the file, which the library
 // may read later: its values within maxPDFObjectValues.
 func (c *pdfCheck) object(number, offset int64) error {
-	if offset <= 0 || offset >= int64(len(c.data)) {
+	if offset <= 0 || offset > math.MaxInt || offset >= int64(len(c.data)) {
 		return nil
 	}
 	lexer := pdfLexer{data: c.data, pos: int(offset)}
@@ -1234,7 +1238,7 @@ func (c *pdfCheck) objectStream(number int64) (int64, error) {
 		// in turn be read out of this one, without end.
 		return -1, errPDFSyntax
 	}
-	if entry.offset <= 0 || entry.offset >= int64(len(c.data)) {
+	if entry.offset <= 0 || entry.offset > math.MaxInt || entry.offset >= int64(len(c.data)) {
 		return -1, nil
 	}
 	lexer := pdfLexer{data: c.data, pos: int(entry.offset)}

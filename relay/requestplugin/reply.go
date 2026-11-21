@@ -796,11 +796,13 @@ type replyWriter struct {
 
 // replyEvent is a stream event waiting for its text.
 type replyEvent struct {
-	raw    []byte
-	lines  []string
-	data   []byte
-	fields []replyField
-	full   []replyField
+	// socketRaw is sent only as a WebSocket message, including unchanged events.
+	socketRaw []byte
+	raw       []byte
+	lines     []string
+	data      []byte
+	fields    []replyField
+	full      []replyField
 	// after holds, for an event without text, the received count of each
 	// output when it arrived; it waits until the instances released that
 	// text.
@@ -1054,7 +1056,7 @@ func (w *replyWriter) event(block []byte) {
 // message takes one event of a WebSocket stream: a whole JSON message the
 // session already decoded.
 func (w *replyWriter) message(payload []byte) {
-	event := &replyEvent{raw: payload, lines: []string{""}, data: payload}
+	event := &replyEvent{socketRaw: payload, data: payload}
 	var ends []*replyOutput
 	var endAll bool
 	event.fields, event.full, ends, endAll = w.eventFields(gjson.ParseBytes(payload))
@@ -1397,12 +1399,16 @@ func (w *replyWriter) emit(event *replyEvent) {
 			}
 		}
 	}
-	if bytes.Equal(data, event.data) {
-		w.out(event.raw)
+	if event.socketRaw != nil {
+		if bytes.Equal(data, event.data) {
+			w.socket(event.socketRaw)
+		} else {
+			w.socket(data)
+		}
 		return
 	}
-	if w.socket != nil {
-		w.out(data)
+	if bytes.Equal(data, event.data) {
+		w.out(event.raw)
 		return
 	}
 	var block strings.Builder

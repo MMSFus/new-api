@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -161,10 +163,19 @@ func RefreshPluginCredential(ctx context.Context, channelID, keyIndex int, line 
 	return pluginCredentialRefresher.Refresh(ctx, channelID, keyIndex, line)
 }
 
+// Cache keys are local to this process. A keyed digest keeps them opaque even
+// when a credential contains a guessable password.
+var pluginCredentialMACKey = func() (key [32]byte) { rand.Read(key[:]); return }()
+
+func pluginCredentialFingerprint(line string) string {
+	mac := hmac.New(sha256.New, pluginCredentialMACKey[:])
+	mac.Write([]byte(line))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
 // Refresh is RefreshPluginCredential on this refresher's single-flight group.
 func (r *PluginCredentialRefresher) Refresh(ctx context.Context, channelID, keyIndex int, line string) (string, error) {
-	sum := sha256.Sum256([]byte(line))
-	flight := r.group.DoChan(strconv.Itoa(channelID)+":"+hex.EncodeToString(sum[:]), func() (any, error) {
+	flight := r.group.DoChan(strconv.Itoa(channelID)+":"+pluginCredentialFingerprint(line), func() (any, error) {
 		// The call is shared, so no single caller's cancellation ends it.
 		return refreshPluginCredentialLine(channelID, keyIndex, line)
 	})
@@ -311,9 +322,9 @@ type pluginTokenCache struct {
 }
 
 func pluginTokenKey(plugin *jsplugin.LoadedPlugin, channelID int, line string, config json.RawMessage, baseURL string) string {
-	lineSum := sha256.Sum256([]byte(line))
+	lineKey := pluginCredentialFingerprint(line)
 	configSum := sha256.Sum256(append(append([]byte(baseURL), 0), config...))
-	return strconv.Itoa(channelID) + ":" + plugin.Meta.Key + "@" + plugin.Meta.Version + ":" + hex.EncodeToString(lineSum[:]) + ":" + hex.EncodeToString(configSum[:])
+	return strconv.Itoa(channelID) + ":" + plugin.Meta.Key + "@" + plugin.Meta.Version + ":" + lineKey + ":" + hex.EncodeToString(configSum[:])
 }
 
 // PluginKeyToken returns the exchangeKey token of the static key line of a

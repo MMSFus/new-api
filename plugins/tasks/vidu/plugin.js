@@ -227,7 +227,7 @@ function mappedResolution(value, resolutions) {
   if (!raw) return undefined;
   const tier = resolutions.find((item) => item.toLowerCase() === raw.toLowerCase());
   if (tier) return tier;
-  const parts = raw.toLowerCase().replace("*", "x").split("x");
+  const parts = raw.toLowerCase().split(/[x*]/);
   const width = Number(parts[0]);
   const height = Number(parts[1]);
   if (parts.length !== 2 || !(width > 0) || !(height > 0)) return undefined;
