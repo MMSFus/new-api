@@ -107,33 +107,33 @@ func GetPluginBillingExpr(pluginKey, model string) (string, bool) {
 
 // ResolveTaskBillingExpr selects the executing plugin's override before the
 // model expression, retaining the model alias fallback and explicit modes.
-func ResolveTaskBillingExpr(pluginKey, model, mappedModel string) (string, bool) {
-	expression, _, ok := resolveTaskBillingExpr(pluginKey, model, mappedModel)
-	return expression, ok
+func ResolveTaskBillingExpr(pluginKey, model, mappedModel string) (string, bool, bool) {
+	expression, _, overridden, ok := resolveTaskBillingExpr(pluginKey, model, mappedModel)
+	return expression, overridden, ok
 }
 
 // resolveTaskBillingExpr also returns the model whose ModelPriceCurrency mark
 // applies to the selected expression. An empty owner is a built-in USD price.
-func resolveTaskBillingExpr(pluginKey, model, mappedModel string) (string, string, bool) {
+func resolveTaskBillingExpr(pluginKey, model, mappedModel string) (string, string, bool, bool) {
 	if pluginKey != "" {
 		if expr, ok := GetPluginBillingExpr(pluginKey, model); ok {
-			return expr, model, true
+			return expr, model, true, true
 		}
 		if mappedModel != "" && mappedModel != model {
 			if expr, ok := GetPluginBillingExpr(pluginKey, mappedModel); ok {
-				return expr, mappedModel, true
+				return expr, mappedModel, true, true
 			}
 		}
 	}
 	if GetBillingMode(model) == BillingModeTieredExpr {
 		expression, ok := GetBillingExpr(model)
-		return expression, configuredExprOwner(model), ok
+		return expression, configuredExprOwner(model), false, ok
 	}
 	if mappedModel != "" && mappedModel != model && GetBillingMode(mappedModel) == BillingModeTieredExpr {
 		expression, ok := GetBillingExpr(mappedModel)
-		return expression, configuredExprOwner(mappedModel), ok && strings.TrimSpace(expression) != ""
+		return expression, configuredExprOwner(mappedModel), false, ok && strings.TrimSpace(expression) != ""
 	}
-	return "", "", false
+	return "", "", false, false
 }
 
 // configuredExprOwner returns model when its expression is administrator
@@ -156,7 +156,7 @@ func ResolveBillingExprCurrency(model string) (string, float64, error) {
 // currency of the selected expression. Plugin overrides use the currency
 // mark of the model they are keyed by.
 func ResolveTaskBillingExprWithCurrency(pluginKey, model, mappedModel string) (string, string, float64, bool, error) {
-	expression, owner, ok := resolveTaskBillingExpr(pluginKey, model, mappedModel)
+	expression, owner, _, ok := resolveTaskBillingExpr(pluginKey, model, mappedModel)
 	if !ok {
 		return "", "", 0, false, nil
 	}
@@ -172,7 +172,9 @@ func exprOwnerCurrency(owner string) (string, float64, error) {
 }
 
 // TaskExprCompatible checks the schema contract even for usage references in
-// branches that the current request would not evaluate.
+// branches that the current request would not evaluate. Chat request
+// quantities never price a task: tasks have none, so token counts would read 0
+// and image_count 1.
 func TaskExprCompatible(expression string, schema map[string]jsplugin.UsageFieldSchema) bool {
 	if strings.TrimSpace(expression) == "" {
 		return false
@@ -185,7 +187,18 @@ func TaskExprCompatible(expression string, schema map[string]jsplugin.UsageField
 			return false
 		}
 	}
-	return !billingexpr.UsesFixedPricing(expression)
+	return !billingexpr.UsesFixedPricing(expression) && !billingexpr.UsesChatQuantities(expression)
+}
+
+// TaskPriceExpr reports whether expression can be a plugin's task price. An
+// expression reading chat request quantities cannot. A plugin's own price
+// always is one; a model-level expression without u() is the chat price of a
+// model the plugin also relays, so that plugin's tasks need their own price.
+func TaskPriceExpr(expression string, overridden, relaysModel bool) bool {
+	if billingexpr.UsesChatQuantities(expression) {
+		return false
+	}
+	return overridden || !relaysModel || billingexpr.UsedVars(expression)["u"]
 }
 
 func GetBuiltinBillingExprCopy() map[string]string {
@@ -281,6 +294,9 @@ func SmokeTestTaskExpr(exprStr string, schema map[string]jsplugin.UsageFieldSche
 	}
 	if billingexpr.UsesFixedPricing(exprStr) {
 		return fmt.Errorf("fixed pricing is not supported for task usage expressions")
+	}
+	if billingexpr.UsesChatQuantities(exprStr) {
+		return fmt.Errorf("task usage expressions cannot read chat request quantities such as token counts or image_count")
 	}
 	for key := range billingexpr.UsedUsageKeys(exprStr) {
 		if _, declared := schema[key]; !declared {

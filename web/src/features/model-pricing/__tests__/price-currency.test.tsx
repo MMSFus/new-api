@@ -242,7 +242,7 @@ it.each([
     )
     for (const [label, amount] of [
       ['Cache read price', cache],
-      ['Cache write price', write],
+      ['Standard cache write price', write],
       ['Image input price', image],
       ['Audio input price', audio],
       ['Audio output price', output],

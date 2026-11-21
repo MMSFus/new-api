@@ -3,10 +3,12 @@ package service
 import (
 	"context"
 	"fmt"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"net"
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,6 +27,7 @@ type protectedFetchDialer struct {
 }
 
 type ssrfProtectedRoundTripper struct {
+	previewPolicy HTTPTransportPolicy
 	resolver      ssrfResolver
 	dialContext   func(ctx context.Context, network, address string) (net.Conn, error)
 	getProtection func() (*common.SSRFProtection, bool, error)
@@ -53,6 +56,35 @@ func currentFetchProtection() (*common.SSRFProtection, bool, error) {
 		return nil, true, err
 	}
 	return protection, true, nil
+}
+
+// NewModelPreviewClient validates draft destinations, including any explicit
+// proxy, before sending channel credentials. Its caller owns the connection pool.
+func NewModelPreviewClient(settings dto.ChannelSettings) (*http.Client, error) {
+	proxy := http.ProxyFromEnvironment
+	if raw := strings.TrimSpace(settings.Proxy); raw != "" {
+		target, _, err := common.ParseProxyURLRuntime(raw)
+		if err != nil {
+			return nil, err
+		}
+		// SOCKS endpoints have the same host/port policy as HTTP endpoints.
+		check := *target
+		check.User = nil
+		if check.Scheme == "socks5" || check.Scheme == "socks5h" {
+			check.Scheme = "http"
+			if target.Port() == "" {
+				check.Host = net.JoinHostPort(target.Hostname(), "1080")
+			}
+		}
+		if err := ValidateSSRFProtectedFetchURL(check.String()); err != nil {
+			return nil, err
+		}
+		proxy = http.ProxyURL(target)
+	}
+	client := newProtectedFetchHTTPClientWithProxy(nil, nil, nil, proxy)
+	transport := client.Transport.(*ssrfProtectedRoundTripper)
+	transport.previewPolicy = NormalizeHTTPTransportPolicy(settings)
+	return client, nil
 }
 
 func newProtectedFetchHTTPClient() *http.Client {
@@ -161,7 +193,10 @@ func (t *ssrfProtectedRoundTripper) newTransport(proxyURL *url.URL) *http.Transp
 		Proxy:               proxyFunc,
 		DialContext:         dialContext,
 	}
-	if common.TLSInsecureSkipVerify {
+	if t.previewPolicy.Protocol != "" {
+		applyHTTPTransportPolicy(transport, t.previewPolicy)
+	}
+	if common.TLSInsecureSkipVerify || t.previewPolicy.TLSInsecureSkipVerify {
 		transport.TLSClientConfig = common.InsecureTLSConfig.Clone()
 	}
 	return transport
