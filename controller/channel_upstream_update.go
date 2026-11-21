@@ -335,8 +335,10 @@ func sanitizeAdvancedCustomRequestError(err error, key string, requestURL string
 	return errors.New(message)
 }
 
-func getFetchModelsResponseBody(method string, requestURL string, channel *model.Channel, headers http.Header) ([]byte, error) {
-	response, err := sendFetchModelsRequest(method, requestURL, channel, headers)
+type modelListSender func(string, string, *model.Channel, http.Header) (*http.Response, error)
+
+func getFetchModelsResponseBody(method string, requestURL string, channel *model.Channel, headers http.Header, send modelListSender) ([]byte, error) {
+	response, err := send(method, requestURL, channel, headers)
 	if err != nil {
 		return nil, err
 	}
@@ -354,6 +356,26 @@ func readFetchModelsResponse(response *http.Response) ([]byte, error) {
 // sendFetchModelsRequest sends a model list request through the channel's
 // proxy and TLS setting. The caller closes the response body.
 func sendFetchModelsRequest(method string, requestURL string, channel *model.Channel, headers http.Header) (*http.Response, error) {
+	setting := channel.GetSetting()
+	client, err := service.GetHttpClientWithProxySettings(setting.Proxy, setting)
+	if err != nil {
+		return nil, err
+	}
+	return doModelListRequest(client, method, requestURL, headers)
+}
+
+// A preview can specify a new destination. Apply fetch policy before the first
+// request as well as on redirects and DNS resolution at dial time.
+func sendPreviewModelsRequest(method, requestURL string, channel *model.Channel, headers http.Header) (*http.Response, error) {
+	client, err := service.NewModelPreviewClient(channel.GetSetting())
+	if err != nil {
+		return nil, err
+	}
+	defer client.CloseIdleConnections()
+	return doModelListRequest(client, method, requestURL, headers)
+}
+
+func doModelListRequest(client *http.Client, method, requestURL string, headers http.Header) (*http.Response, error) {
 	request, err := http.NewRequest(method, requestURL, nil)
 	if err != nil {
 		return nil, err
@@ -366,15 +388,14 @@ func sendFetchModelsRequest(method string, requestURL string, channel *model.Cha
 			request.Host = headers.Get(name)
 		}
 	}
-	setting := channel.GetSetting()
-	client, err := service.GetHttpClientWithProxySettings(setting.Proxy, setting)
-	if err != nil {
-		return nil, err
-	}
 	return client.Do(request)
 }
 
 func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
+	return fetchChannelModels(channel, sendFetchModelsRequest)
+}
+
+func fetchChannelModels(channel *model.Channel, send modelListSender) ([]string, error) {
 	if channel.Type == constant.ChannelTypeKimi {
 		ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 		defer cancel()
@@ -425,7 +446,7 @@ func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 	}
 
 	if constant.IsAdvancedCustomChannel(channel.Type) {
-		return fetchAdvancedCustomUpstreamModelIDs(channel, baseURL)
+		return fetchAdvancedCustomUpstreamModelIDs(channel, baseURL, send)
 	}
 
 	if channel.Type == constant.ChannelTypeCodex {
@@ -472,7 +493,7 @@ func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 		return nil, sanitizeFetchModelsError(err, key)
 	}
 
-	body, err := getFetchModelsResponseBody(http.MethodGet, url, channel, headers)
+	body, err := getFetchModelsResponseBody(http.MethodGet, url, channel, headers, send)
 	if err != nil {
 		return nil, sanitizeAdvancedCustomRequestError(err, key, url)
 	}
@@ -490,7 +511,7 @@ func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 	return normalizeModelNames(ids), nil
 }
 
-func fetchAdvancedCustomUpstreamModelIDs(channel *model.Channel, baseURL string) ([]string, error) {
+func fetchAdvancedCustomUpstreamModelIDs(channel *model.Channel, baseURL string, send modelListSender) ([]string, error) {
 	key, _, apiErr := channel.GetNextEnabledKey()
 	if apiErr != nil {
 		return nil, fmt.Errorf("failed to get channel key: %w", apiErr)
@@ -518,7 +539,7 @@ func fetchAdvancedCustomUpstreamModelIDs(channel *model.Channel, baseURL string)
 		return nil, sanitizeFetchModelsError(err, key)
 	}
 
-	body, err := getFetchModelsResponseBody(http.MethodGet, url, channel, headers)
+	body, err := getFetchModelsResponseBody(http.MethodGet, url, channel, headers, send)
 	if err != nil {
 		return nil, sanitizeFetchModelsError(err, key)
 	}

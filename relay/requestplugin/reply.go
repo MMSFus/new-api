@@ -1056,7 +1056,7 @@ func (w *replyWriter) event(block []byte) {
 // message takes one event of a WebSocket stream: a whole JSON message the
 // session already decoded.
 func (w *replyWriter) message(payload []byte) {
-	event := &replyEvent{socketRaw: payload, data: payload}
+	event := &replyEvent{socketRaw: payload}
 	var ends []*replyOutput
 	var endAll bool
 	event.fields, event.full, ends, endAll = w.eventFields(gjson.ParseBytes(payload))
@@ -1388,25 +1388,11 @@ func (w *replyWriter) emit(event *replyEvent) {
 	if len(event.fields) == 0 {
 		w.releaseOut()
 	}
-	data := event.data
-	if len(event.fields) > 0 {
-		data = fillFields(slices.Clone(data), event.fields)
-	}
-	for _, field := range event.full {
-		if released := field.output.released.String(); released != field.text {
-			if next, err := sjson.SetBytes(data, field.path, released); err == nil {
-				data = next
-			}
-		}
-	}
 	if event.socketRaw != nil {
-		if bytes.Equal(data, event.data) {
-			w.socket(event.socketRaw)
-		} else {
-			w.socket(data)
-		}
+		w.socket(event.patchedData(event.socketRaw))
 		return
 	}
+	data := event.patchedData(event.data)
 	if bytes.Equal(data, event.data) {
 		w.out(event.raw)
 		return
@@ -1423,6 +1409,21 @@ func (w *replyWriter) emit(event *replyEvent) {
 	}
 	block.WriteByte('\n')
 	w.out([]byte(block.String()))
+}
+
+// patchedData applies the plugin's released fields to one JSON payload.
+func (event *replyEvent) patchedData(data []byte) []byte {
+	if len(event.fields) > 0 {
+		data = fillFields(slices.Clone(data), event.fields)
+	}
+	for _, field := range event.full {
+		if released := field.output.released.String(); released != field.text {
+			if next, err := sjson.SetBytes(data, field.path, released); err == nil {
+				data = next
+			}
+		}
+	}
+	return data
 }
 
 // releaseOut writes the released text that no event carried in delta events

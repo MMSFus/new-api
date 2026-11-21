@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -197,7 +198,27 @@ func TestFetchOrdinaryOpenAIModelsKeepsExistingEmptyDataBehavior(t *testing.T) {
 	require.Empty(t, models)
 }
 
+func allowLocalModelPreview(t *testing.T) {
+	t.Helper()
+	settings := system_setting.GetFetchSetting()
+	previous := *settings
+	t.Cleanup(func() { *settings = previous })
+	settings.AllowPrivateIp = true
+	settings.AllowedPorts = []string{"1-65535"}
+}
+
+func TestDraftModelPreviewBlocksPrivateDestination(t *testing.T) {
+	settings := system_setting.GetFetchSetting()
+	previous := *settings
+	t.Cleanup(func() { *settings = previous })
+	settings.EnableSSRFProtection = true
+	settings.AllowPrivateIp = false
+	_, err := sendPreviewModelsRequest(http.MethodGet, "http://127.0.0.1:80/v1/models", &model.Channel{}, nil)
+	require.ErrorContains(t, err, "private")
+}
+
 func TestFetchModelsAdvancedCustomCreatePreview(t *testing.T) {
+	allowLocalModelPreview(t)
 	receivedAuthorization := make(chan string, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedAuthorization <- r.Header.Get("Authorization")
@@ -243,6 +264,7 @@ func TestFetchModelsAdvancedCustomCreatePreview(t *testing.T) {
 }
 
 func TestFetchModelsAdvancedCustomEditPreviewUsesSavedKeyAndExplicitClears(t *testing.T) {
+	allowLocalModelPreview(t)
 	db := setupModelListControllerTestDB(t)
 	receivedHeaders := make(chan http.Header, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -362,6 +384,7 @@ func TestFailedAdvancedCustomDetectionDoesNotStageFullRemoval(t *testing.T) {
 }
 
 func TestFetchModelsUsesSharedChannelFetchBehavior(t *testing.T) {
+	allowLocalModelPreview(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/models" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
