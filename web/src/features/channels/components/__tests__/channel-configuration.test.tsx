@@ -3501,7 +3501,7 @@ const redirectStart = {
 test('a login plugin saves without a key, then logs in on the new channel', async () => {
   pluginOptions = [...plugins, loginPlugin]
   const post = vi.spyOn(api, 'post').mockImplementation(async (url) => {
-    if (url === '/api/channel') {
+    if (url === '/api/channel/') {
       return { data: { success: true, message: '', data: { ids: [77] } } }
     }
     if (url === '/api/channel/77/plugin_login') return redirectStart
@@ -3548,7 +3548,7 @@ test('a login plugin saves without a key, then logs in on the new channel', asyn
   })
   expect(post).toHaveBeenNthCalledWith(
     1,
-    '/api/channel',
+    '/api/channel/',
     expect.objectContaining({
       mode: 'single',
       channel: expect.objectContaining({ type: 61, key: null }),
