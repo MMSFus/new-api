@@ -44,6 +44,7 @@ afterEach(() => {
 // per request.
 const saved = {
   ModelPrice: '{"gpt-image-2":0.04}',
+  ModelPriceCurrency: '{}',
   ModelRatio: '{"deepseek-v4":0.135}',
   CacheRatio: '{"deepseek-v4":0.1}',
   CreateCacheRatio: '{}',

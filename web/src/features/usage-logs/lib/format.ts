@@ -361,7 +361,7 @@ export function getTieredBillingSummary(
   other: LogOtherData | null,
   modelName?: string
 ): TieredBillingSummary | null {
-  const summary = getRawTieredBillingSummary(other)
+  const summary = getRawTieredBillingSummary(other, modelName)
   const factor = logCurrencyUSDFactor(other)
   if (!summary || factor === 1) return summary
   return {
@@ -374,7 +374,8 @@ export function getTieredBillingSummary(
 }
 
 function getRawTieredBillingSummary(
-  other: LogOtherData | null
+  other: LogOtherData | null,
+  modelName?: string
 ): TieredBillingSummary | null {
   if (!other || other.billing_mode !== 'tiered_expr') return null
   const exprStr = decodeBillingExprB64(other.expr_b64)
